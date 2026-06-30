@@ -1,0 +1,18 @@
+{
+    "always_on_top": true,
+    "preview_delay": 494,
+    "preview_size": 320,
+    "thumbnail_size": 90,
+    "theme_mode": "light",
+    "splitter_sizes": [
+        60,
+        967
+    ],
+    "window_geometry": [
+        547,
+        168,
+        694,
+        527
+    ],
+    "sidebar_icon_size": 20
+}
