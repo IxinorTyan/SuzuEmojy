@@ -2,17 +2,18 @@
     "always_on_top": true,
     "preview_delay": 494,
     "preview_size": 320,
-    "thumbnail_size": 90,
+    "thumbnail_size": 60,
     "theme_mode": "light",
     "splitter_sizes": [
         60,
-        967
+        955
     ],
     "window_geometry": [
-        547,
-        168,
-        694,
+        727,
+        146,
+        733,
         527
     ],
-    "sidebar_icon_size": 20
+    "sidebar_icon_size": 20,
+    "category_grid_icon_size": 48
 }

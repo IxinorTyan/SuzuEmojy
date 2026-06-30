@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout, 
     QListWidget, QListWidgetItem, QInputDialog, QLineEdit
 )
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal
 from PySide6.QtGui import QCursor, QIcon
 from qfluentwidgets import (
     ScrollArea, InfoBar, InfoBarPosition, RoundMenu, Action, 
@@ -21,6 +21,24 @@ def get_window_class_name(hwnd):
     buff = ctypes.create_unicode_buffer(256)
     user32.GetClassNameW(hwnd, buff, 256)
     return buff.value
+
+class DownloadThread(QThread):
+    finished = Signal(bool, bytes, str)
+    
+    def __init__(self, url, parent=None):
+        super().__init__(parent)
+        self.url = url
+        
+    def run(self):
+        import urllib.request
+        import urllib.error
+        try:
+            req = urllib.request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read()
+                self.finished.emit(True, content, "")
+        except Exception as e:
+            self.finished.emit(False, b"", str(e))
 
 class CategoryListWidget(QListWidget):
     """支持拖拽排序的分类列表，依赖原生 InternalMove 机制防止数据丢失"""
@@ -92,6 +110,23 @@ class CategoryListWidget(QListWidget):
         else:
             event.ignore()
 
+    def wheelEvent(self, event):
+        if QApplication.keyboardModifiers() & Qt.ControlModifier:
+            if self.viewMode() == QListWidget.IconMode:
+                delta = event.angleDelta().y()
+                step = 10 if delta > 0 else -10
+                
+                parent_sidebar = self.parent()
+                if hasattr(parent_sidebar, 'config') and parent_sidebar.config:
+                    current_size = parent_sidebar.config.get("category_grid_icon_size", 64)
+                    new_size = max(48, min(200, current_size + step))
+                    
+                    if new_size != current_size:
+                        parent_sidebar.config.set("category_grid_icon_size", new_size)
+                        parent_sidebar.refresh_list(self.currentItem().data(Qt.UserRole) if self.currentItem() else "全部表情")
+                return
+        super().wheelEvent(event)
+
 
 class CategorySidebar(QWidget):
     """图库内部的左侧分类导航栏"""
@@ -122,9 +157,49 @@ class CategorySidebar(QWidget):
         layout.addWidget(self.list_widget)
         
         self.list_widget.currentItemChanged.connect(self._on_item_changed)
+        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        
+        self.is_grid_mode = False
         
         self.update_theme()
         self.refresh_list()
+
+    def _on_item_double_clicked(self, item):
+        cat_name = item.data(Qt.UserRole)
+        if cat_name == "全部表情":
+            self.toggle_grid_mode()
+
+    def toggle_grid_mode(self):
+        self.is_grid_mode = not self.is_grid_mode
+        
+        if self.is_grid_mode:
+            # 切换到网格模式
+            self.list_widget.setViewMode(QListWidget.IconMode)
+            self.list_widget.setResizeMode(QListWidget.Adjust)
+            self.list_widget.setMovement(QListWidget.Static) # 保持拖拽排序功能
+            self.list_widget.setSpacing(10)
+            self.list_widget.setWordWrap(True)
+            
+            # 强制展开左侧边栏
+            if self.gallery_view and hasattr(self.gallery_view, 'splitter'):
+                splitter = self.gallery_view.splitter
+                total_width = sum(splitter.sizes())
+                # 展开到大约 300px 宽度
+                target_width = min(300, total_width // 2)
+                splitter.setSizes([target_width, total_width - target_width])
+        else:
+            # 切换回列表模式
+            self.list_widget.setViewMode(QListWidget.ListMode)
+            self.list_widget.setSpacing(0)
+            self.list_widget.setWordWrap(False)
+            
+            # 恢复窄边栏
+            if self.gallery_view and hasattr(self.gallery_view, 'splitter'):
+                splitter = self.gallery_view.splitter
+                total_width = sum(splitter.sizes())
+                splitter.setSizes([140, total_width - 140])
+                
+        self.refresh_list(self.list_widget.currentItem().data(Qt.UserRole) if self.list_widget.currentItem() else "全部表情")
 
     def update_theme(self):
         from qfluentwidgets import isDarkTheme
@@ -214,11 +289,20 @@ class CategorySidebar(QWidget):
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
         
-        icon_size = self.config.get("sidebar_icon_size", 20) if self.config else 20
-        self.list_widget.setIconSize(QSize(icon_size, icon_size))
+        # 根据模式决定图标大小
+        if getattr(self, 'is_grid_mode', False):
+            icon_size = self.config.get("category_grid_icon_size", 64) if self.config else 64
+            self.list_widget.setIconSize(QSize(icon_size, icon_size))
+            self.list_widget.setGridSize(QSize(icon_size + 20, icon_size + 40))
+        else:
+            icon_size = self.config.get("sidebar_icon_size", 20) if self.config else 20
+            self.list_widget.setIconSize(QSize(icon_size, icon_size))
+            self.list_widget.setGridSize(QSize()) # 清除网格大小限制
         
         item_all = QListWidgetItem(FIF.HOME.icon(), "全部表情")
         item_all.setData(Qt.UserRole, "全部表情")
+        if getattr(self, 'is_grid_mode', False):
+            item_all.setTextAlignment(Qt.AlignCenter)
         self.list_widget.addItem(item_all)
         
         categories = self.storage.get_all_categories()
@@ -233,22 +317,31 @@ class CategorySidebar(QWidget):
             nav_icon = FIF.FOLDER.icon()
             
             if icon_val:
-                if len(icon_val) <= 2:
-                    pixmap = QPixmap(64, 64)
+                # 判断是否是图片路径（通过后缀名判断，因为现在存的是文件名，可能不包含路径分隔符）
+                is_image_path = any(icon_val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+                
+                if is_image_path:
+                    if os.path.exists(icon_val):
+                        nav_icon = QIcon(icon_val)
+                else:
+                    # 认为是 Emoji 字符串（支持多个字符组合的复杂 Emoji）
+                    # 根据当前模式动态调整渲染分辨率
+                    render_size = icon_size * 2 if getattr(self, 'is_grid_mode', False) else 64
+                    pixmap = QPixmap(render_size, render_size)
                     pixmap.fill(Qt.transparent)
                     painter = QPainter(pixmap)
                     font = painter.font()
-                    font.setPixelSize(48)
+                    font.setPixelSize(int(render_size * 0.75))
                     font.setFamily("Segoe UI Emoji")
                     painter.setFont(font)
                     painter.drawText(pixmap.rect(), Qt.AlignCenter, icon_val)
                     painter.end()
                     nav_icon = QIcon(pixmap)
-                elif os.path.exists(icon_val):
-                    nav_icon = QIcon(icon_val)
                 
             item = QListWidgetItem(nav_icon, cat)
             item.setData(Qt.UserRole, cat)
+            if getattr(self, 'is_grid_mode', False):
+                item.setTextAlignment(Qt.AlignCenter)
             self.list_widget.addItem(item)
             
         item_unclassified = QListWidgetItem(FIF.HELP.icon(), "未分类")
@@ -256,6 +349,8 @@ class CategorySidebar(QWidget):
         font = item_unclassified.font()
         font.setItalic(True)
         item_unclassified.setFont(font)
+        if getattr(self, 'is_grid_mode', False):
+            item_unclassified.setTextAlignment(Qt.AlignCenter)
         self.list_widget.addItem(item_unclassified)
         
         item_add = QListWidgetItem(FIF.ADD.icon(), "新建分类")
@@ -263,10 +358,14 @@ class CategorySidebar(QWidget):
         font = item_add.font()
         font.setItalic(True)
         item_add.setFont(font)
+        if getattr(self, 'is_grid_mode', False):
+            item_add.setTextAlignment(Qt.AlignCenter)
         self.list_widget.addItem(item_add)
         
-        is_icon_only = getattr(self, '_is_icon_only', False)
-        self._apply_icon_only_state(is_icon_only)
+        # 网格模式下不应用 icon_only 状态
+        if not getattr(self, 'is_grid_mode', False):
+            is_icon_only = getattr(self, '_is_icon_only', False)
+            self._apply_icon_only_state(is_icon_only)
         
         self.list_widget.blockSignals(False)
         self.set_active_category(select_category)
@@ -366,11 +465,58 @@ class CategorySidebar(QWidget):
         
         menu.addSeparator()
         
+        action_export = Action("导出此分类...", parent=menu)
+        action_export.triggered.connect(lambda: QTimer.singleShot(50, lambda: self._export_category(cat_name)))
+        menu.addAction(action_export)
+        
+        menu.addSeparator()
+        
         action_del = Action("删除文件夹", parent=menu)
         action_del.triggered.connect(lambda: QTimer.singleShot(50, lambda: self._delete_category_with_confirm(cat_name)))
         menu.addAction(action_del)
         
         menu.exec(self.list_widget.viewport().mapToGlobal(pos))
+
+    def _get_unique_export_path(self, target_dir, original_name):
+        """生成防冲突的导出路径"""
+        base_name, ext = os.path.splitext(original_name)
+        target_path = os.path.join(target_dir, original_name)
+        counter = 1
+        while os.path.exists(target_path):
+            target_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
+            counter += 1
+        return target_path
+
+    def _export_category(self, cat_name):
+        from PySide6.QtWidgets import QFileDialog
+        import shutil
+        
+        dir_path = QFileDialog.getExistingDirectory(self, f"选择导出 '{cat_name}' 的目标文件夹", "")
+        if not dir_path:
+            return
+            
+        # 在目标目录下创建分类文件夹，防冲突
+        export_dir = os.path.join(dir_path, cat_name)
+        counter = 1
+        while os.path.exists(export_dir):
+            export_dir = os.path.join(dir_path, f"{cat_name}({counter})")
+            counter += 1
+            
+        try:
+            os.makedirs(export_dir)
+            images = self.storage.get_images_by_category(cat_name)
+            count = 0
+            for img_path in images:
+                if os.path.exists(img_path):
+                    filename = os.path.basename(img_path)
+                    target_path = self._get_unique_export_path(export_dir, filename)
+                    shutil.copy2(img_path, target_path)
+                    count += 1
+            if self.gallery_view:
+                self.gallery_view.show_success("导出成功", f"已将 {count} 个表情导出到\n{export_dir}")
+        except Exception as e:
+            if self.gallery_view:
+                self.gallery_view.show_error("导出失败", str(e))
 
     def _rename_category(self, old_name):
         new_name, ok = QInputDialog.getText(self, "重命名", "请输入新的分类名称：", QLineEdit.Normal, old_name)
@@ -576,6 +722,7 @@ class GalleryInterface(QWidget):
         self.btn_select_all = PushButton("全选")
         self.btn_batch_add = PushButton(FIF.FOLDER_ADD.icon(), "移动到分类...")
         self.btn_batch_remove = PushButton(FIF.REMOVE.icon(), "移出分类")
+        self.btn_batch_export = PushButton(FIF.DOWNLOAD.icon(), "导出")
         self.btn_batch_delete = PushButton(FIF.DELETE.icon(), "批量删除")
         self.btn_exit_selection = PushButton("退出多选")
         
@@ -584,12 +731,14 @@ class GalleryInterface(QWidget):
         self.command_bar_layout.addWidget(self.btn_select_all)
         self.command_bar_layout.addWidget(self.btn_batch_add)
         self.command_bar_layout.addWidget(self.btn_batch_remove)
+        self.command_bar_layout.addWidget(self.btn_batch_export)
         self.command_bar_layout.addWidget(self.btn_batch_delete)
         self.command_bar_layout.addWidget(self.btn_exit_selection)
         
         self.btn_select_all.clicked.connect(self.select_all_cards)
         self.btn_batch_add.clicked.connect(self.batch_add_to_category)
         self.btn_batch_remove.clicked.connect(self.batch_remove_from_category)
+        self.btn_batch_export.clicked.connect(self.batch_export)
         self.btn_batch_delete.clicked.connect(self.batch_delete)
         self.btn_exit_selection.clicked.connect(lambda: self.set_selection_mode(False))
         
@@ -624,12 +773,14 @@ class GalleryInterface(QWidget):
         if hasattr(self, 'splitter') and obj == self.splitter.handle(1):
             if event.type() == event.Type.MouseButtonRelease:
                 sizes = self.splitter.sizes()
-                if sizes[0] < 100:
-                    diff = sizes[0] - 60
-                    self.splitter.setSizes([60, sizes[1] + diff])
-                elif sizes[0] >= 100 and sizes[0] < 140:
-                    diff = sizes[0] - 140
-                    self.splitter.setSizes([140, sizes[1] + diff])
+                # 如果左侧边栏处于网格模式，不执行吸附逻辑，允许自由调整宽度
+                if not getattr(self.sidebar, 'is_grid_mode', False):
+                    if sizes[0] < 100:
+                        diff = sizes[0] - 60
+                        self.splitter.setSizes([60, sizes[1] + diff])
+                    elif sizes[0] >= 100 and sizes[0] < 140:
+                        diff = sizes[0] - 140
+                        self.splitter.setSizes([140, sizes[1] + diff])
                 self.config.set("splitter_sizes", self.splitter.sizes())
 
         if obj == self.scroll_area.viewport() and event.type() == event.Type.Wheel:
@@ -840,6 +991,34 @@ class GalleryInterface(QWidget):
         self.show_success("批量移出成功", f"已将 {count} 个表情从 '{self.current_category}' 移出")
         self.set_selection_mode(False)
         self.refresh_gallery()
+
+    def batch_export(self):
+        paths = self.get_selected_paths()
+        if not paths: return
+        
+        # 去重，防止在全部表情视图下选中了重复的路径
+        unique_paths = list(set(paths))
+        
+        from PySide6.QtWidgets import QFileDialog
+        import shutil
+        
+        dir_path = QFileDialog.getExistingDirectory(self, "选择导出目标文件夹", "")
+        if not dir_path:
+            return
+            
+        count = 0
+        try:
+            for img_path in unique_paths:
+                if os.path.exists(img_path):
+                    filename = os.path.basename(img_path)
+                    # 使用侧边栏中定义的防冲突函数
+                    target_path = self.sidebar._get_unique_export_path(dir_path, filename)
+                    shutil.copy2(img_path, target_path)
+                    count += 1
+            self.show_success("导出成功", f"已将 {count} 个表情导出到\n{dir_path}")
+            self.set_selection_mode(False)
+        except Exception as e:
+            self.show_error("导出失败", str(e))
 
     def on_hover_started(self, image_path):
         if self.is_selection_mode: return
@@ -1123,3 +1302,28 @@ class GalleryInterface(QWidget):
                     self.show_success("导入完成", "该图片已存在，已跳过保存")
                 else:
                     self.show_success("保存成功", "静态图片已保存")
+        elif data_type == 'network_url':
+            url = data
+            self.show_success("正在下载", "正在从网络获取图片，请稍候...")
+            self.download_thread = DownloadThread(url, self)
+            self.download_thread.finished.connect(self._on_download_finished)
+            self.download_thread.start()
+
+    def _on_download_finished(self, success, content, error_msg):
+        if not success:
+            self.show_error("下载失败", f"无法获取网络图片: {error_msg}")
+            return
+            
+        url = self.download_thread.url
+        saved_path, is_duplicate = self.storage.save_downloaded_data(url, content)
+        
+        if saved_path:
+            if self.current_category not in ("全部表情", "未分类"):
+                self.storage.add_image_to_category(saved_path, self.current_category)
+            self.refresh_gallery()
+            if is_duplicate:
+                self.show_success("导入完成", "该网络图片已存在，已跳过保存")
+            else:
+                self.show_success("保存成功", "网络图片已保存")
+        else:
+            self.show_error("保存失败", "无法保存下载的图片数据")

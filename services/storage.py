@@ -235,14 +235,24 @@ class StorageService:
             return {}
         try:
             with open(self.icons_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                icons = json.load(f)
+                for cat, val in icons.items():
+                    if any(val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+                        icons[cat] = self._to_abspath(val)
+                return icons
         except Exception:
             return {}
             
     def save_category_icons(self, icons_data):
+        portable_data = {}
+        for cat, val in icons_data.items():
+            if any(val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+                portable_data[cat] = self._to_filename(val)
+            else:
+                portable_data[cat] = val
         try:
             with open(self.icons_file, 'w', encoding='utf-8') as f:
-                json.dump(icons_data, f, indent=4, ensure_ascii=False)
+                json.dump(portable_data, f, indent=4, ensure_ascii=False)
         except Exception as e:
             print(f"[ERROR] StorageService.save_category_icons: 保存分类图标失败 {e}")
             

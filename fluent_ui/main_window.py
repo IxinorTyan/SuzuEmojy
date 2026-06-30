@@ -219,24 +219,4 @@ class MainWindow(FramelessWindow):
         paste_shortcut.activated.connect(self.handle_global_paste)
 
     def handle_global_paste(self):
-        data_type, data = self.clipboard.get_data_from_clipboard()
-        current_cat = self.gallery_interface.current_category
-        
-        if data_type == 'file':
-            saved_count = 0
-            for filepath in data:
-                saved_path = self.storage.save_file(filepath)
-                if saved_path:
-                    saved_count += 1
-                    if current_cat != "全部表情":
-                        self.storage.add_image_to_category(saved_path, current_cat)
-            if saved_count > 0:
-                self.gallery_interface.refresh_gallery()
-                self.gallery_interface.show_success("保存成功", f"从剪贴板保存了 {saved_count} 个文件")
-        elif data_type == 'image':
-            saved_path = self.storage.save_image(data)
-            if saved_path:
-                if current_cat != "全部表情":
-                    self.storage.add_image_to_category(saved_path, current_cat)
-                self.gallery_interface.refresh_gallery()
-                self.gallery_interface.show_success("保存成功", "静态图片已保存")
+        self.gallery_interface.handle_global_paste()
