@@ -1,0 +1,185 @@
+﻿Diagnose log at 2026-06-30T14:27:18Z
+
+AppPath: D:\Tool\git\Git\mingw64\bin\git-credential-manager.exe
+InstallDir: D:\Tool\git\Git\mingw64\bin\
+Version: 2.6.1+786ab03440ddc82e807a97c0e540f5247e44cec6
+
+------------
+Diagnostic: Environment
+Skipped: False
+Success: True
+Exception: None
+Log:
+OSType: Windows
+OSVersion: 10.0 (build 26100)
+Reading environment variables... OK
+ Variables:
+HOMEPATH=\Users\14915
+DriverData=C:\Windows\System32\Drivers\DriverData
+COMPUTERNAME=IXINORTYAN-PC
+GIT_TRACE2_PARENT_SID=214c4280-1daa-41ce-86a9-66720f99e099
+CommonProgramFiles(x86)=C:\Program Files (x86)\Common Files
+OneDrive=C:\Users\14915\OneDrive
+GIT_INSTALL_ROOT=C:\Users\14915\scoop\apps\git\current
+TMP=C:\Users\14915\AppData\Local\Temp
+PROCESSOR_REVISION=8d01
+PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC
+USERNAME=14915
+GIT_EXEC_PATH=D:/Tool/git/Git/mingw64/libexec/git-core
+TEMP=C:\Users\14915\AppData\Local\Temp
+LOCALAPPDATA=C:\Users\14915\AppData\Local
+MSYSTEM=MINGW64
+SESSIONNAME=Console
+SVC_Fusion_PATH=E:\svc\SVC Fusion
+USERDOMAIN=IXINORTYAN-PC
+HOMEDRIVE=C:
+Path=D:/Tool/git/Git/mingw64/libexec/git-core;D:\Tool\git\Git\mingw64\bin;D:\Tool\git\Git\usr\bin;C:\Users\14915\bin;C:\Program Files\Common Files\Oracle\Java\javapath;D:\Tool\pc\bin\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\dotnet\;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;D:\Tool\matlab\bin;C:\Program Files\NVIDIA Corporation\NVIDIA app\NvDLISR;D:\Tool\git\Git\cmd;C:\Program Files\GTK3-Runtime Win64\bin;C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\;C:\Program Files\nodejs\;C:\Users\14915\.local\bin;C:\Users\14915\miniconda3;C:\Users\14915\miniconda3\Library\mingw-w64\bin;C:\Users\14915\miniconda3\Library\usr\bin;C:\Users\14915\miniconda3\Library\bin;C:\Users\14915\miniconda3\Scripts;C:\Users\14915\scoop\shims;C:\Users\14915\AppData\Local\Programs\Python\Python313\Scripts\;C:\Users\14915\AppData\Local\Programs\Python\Python313\;C:\Users\14915\AppData\Local\Microsoft\WindowsApps;C:\Program Files\JetBrains\PyCharm Community Edition 2024.2.3\bin;C:\Users\14915\AppData\Local\Programs\Ollama;C:\Users\14915\.cache\lm-studio\bin;C:\Users\14915\.dotnet\tools;C:\Users\14915\AppData\Roaming\npm;C:\Users\14915\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\14915\AppData\Local\Microsoft\WinGet\Links
+PROCESSOR_LEVEL=6
+PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 141 Stepping 1, GenuineIntel
+TMPDIR=C:\Users\14915\AppData\Local\Temp
+PROMPT=$P$G
+ProgramFiles(x86)=C:\Program Files (x86)
+PUBLIC=C:\Users\Public
+NUMBER_OF_PROCESSORS=16
+FPS_BROWSER_USER_PROFILE_STRING=Default
+CommonProgramFiles=C:\Program Files (x86)\Common Files
+TERM=xterm-256color
+PLINK_PROTOCOL=ssh
+COLORTERM=truecolor
+ProgramW6432=C:\Program Files
+ProgramFiles=C:\Program Files (x86)
+BESIEGE_UNITY_ASSEMBLIES=E:/steam/steam/steamapps/common/Besiege/Besiege_Data\Managed/
+PyCharm Community Edition=C:\Program Files\JetBrains\PyCharm Community Edition 2024.2.3\bin;
+EFC_3292=1
+SystemRoot=C:\WINDOWS
+HOME=C:\Users\14915
+LC_CTYPE=C.UTF-8
+CommonProgramW6432=C:\Program Files\Common Files
+ZES_ENABLE_SYSMAN=1
+LOGONSERVER=\\IXINORTYAN-PC
+USERPROFILE=C:\Users\14915
+USERDOMAIN_ROAMINGPROFILE=IXINORTYAN-PC
+APPDATA=C:\Users\14915\AppData\Roaming
+ProgramData=C:\ProgramData
+PSModulePath=C:\Program Files\WindowsPowerShell\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules
+BESIEGE_GAME_ASSEMBLIES=E:/steam/steam/steamapps/common/Besiege/Besiege_Data\Managed/
+PROCESSOR_ARCHITEW6432=AMD64
+FPS_BROWSER_APP_PROFILE_STRING=Internet Explorer
+PROCESSOR_ARCHITECTURE=x86
+OS=Windows_NT
+ComSpec=C:\WINDOWS\system32\cmd.exe
+SystemDrive=C:
+windir=C:\WINDOWS
+OLLAMA_MODELS=D:\Tool\AI
+ALLUSERSPROFILE=C:\ProgramData
+
+
+------------
+Diagnostic: File system
+Skipped: False
+Success: True
+Exception: None
+Log:
+Temporary directory is 'C:\Users\14915\AppData\Local\Temp\'...
+Checking basic file I/O...
+Writing to temporary file 'C:\Users\14915\AppData\Local\Temp\80e24d45b4840262c6c28253'... OK
+Reading from temporary file 'C:\Users\14915\AppData\Local\Temp\80e24d45b4840262c6c28253'... OK
+Deleting temporary file 'C:\Users\14915\AppData\Local\Temp\80e24d45b4840262c6c28253'... OK
+Testing IFileSystem instance...
+UserHomePath: C:\Users\14915
+UserDataDirectoryPath: C:\Users\14915\.gcm
+GetCurrentDirectory(): D:\Documents\try\SuzuEmojy
+
+------------
+Diagnostic: Networking
+Skipped: False
+Success: True
+Exception: None
+Log:
+Checking networking and HTTP stack...
+Creating HTTP client... OK
+IsNetworkAvailable: True
+Sending HEAD request to http://example.com...Sending HEAD request to https://example.com... OK
+ OK
+Acquiring free TCP port... OK
+Testing local HTTP loopback connections...
+Creating new HTTP listener for http://localhost:3112/... OK
+Waiting for loopback connection... OK
+Writing response... OK
+Waiting for response data... OK
+Loopback connection data OK
+
+------------
+Diagnostic: Git
+Skipped: False
+Success: True
+Exception: None
+Log:
+Getting Git version... OK
+Git version is '2.49.0.windows.1'
+Locating current repository...Git repository at 'D:/Documents/try/SuzuEmojy/.git'
+ OK
+Listing all Git configuration... OK
+Git configuration:
+file:D:/Tool/git/Git/etc/gitconfig	diff.astextplain.textconv=astextplain
+file:D:/Tool/git/Git/etc/gitconfig	filter.lfs.clean=git-lfs clean -- %f
+file:D:/Tool/git/Git/etc/gitconfig	filter.lfs.smudge=git-lfs smudge -- %f
+file:D:/Tool/git/Git/etc/gitconfig	filter.lfs.process=git-lfs filter-process
+file:D:/Tool/git/Git/etc/gitconfig	filter.lfs.required=true
+file:D:/Tool/git/Git/etc/gitconfig	http.sslbackend=schannel
+file:D:/Tool/git/Git/etc/gitconfig	core.autocrlf=true
+file:D:/Tool/git/Git/etc/gitconfig	core.fscache=true
+file:D:/Tool/git/Git/etc/gitconfig	core.symlinks=false
+file:D:/Tool/git/Git/etc/gitconfig	pull.rebase=false
+file:D:/Tool/git/Git/etc/gitconfig	credential.helper=manager
+file:D:/Tool/git/Git/etc/gitconfig	credential.https://dev.azure.com.usehttppath=true
+file:D:/Tool/git/Git/etc/gitconfig	init.defaultbranch=master
+file:C:/Users/14915/.gitconfig	user.email=1492503128@qq.com
+file:C:/Users/14915/.gitconfig	user.name=IxinorTyan
+file:.git/config	core.repositoryformatversion=0
+file:.git/config	core.filemode=false
+file:.git/config	core.bare=false
+file:.git/config	core.logallrefupdates=true
+file:.git/config	core.symlinks=false
+file:.git/config	core.ignorecase=true
+file:.git/config	remote.origin.url=https://github.com/IxinorTyan/SuzuEmojy.git
+file:.git/config	remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+file:.git/config	branch.main.remote=origin
+file:.git/config	branch.main.merge=refs/heads/main
+
+
+------------
+Diagnostic: Credential storage
+Skipped: False
+Success: True
+Exception: None
+Log:
+ICredentialStore instance is of type: CredentialStore
+Writing test credential... OK
+Reading test credential... OK
+Deleting test credential... OK
+
+------------
+Diagnostic: Microsoft authentication (AAD/MSA)
+Skipped: False
+Success: True
+Exception: None
+Log:
+Broker is not enabled.
+Flow type is: Auto
+Gathering MSAL token cache data... OK
+CacheDirectory: C:\Users\14915\AppData\Local\.IdentityService
+CacheFileName: msal.cache
+CacheFilePath: C:\Users\14915\AppData\Local\.IdentityService\msal.cache
+Creating cache helper... OK
+Verifying MSAL token cache persistence... OK
+
+------------
+Diagnostic: GitHub API
+Skipped: False
+Success: True
+Exception: None
+Log:
+Using 'https://github.com/' as API target.
+Querying '/meta' endpoint... OK
+

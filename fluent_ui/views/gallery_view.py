@@ -23,7 +23,7 @@ def get_window_class_name(hwnd):
     return buff.value
 
 class DownloadThread(QThread):
-    finished = Signal(bool, bytes, str)
+    finished = Signal(bool, bytes, str, str)
     
     def __init__(self, url, parent=None):
         super().__init__(parent)
@@ -36,9 +36,9 @@ class DownloadThread(QThread):
             req = urllib.request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
             with urllib.request.urlopen(req, timeout=10) as response:
                 content = response.read()
-                self.finished.emit(True, content, "")
+                self.finished.emit(True, content, "", self.url)
         except Exception as e:
-            self.finished.emit(False, b"", str(e))
+            self.finished.emit(False, b"", str(e), self.url)
 
 class CategoryListWidget(QListWidget):
     """支持拖拽排序的分类列表，依赖原生 InternalMove 机制防止数据丢失"""
@@ -112,11 +112,11 @@ class CategoryListWidget(QListWidget):
 
     def wheelEvent(self, event):
         if QApplication.keyboardModifiers() & Qt.ControlModifier:
-            if self.viewMode() == QListWidget.IconMode:
+            parent_sidebar = self.parent()
+            if getattr(parent_sidebar, 'is_grid_mode', False):
                 delta = event.angleDelta().y()
                 step = 10 if delta > 0 else -10
                 
-                parent_sidebar = self.parent()
                 if hasattr(parent_sidebar, 'config') and parent_sidebar.config:
                     current_size = parent_sidebar.config.get("category_grid_icon_size", 64)
                     new_size = max(48, min(200, current_size + step))
@@ -174,9 +174,11 @@ class CategorySidebar(QWidget):
         
         if self.is_grid_mode:
             # 切换到网格模式
-            self.list_widget.setViewMode(QListWidget.IconMode)
+            self.list_widget.setViewMode(QListWidget.ListMode)
+            self.list_widget.setFlow(QListWidget.LeftToRight)
+            self.list_widget.setWrapping(True)
             self.list_widget.setResizeMode(QListWidget.Adjust)
-            self.list_widget.setMovement(QListWidget.Static) # 保持拖拽排序功能
+            self.list_widget.setDragDropMode(QListWidget.InternalMove)
             self.list_widget.setSpacing(10)
             self.list_widget.setWordWrap(True)
             
@@ -190,6 +192,10 @@ class CategorySidebar(QWidget):
         else:
             # 切换回列表模式
             self.list_widget.setViewMode(QListWidget.ListMode)
+            self.list_widget.setFlow(QListWidget.TopToBottom)
+            self.list_widget.setWrapping(False)
+            self.list_widget.setResizeMode(QListWidget.Fixed)
+            self.list_widget.setDragDropMode(QListWidget.InternalMove)
             self.list_widget.setSpacing(0)
             self.list_widget.setWordWrap(False)
             
@@ -293,7 +299,7 @@ class CategorySidebar(QWidget):
         if getattr(self, 'is_grid_mode', False):
             icon_size = self.config.get("category_grid_icon_size", 64) if self.config else 64
             self.list_widget.setIconSize(QSize(icon_size, icon_size))
-            self.list_widget.setGridSize(QSize(icon_size + 20, icon_size + 40))
+            self.list_widget.setGridSize(QSize(icon_size + 20, icon_size + 20))
         else:
             icon_size = self.config.get("sidebar_icon_size", 20) if self.config else 20
             self.list_widget.setIconSize(QSize(icon_size, icon_size))
@@ -362,8 +368,10 @@ class CategorySidebar(QWidget):
             item_add.setTextAlignment(Qt.AlignCenter)
         self.list_widget.addItem(item_add)
         
-        # 网格模式下不应用 icon_only 状态
-        if not getattr(self, 'is_grid_mode', False):
+        # 应用 icon_only 状态（网格模式下强制隐藏文字）
+        if getattr(self, 'is_grid_mode', False):
+            self._apply_icon_only_state(True)
+        else:
             is_icon_only = getattr(self, '_is_icon_only', False)
             self._apply_icon_only_state(is_icon_only)
         
@@ -632,6 +640,7 @@ class GalleryInterface(QWidget):
         self.focus_timer.timeout.connect(self.track_active_window)
         self.focus_timer.start(500)
         
+        self.download_threads = []
         self.setAcceptDrops(True)
         
         # 首次强制刷新
@@ -1134,6 +1143,12 @@ class GalleryInterface(QWidget):
                                 saved_count += 1
                             if self.current_category not in ("全部表情", "未分类"):
                                 self.storage.add_image_to_category(saved_path, self.current_category)
+                elif url.scheme() in ("http", "https"):
+                    self.show_success("正在下载", "正在从网络获取图片，请稍候...")
+                    thread = DownloadThread(url.toString(), self)
+                    self.download_threads.append(thread)
+                    thread.finished.connect(self._on_download_finished)
+                    thread.start()
             
             event.accept()
             
@@ -1305,16 +1320,21 @@ class GalleryInterface(QWidget):
         elif data_type == 'network_url':
             url = data
             self.show_success("正在下载", "正在从网络获取图片，请稍候...")
-            self.download_thread = DownloadThread(url, self)
-            self.download_thread.finished.connect(self._on_download_finished)
-            self.download_thread.start()
+            thread = DownloadThread(url, self)
+            self.download_threads.append(thread)
+            thread.finished.connect(self._on_download_finished)
+            thread.start()
 
-    def _on_download_finished(self, success, content, error_msg):
+    def _on_download_finished(self, success, content, error_msg, url):
+        for t in self.download_threads[:]:
+            if t.url == url:
+                self.download_threads.remove(t)
+                t.deleteLater()
+                
         if not success:
             self.show_error("下载失败", f"无法获取网络图片: {error_msg}")
             return
             
-        url = self.download_thread.url
         saved_path, is_duplicate = self.storage.save_downloaded_data(url, content)
         
         if saved_path:

@@ -3,6 +3,8 @@ from datetime import datetime
 import shutil
 import json
 import hashlib
+import io
+from PIL import Image
 
 class StorageService:
     def __init__(self):
@@ -41,20 +43,52 @@ class StorageService:
         except Exception as e:
             print(f"[ERROR] 保存哈希缓存失败: {e}")
 
-    def _calculate_file_hash(self, filepath):
-        """计算文件的 MD5 哈希值"""
-        hash_md5 = hashlib.md5()
+    def _calculate_pixel_hash(self, img):
+        """计算图片纯像素数据的 MD5 哈希值，用于精准去重"""
         try:
-            with open(filepath, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
-            return hash_md5.hexdigest()
-        except Exception:
+            # 统一转换为 RGBA 模式以保证像素数据结构一致
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            return hashlib.md5(img.tobytes()).hexdigest()
+        except Exception as e:
+            print(f"[WARNING] 计算像素哈希失败: {e}")
             return None
 
     def _calculate_bytes_hash(self, data_bytes):
-        """计算二进制数据的 MD5 哈希值"""
+        """计算二进制数据的 MD5 哈希值（用于动图等无法提取单帧像素的场景）"""
         return hashlib.md5(data_bytes).hexdigest()
+
+    def _migrate_hashes_if_needed(self):
+        """静默迁移：将旧的基于文件二进制的哈希转换为基于像素的哈希"""
+        if not os.path.exists(self.images_dir):
+            return
+            
+        migrated = False
+        actual_filenames = os.listdir(self.images_dir)
+        
+        # 检查是否需要迁移（如果缓存为空，但有图片，说明是第一次运行新逻辑）
+        if not self._hashes_cache and actual_filenames:
+            print("[INFO] 开始静默迁移图片哈希数据...")
+            for filename in actual_filenames:
+                filepath = os.path.join(self.images_dir, filename)
+                try:
+                    with Image.open(filepath) as img:
+                        # 动图保持二进制哈希，静态图使用像素哈希
+                        if getattr(img, "is_animated", False):
+                            with open(filepath, "rb") as f:
+                                file_hash = self._calculate_bytes_hash(f.read())
+                        else:
+                            file_hash = self._calculate_pixel_hash(img)
+                            
+                        if file_hash:
+                            self._hashes_cache[file_hash] = filename
+                            migrated = True
+                except Exception as e:
+                    print(f"[WARNING] 迁移图片 {filename} 失败: {e}")
+                    
+            if migrated:
+                self._save_hashes()
+                print("[INFO] 哈希数据迁移完成。")
 
     def _to_filename(self, filepath):
         """将绝对路径转换为单纯的文件名，便于在 JSON 中持久化存储"""
@@ -335,6 +369,67 @@ class StorageService:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
         return f"{timestamp}{extension}"
 
+    def _standardize_and_save(self, data_bytes, original_ext):
+        """
+        核心逻辑：使用 Pillow 对图片进行标准化处理，查重并保存。
+        :param data_bytes: 原始图片的二进制数据
+        :param original_ext: 原始扩展名（用于动图回退）
+        :return: (保存后的绝对路径, 是否是已存在的重复图片)
+        """
+        try:
+            img = Image.open(io.BytesIO(data_bytes))
+            is_animated = getattr(img, "is_animated", False)
+            
+            if is_animated:
+                # 动图不进行重编码，直接使用二进制哈希查重并保存原始数据
+                file_hash = self._calculate_bytes_hash(data_bytes)
+                final_bytes = data_bytes
+                final_ext = original_ext if original_ext in ['.gif', '.webp'] else '.gif'
+            else:
+                # 静态图：强制转换为 RGBA 模式
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                    
+                # 计算像素哈希查重
+                file_hash = self._calculate_pixel_hash(img)
+                
+                # 创建一个全新的纯净画布，剥离所有 ICC profile 和 EXIF 等元数据
+                # 这是防止 Qt 读取 PNG 失败 (Failed to read image) 的关键步骤
+                clean_img = Image.new('RGBA', img.size)
+                clean_img.paste(img, (0, 0))
+                
+                output_io = io.BytesIO()
+                # 使用 optimize=True 进行无损压缩优化
+                clean_img.save(output_io, format="PNG", optimize=True)
+                final_bytes = output_io.getvalue()
+                final_ext = '.png'
+                
+            # 查重逻辑
+            if file_hash and file_hash in self._hashes_cache:
+                existing_filename = self._hashes_cache[file_hash]
+                existing_path = self._to_abspath(existing_filename)
+                if os.path.exists(existing_path):
+                    return existing_path, True
+                else:
+                    del self._hashes_cache[file_hash]
+                    
+            # 保存新文件
+            filename = self.generate_new_filename(final_ext)
+            filepath = os.path.join(self.images_dir, filename)
+            
+            with open(filepath, 'wb') as f:
+                f.write(final_bytes)
+                
+            if file_hash:
+                self._hashes_cache[file_hash] = filename
+                self._save_hashes()
+                
+            return filepath, False
+            
+        except Exception as e:
+            print(f"[ERROR] 图片标准化保存失败: {e}")
+            return None, False
+
     def save_image(self, qimage):
         """
         保存 QImage 到本地
@@ -343,128 +438,67 @@ class StorageService:
         """
         from PySide6.QtCore import QByteArray, QBuffer, QIODevice
         
-        # 先将 QImage 转换为字节流以计算哈希
+        # 先将 QImage 转换为字节流
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
         qimage.save(buffer, "PNG")
         image_bytes = byte_array.data()
         
-        file_hash = self._calculate_bytes_hash(image_bytes)
-        
-        # 查重
-        if file_hash in self._hashes_cache:
-            existing_filename = self._hashes_cache[file_hash]
-            existing_path = self._to_abspath(existing_filename)
-            if os.path.exists(existing_path):
-                return existing_path, True
-            else:
-                # 文件已丢失，清理无效哈希
-                del self._hashes_cache[file_hash]
-
-        filename = self.generate_new_filename()
-        filepath = os.path.join(self.images_dir, filename)
-        
-        try:
-            with open(filepath, 'wb') as f:
-                f.write(image_bytes)
-            self._hashes_cache[file_hash] = filename
-            self._save_hashes()
-            return filepath, False
-        except Exception as e:
-            print(f"保存图片失败: {e}")
-            return None, False
+        # 统一走标准化流程
+        return self._standardize_and_save(image_bytes, ".png")
 
     def save_file(self, source_path):
         """
-        直接复制原始文件到存储目录，并通过魔数自动纠正扩展名
+        读取本地文件并进行标准化保存
         :param source_path: 原始文件路径
         :return: (保存后的绝对路径, 是否是已存在的重复图片)
         """
         if not os.path.exists(source_path):
             return None, False
             
-        # 计算哈希查重
-        file_hash = self._calculate_file_hash(source_path)
-        if file_hash and file_hash in self._hashes_cache:
-            existing_filename = self._hashes_cache[file_hash]
-            existing_path = self._to_abspath(existing_filename)
-            if os.path.exists(existing_path):
-                return existing_path, True
-            else:
-                del self._hashes_cache[file_hash]
-            
-        # 获取原始扩展名
-        _, ext = os.path.splitext(source_path)
-        if not ext:
-            ext = ".png" # 如果没有扩展名，默认当作 png
-            
-        # 读取文件头 12 个字节进行真实格式探测，防范 QQ 等软件的“扩展名欺骗”
         try:
             with open(source_path, 'rb') as f:
-                header = f.read(12)
-            ext = self._detect_real_extension(header, ext)
+                data_bytes = f.read()
+                
+            _, ext = os.path.splitext(source_path)
+            ext = ext.lower()
+            if not ext:
+                ext = ".png"
+                
+            # 统一走标准化流程
+            return self._standardize_and_save(data_bytes, ext)
         except Exception as e:
-            print(f"[WARNING] 探测真实文件格式失败: {e}")
-            
-        filename = self.generate_new_filename(ext)
-        filepath = os.path.join(self.images_dir, filename)
-        
-        try:
-            shutil.copy2(source_path, filepath)
-            if file_hash:
-                self._hashes_cache[file_hash] = filename
-                self._save_hashes()
-            return filepath, False
-        except Exception as e:
-            print(f"复制文件失败: {e}")
+            print(f"[ERROR] 读取文件失败: {e}")
             return None, False
 
     def save_downloaded_data(self, url, content):
         """
-        保存从网络下载的二进制数据，尝试从 URL 推断扩展名
+        保存从网络下载的二进制数据并进行标准化
         :return: (保存后的绝对路径, 是否是已存在的重复图片)
         """
         import urllib.parse
-        
-        file_hash = self._calculate_bytes_hash(content)
-        if file_hash in self._hashes_cache:
-            existing_filename = self._hashes_cache[file_hash]
-            existing_path = self._to_abspath(existing_filename)
-            if os.path.exists(existing_path):
-                return existing_path, True
-            else:
-                del self._hashes_cache[file_hash]
         
         # 尝试从 URL 提取正确的后缀
         parsed_url = urllib.parse.urlparse(url)
         path = parsed_url.path
         _, ext = os.path.splitext(path)
+        ext = ext.lower()
         
-        # 如果获取不到或者是非常见后缀，给个默认值（也可以根据 header 决定，但这里从简）
-        if ext.lower() not in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
-            if 'gif' in url.lower():
-                ext = '.gif'
-            elif 'webp' in url.lower():
+        # 如果获取不到或者是非常见后缀，尝试从整个 URL 中推断
+        if ext not in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
+            url_lower = url.lower()
+            if '.webp' in url_lower or 'format=webp' in url_lower:
                 ext = '.webp'
+            elif '.gif' in url_lower or 'format=gif' in url_lower:
+                ext = '.gif'
+            elif '.jpg' in url_lower or '.jpeg' in url_lower or 'format=jpg' in url_lower:
+                ext = '.jpg'
             else:
                 ext = '.png'
                 
-        # 通过二进制数据头再次核实和纠正扩展名
-        ext = self._detect_real_extension(content[:12], ext)
-                
-        filename = self.generate_new_filename(ext)
-        filepath = os.path.join(self.images_dir, filename)
-        
-        try:
-            with open(filepath, 'wb') as f:
-                f.write(content)
-            self._hashes_cache[file_hash] = filename
-            self._save_hashes()
-            return filepath, False
-        except Exception as e:
-            print(f"保存下载数据失败: {e}")
-            return None, False
+        # 统一走标准化流程
+        return self._standardize_and_save(content, ext)
 
     def delete_image(self, filepath):
         """

@@ -30,6 +30,9 @@ echo Copying source code and assets to release folder...
 xcopy /Y "main.py" "dist\SuzuEmojy_Release\" >nul
 xcopy /Y "requirements.txt" "dist\SuzuEmojy_Release\" >nul
 xcopy /Y "hi.ico" "dist\SuzuEmojy_Release\" >nul
+xcopy /Y "README.md" "dist\SuzuEmojy_Release\" >nul
+xcopy /Y "说明书.md" "dist\SuzuEmojy_Release\" >nul
+xcopy /Y "依赖装不上,没招了你就试试点这个吧,记得附上报错日志.bat" "dist\SuzuEmojy_Release\" >nul
 xcopy /E /I /Y "fluent_ui" "dist\SuzuEmojy_Release\fluent_ui" >nul
 xcopy /E /I /Y "services" "dist\SuzuEmojy_Release\services" >nul
 

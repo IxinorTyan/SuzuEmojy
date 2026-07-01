@@ -2,15 +2,15 @@
     "always_on_top": true,
     "preview_delay": 494,
     "preview_size": 320,
-    "thumbnail_size": 60,
+    "thumbnail_size": 70,
     "theme_mode": "light",
     "splitter_sizes": [
         60,
-        955
+        674
     ],
     "window_geometry": [
-        727,
-        146,
+        627,
+        236,
         733,
         527
     ],

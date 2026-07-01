@@ -162,6 +162,14 @@ class MainWindow(FramelessWindow):
         else:
             self._update_background()
             self.show_gallery()
+            
+            # 修复：强制重置标题栏按钮的悬停状态
+            # 防止点击关闭按钮隐藏后，再次唤醒时关闭按钮依然是红色的 Bug
+            if hasattr(self, 'titleBar'):
+                leave_event = QEvent(QEvent.Leave)
+                if hasattr(self.titleBar, 'closeBtn'):
+                    QApplication.sendEvent(self.titleBar.closeBtn, leave_event)
+            
             self.showNormal()
             self.activateWindow()
             self.raise_()

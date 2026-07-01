@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.vscode/
+gcm-diagnose.log
+build/
+dist/
