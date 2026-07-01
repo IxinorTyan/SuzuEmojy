@@ -158,17 +158,21 @@ class MainWindow(FramelessWindow):
 
     def toggle_window(self):
         if self.isVisible() and self.isActiveWindow():
+            # 修复：在隐藏前强制重置标题栏按钮状态
+            if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'closeBtn'):
+                self.titleBar.closeBtn.setState(0) # 0 通常代表 Normal 状态
+                leave_event = QEvent(QEvent.Leave)
+                QApplication.sendEvent(self.titleBar.closeBtn, leave_event)
             self.hide()
         else:
             self._update_background()
             self.show_gallery()
             
-            # 修复：强制重置标题栏按钮的悬停状态
-            # 防止点击关闭按钮隐藏后，再次唤醒时关闭按钮依然是红色的 Bug
-            if hasattr(self, 'titleBar'):
+            # 唤醒时也重置一次，双重保险
+            if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'closeBtn'):
+                self.titleBar.closeBtn.setState(0)
                 leave_event = QEvent(QEvent.Leave)
-                if hasattr(self.titleBar, 'closeBtn'):
-                    QApplication.sendEvent(self.titleBar.closeBtn, leave_event)
+                QApplication.sendEvent(self.titleBar.closeBtn, leave_event)
             
             self.showNormal()
             self.activateWindow()
@@ -228,3 +232,18 @@ class MainWindow(FramelessWindow):
 
     def handle_global_paste(self):
         self.gallery_interface.handle_global_paste()
+
+    def nativeEvent(self, eventType, message):
+        """监听 Windows 底层消息，处理睡眠唤醒后快捷键失效的问题"""
+        try:
+            msg = message.contents
+            # WM_POWERBROADCAST = 0x0218
+            if msg.message == 0x0218:
+                # PBT_APMRESUMEAUTOMATIC = 0x0012 (系统自动唤醒)
+                # PBT_APMRESUMESUSPEND = 0x0007 (系统唤醒并恢复交互)
+                if msg.wParam == 0x0012 or msg.wParam == 0x0007:
+                    # 延迟重新绑定快捷键，确保系统钩子机制已完全恢复
+                    QTimer.singleShot(2000, self.bind_global_hotkey)
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)

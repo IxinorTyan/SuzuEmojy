@@ -9,6 +9,22 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 
+# 检查单例互斥锁，防止重复启动
+def check_already_running():
+    import ctypes
+    mutex_name = "SuzuEmojy_App_Instance"
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+    last_error = ctypes.windll.kernel32.GetLastError()
+    if last_error == 183: # ERROR_ALREADY_EXISTS
+        return True
+    # 保持 mutex 引用，防止被垃圾回收
+    global _app_mutex
+    _app_mutex = mutex
+    return False
+
+if check_already_running():
+    sys.exit(0)
+
 # 获取当前程序所在的绝对路径，防止工作目录漂移导致找不到文件
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)

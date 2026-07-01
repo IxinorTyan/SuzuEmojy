@@ -183,7 +183,7 @@ class SettingInterface(ScrollArea):
         self.sidebarIconSizeConfigItem.value = self.config.get("sidebar_icon_size", 20)
         
         self.sidebarIconSizeCard = SpinBoxRangeSettingCard(
-            self.sidebarIconSizeConfigItem, FIF.FOLDER, "侧边栏图标大小", "设置左侧分类列表图标的尺寸",
+            self.sidebarIconSizeConfigItem, FIF.FOLDER, "列表模式下侧边栏图标大小", "设置左侧分类列表图标的尺寸",
             parent=self.advancedGroup
         )
         if hasattr(self.sidebarIconSizeCard, 'setValue'):

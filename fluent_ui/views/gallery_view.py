@@ -119,7 +119,8 @@ class CategoryListWidget(QListWidget):
                 
                 if hasattr(parent_sidebar, 'config') and parent_sidebar.config:
                     current_size = parent_sidebar.config.get("category_grid_icon_size", 64)
-                    new_size = max(48, min(200, current_size + step))
+                    # 将下限降低到与列表模式默认图标大小相近（比如 20 或 24）
+                    new_size = max(20, min(200, current_size + step))
                     
                     if new_size != current_size:
                         parent_sidebar.config.set("category_grid_icon_size", new_size)
@@ -174,6 +175,7 @@ class CategorySidebar(QWidget):
         
         if self.is_grid_mode:
             # 切换到网格模式
+            self.setMaximumWidth(16777215) # 解除最大宽度限制，允许自由拖拽
             self.list_widget.setViewMode(QListWidget.ListMode)
             self.list_widget.setFlow(QListWidget.LeftToRight)
             self.list_widget.setWrapping(True)
@@ -191,6 +193,7 @@ class CategorySidebar(QWidget):
                 splitter.setSizes([target_width, total_width - target_width])
         else:
             # 切换回列表模式
+            self.setMaximumWidth(400) # 恢复普通模式的最大宽度限制
             self.list_widget.setViewMode(QListWidget.ListMode)
             self.list_widget.setFlow(QListWidget.TopToBottom)
             self.list_widget.setWrapping(False)
@@ -270,6 +273,10 @@ class CategorySidebar(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        # 网格模式下不触发外观变化
+        if getattr(self, 'is_grid_mode', False):
+            return
+            
         # 根据当前真实宽度自动切换模式
         if self.width() < 100:
             self.set_icon_only_mode(True)
