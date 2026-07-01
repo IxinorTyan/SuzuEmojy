@@ -50,19 +50,53 @@ class CategoryListWidget(QListWidget):
         self.setDragDropMode(QListWidget.InternalMove)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
+        # 自定义拖拽自动滚动
+        self.auto_scroll_timer = QTimer(self)
+        self.auto_scroll_timer.timeout.connect(self._do_auto_scroll)
+        self.scroll_direction = 0
+        
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat("application/x-emojy-reorder"):
             event.accept()
         else:
             super().dragEnterEvent(event)
 
+    def dragLeaveEvent(self, event):
+        self.auto_scroll_timer.stop()
+        super().dragLeaveEvent(event)
+
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat("application/x-emojy-reorder"):
             event.accept()
+            
+            # 处理自动滚动
+            pos_y = event.pos().y()
+            viewport_height = self.viewport().height()
+            margin = 30
+            
+            if pos_y < margin:
+                self.scroll_direction = -1
+                if not self.auto_scroll_timer.isActive():
+                    self.auto_scroll_timer.start(16)
+            elif pos_y > viewport_height - margin:
+                self.scroll_direction = 1
+                if not self.auto_scroll_timer.isActive():
+                    self.auto_scroll_timer.start(16)
+            else:
+                self.auto_scroll_timer.stop()
+                
+            super().dragMoveEvent(event)
         else:
             super().dragMoveEvent(event)
+
+    def _do_auto_scroll(self):
+        scrollbar = self.verticalScrollBar()
+        current_val = scrollbar.value()
+        step = 10 # 滚动速度
+        scrollbar.setValue(current_val + (step * self.scroll_direction))
             
     def dropEvent(self, event):
+        self.auto_scroll_timer.stop()
         if event.source() == self:
             current_item = self.currentItem()
             if not current_item:
@@ -650,6 +684,11 @@ class GalleryInterface(QWidget):
         self.download_threads = []
         self.setAcceptDrops(True)
         
+        # 拖拽自动滚动定时器
+        self.auto_scroll_timer = QTimer(self)
+        self.auto_scroll_timer.timeout.connect(self._do_auto_scroll)
+        self.scroll_direction = 0
+        
         # 首次强制刷新
         self.sidebar.refresh_list("全部表情")
 
@@ -1092,7 +1131,43 @@ class GalleryInterface(QWidget):
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event):
+        self.auto_scroll_timer.stop()
+        super().dragLeaveEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-emojy-reorder") or event.mimeData().hasUrls():
+            event.accept()
+            
+            # 处理自动滚动
+            pos_y = event.pos().y()
+            viewport_height = self.scroll_area.viewport().height()
+            margin = 40
+            
+            # 检查鼠标是否在 scroll_area 的垂直范围内
+            scroll_y = self.scroll_area.mapFrom(self, event.pos()).y()
+            
+            if scroll_y < margin:
+                self.scroll_direction = -1
+                if not self.auto_scroll_timer.isActive():
+                    self.auto_scroll_timer.start(16) # ~60fps
+            elif scroll_y > viewport_height - margin:
+                self.scroll_direction = 1
+                if not self.auto_scroll_timer.isActive():
+                    self.auto_scroll_timer.start(16)
+            else:
+                self.auto_scroll_timer.stop()
+        else:
+            event.ignore()
+
+    def _do_auto_scroll(self):
+        scrollbar = self.scroll_area.verticalScrollBar()
+        current_val = scrollbar.value()
+        step = 15 # 滚动速度
+        scrollbar.setValue(current_val + (step * self.scroll_direction))
+
     def dropEvent(self, event):
+        self.auto_scroll_timer.stop()
         mime_data = event.mimeData()
         
         if mime_data.hasFormat("application/x-emojy-reorder"):
