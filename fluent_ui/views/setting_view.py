@@ -196,6 +196,25 @@ class SettingInterface(ScrollArea):
         )
         self.sidebarTooltipConfigItem.value = self.config.get("show_sidebar_tooltip", True)
         
+        self.batchSizeConfigItem = RangeConfigItem(
+            "Advanced", "BatchSize", 50,
+            RangeValidator(10, 200)
+        )
+        self.batchSizeConfigItem.value = self.config.get("render_batch_size", 50)
+        
+        self.batchSizeCard = SpinBoxRangeSettingCard(
+            self.batchSizeConfigItem, FIF.SPEED_HIGH, "单次渲染上限", "设置每次加载图片的数量，数值越小越流畅但加载越久",
+            parent=self.advancedGroup
+        )
+        if hasattr(self.batchSizeCard, 'setValue'):
+            self.batchSizeCard.setValue(self.config.get("render_batch_size", 50))
+
+        self.sidebarTooltipConfigItem = ConfigItem(
+            "Advanced", "SidebarTooltip", True,
+            BoolValidator()
+        )
+        self.sidebarTooltipConfigItem.value = self.config.get("show_sidebar_tooltip", True)
+        
         self.sidebarTooltipCard = SwitchSettingCard(
             FIF.INFO, "图标模式悬浮提示", "在侧边栏折叠为仅图标模式时，鼠标悬停显示分类名称",
             configItem=self.sidebarTooltipConfigItem, parent=self.advancedGroup
@@ -213,6 +232,7 @@ class SettingInterface(ScrollArea):
         self.advancedGroup.addSettingCard(self.previewDelayCard)
         self.advancedGroup.addSettingCard(self.previewSizeCard)
         self.advancedGroup.addSettingCard(self.sidebarIconSizeCard)
+        self.advancedGroup.addSettingCard(self.batchSizeCard)
         self.advancedGroup.addSettingCard(self.sidebarTooltipCard)
         self.advancedGroup.addSettingCard(self.hotkeyCard)
         
@@ -230,6 +250,7 @@ class SettingInterface(ScrollArea):
         self.previewSizeCard.valueChanged.connect(lambda v: self._save_config("preview_size", v))
         self.sidebarIconSizeCard.valueChanged.connect(lambda v: self._save_config("sidebar_icon_size", v, True))
         self.sidebarTooltipCard.checkedChanged.connect(lambda v: self._save_config("show_sidebar_tooltip", v, True))
+        self.batchSizeCard.valueChanged.connect(lambda v: self._save_config("render_batch_size", v))
         self.hotkeyCard.hotkey_changed.connect(lambda v: self._save_config("global_hotkey", v, True))
         
         def on_theme_changed(index):

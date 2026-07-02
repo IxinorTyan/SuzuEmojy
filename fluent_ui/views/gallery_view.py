@@ -40,6 +40,41 @@ class DownloadThread(QThread):
         except Exception as e:
             self.finished.emit(False, b"", str(e), self.url)
 
+class ImportThread(QThread):
+    """后台异步导入文件的线程，防止批量导入时主线程卡死"""
+    progress = Signal(int, int) # current, total
+    image_imported = Signal(str) # 实时发送新导入的图片路径
+    finished = Signal(int, int) # saved_count, skipped_count
+    
+    def __init__(self, filepaths, storage, target_category, parent=None):
+        super().__init__(parent)
+        self.filepaths = filepaths
+        self.storage = storage
+        self.target_category = target_category
+        
+    def run(self):
+        saved_count = 0
+        skipped_count = 0
+        total = len(self.filepaths)
+        
+        for i, filepath in enumerate(self.filepaths):
+            saved_path, is_duplicate = self.storage.save_file(filepath)
+            if saved_path:
+                if is_duplicate:
+                    skipped_count += 1
+                else:
+                    saved_count += 1
+                    # 仅当是新文件时，才发送实时显示信号
+                    self.image_imported.emit(saved_path)
+                    
+                if self.target_category not in ("全部表情", "未分类"):
+                    self.storage.add_image_to_category(saved_path, self.target_category)
+            
+            # 每处理一个文件汇报一次进度
+            self.progress.emit(i + 1, total)
+            
+        self.finished.emit(saved_count, skipped_count)
+
 class CategoryListWidget(QListWidget):
     """支持拖拽排序的分类列表，依赖原生 InternalMove 机制防止数据丢失"""
     def __init__(self, parent=None):
@@ -139,7 +174,7 @@ class CategoryListWidget(QListWidget):
                             self.parent().gallery_view.show_success("添加成功", f"已快速添加到分类 '{target_cat}'")
                             # 如果当前在未分类视图，添加后需要刷新以移除该图片
                             if self.parent().gallery_view.current_category == "未分类":
-                                self.parent().gallery_view.refresh_gallery()
+                                self.parent().gallery_view.remove_card_by_path(source_path)
             event.accept()
         else:
             event.ignore()
@@ -225,6 +260,9 @@ class CategorySidebar(QWidget):
                 # 展开到大约 300px 宽度
                 target_width = min(300, total_width // 2)
                 splitter.setSizes([target_width, total_width - target_width])
+                if hasattr(self.gallery_view, '_trigger_responsive_layout'):
+                    # 延迟触发重排，等待 splitter 尺寸真正更新完毕
+                    QTimer.singleShot(10, lambda: self.gallery_view._trigger_responsive_layout(force=True))
         else:
             # 切换回列表模式
             self.setMaximumWidth(400) # 恢复普通模式的最大宽度限制
@@ -241,6 +279,9 @@ class CategorySidebar(QWidget):
                 splitter = self.gallery_view.splitter
                 total_width = sum(splitter.sizes())
                 splitter.setSizes([140, total_width - 140])
+                if hasattr(self.gallery_view, '_trigger_responsive_layout'):
+                    # 延迟触发重排，等待 splitter 尺寸真正更新完毕
+                    QTimer.singleShot(10, lambda: self.gallery_view._trigger_responsive_layout(force=True))
                 
         self.refresh_list(self.list_widget.currentItem().data(Qt.UserRole) if self.list_widget.currentItem() else "全部表情")
 
@@ -378,7 +419,9 @@ class CategorySidebar(QWidget):
                     pixmap.fill(Qt.transparent)
                     painter = QPainter(pixmap)
                     font = painter.font()
-                    font.setPixelSize(int(render_size * 0.75))
+                    # 使用 setPointSize 替代 setPixelSize，避免触发 Qt 底层的 -1 警告
+                    # 1 point ≈ 1.33 pixels，所以乘以 0.75 进行换算
+                    font.setPointSize(max(1, int(render_size * 0.75 * 0.75)))
                     font.setFamily("Segoe UI Emoji")
                     painter.setFont(font)
                     painter.drawText(pixmap.rect(), Qt.AlignCenter, icon_val)
@@ -393,18 +436,12 @@ class CategorySidebar(QWidget):
             
         item_unclassified = QListWidgetItem(FIF.HELP.icon(), "未分类")
         item_unclassified.setData(Qt.UserRole, "未分类")
-        font = item_unclassified.font()
-        font.setItalic(True)
-        item_unclassified.setFont(font)
         if getattr(self, 'is_grid_mode', False):
             item_unclassified.setTextAlignment(Qt.AlignCenter)
         self.list_widget.addItem(item_unclassified)
         
         item_add = QListWidgetItem(FIF.ADD.icon(), "新建分类")
         item_add.setData(Qt.UserRole, "新建分类")
-        font = item_add.font()
-        font.setItalic(True)
-        item_add.setFont(font)
         if getattr(self, 'is_grid_mode', False):
             item_add.setTextAlignment(Qt.AlignCenter)
         self.list_widget.addItem(item_add)
@@ -482,7 +519,9 @@ class CategorySidebar(QWidget):
             name = name.strip()
             if name != "全部表情" and name != "新建分类":
                 if self.storage.add_category(name):
-                    self.refresh_list(select_category=name)
+                    # 保持当前视图不变，不自动跳转到新分类
+                    current_cat = self.gallery_view.current_category if self.gallery_view else "全部表情"
+                    self.refresh_list(select_category=current_cat)
                     if self.gallery_view:
                         self.gallery_view.show_success("分类已创建")
                 else:
@@ -682,12 +721,25 @@ class GalleryInterface(QWidget):
         self.focus_timer.start(500)
         
         self.download_threads = []
+        self.import_thread = None
         self.setAcceptDrops(True)
         
         # 拖拽自动滚动定时器
         self.auto_scroll_timer = QTimer(self)
         self.auto_scroll_timer.timeout.connect(self._do_auto_scroll)
         self.scroll_direction = 0
+        
+        # 分批加载状态
+        self._all_current_images = []
+        self._loaded_count = 0
+        self._batch_size = 50
+        self._is_loading = False
+        
+        # 实时导入显示状态
+        self._pending_import_images = []
+        
+        # 多选状态优化
+        self.selected_paths = set()
         
         # 首次强制刷新
         self.sidebar.refresh_list("全部表情")
@@ -820,9 +872,20 @@ class GalleryInterface(QWidget):
         # 安装事件过滤器以便处理 ctrl+滚轮以及把手释放吸附
         self.scroll_area.viewport().installEventFilter(self)
         self.splitter.handle(1).installEventFilter(self)
+        
+        # 监听滚动条实现懒加载
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
+
+    def _on_scroll(self, value):
+        if self._is_loading: return
+        scrollbar = self.scroll_area.verticalScrollBar()
+        # 当滚动到距离底部 100px 以内时，加载下一批
+        if scrollbar.maximum() - value < 100:
+            self._load_next_batch()
 
     def _on_splitter_moved(self, pos, index):
         self.config.set("splitter_sizes", self.splitter.sizes())
+        self._trigger_responsive_layout()
 
     def eventFilter(self, obj, event):
         if hasattr(self, 'splitter') and obj == self.splitter.handle(1):
@@ -916,19 +979,110 @@ class GalleryInterface(QWidget):
         for index, widget in enumerate(widgets):
             self.gallery_layout.addWidget(widget, index // columns, index % columns)
 
+    def remove_card_by_path(self, image_path):
+        """局部刷新：仅移除指定的卡片并重排，避免全局重绘卡顿"""
+        widget_to_remove = None
+        for i in range(self.gallery_layout.count()):
+            item = self.gallery_layout.itemAt(i)
+            if item and item.widget() and getattr(item.widget(), 'image_path', None) == image_path:
+                widget_to_remove = item.widget()
+                break
+                
+        if widget_to_remove:
+            self.gallery_layout.removeWidget(widget_to_remove)
+            widget_to_remove.setParent(None)
+            widget_to_remove.deleteLater()
+            
+            if image_path in self._all_current_images:
+                self._all_current_images.remove(image_path)
+                self._loaded_count -= 1
+                
+            if image_path in self.selected_paths:
+                self.selected_paths.remove(image_path)
+                self.update_selection_count()
+                
+            columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
+            self._rearrange_gallery(columns)
+
     def refresh_gallery(self):
+        """重置并开始分帧加载图片"""
+        self._is_loading = True
+        
+        # 停止可能正在进行的渲染任务
+        if hasattr(self, '_render_timer') and self._render_timer.isActive():
+            self._render_timer.stop()
+            
         while self.gallery_layout.count():
             item = self.gallery_layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
                 item.widget().deleteLater()
 
-        images = self.storage.search_images(self.search_keyword, self.current_category)
+        self._all_current_images = self.storage.search_images(self.search_keyword, self.current_category)
+        self._loaded_count = 0
         
-        columns = getattr(self, '_current_columns', 4)
+        # 切换分类时清空多选状态
+        if not self.is_selection_mode:
+            self.selected_paths.clear()
+            
+        self._is_loading = False
+        self._load_next_batch()
+
+    def _load_next_batch(self):
+        if self._is_loading or self._loaded_count >= len(self._all_current_images):
+            return
+            
+        self._is_loading = True
+        
+        # 动态计算填满一屏需要的图片数量
+        current_size = self.config.get("thumbnail_size", 120)
+        item_width = current_size + 10
+        item_height = current_size + 10
+        
+        viewport_width = self.scroll_area.viewport().width()
+        viewport_height = self.scroll_area.viewport().height()
+        
+        # 修复初始启动时视口大小未计算导致只加载2张图的Bug
+        if viewport_width < 100 or viewport_height < 100:
+            geometry = self.config.get("window_geometry", None)
+            if geometry and len(geometry) == 4:
+                viewport_width = max(100, geometry[2] - 140) # 减去侧边栏估算宽度
+                viewport_height = max(100, geometry[3] - 100) # 减去顶栏等估算高度
+            else:
+                viewport_width = 860 - 140
+                viewport_height = 640 - 100
+        
+        columns = max(1, viewport_width // item_width)
+        visible_rows = max(1, (viewport_height // item_height) + 2) # 多预加载2行防止滚动白屏
+        
+        target_count = columns * visible_rows
+        
+        # 确保至少加载一屏，且不超过总数
+        self._target_load_count = min(self._loaded_count + target_count, len(self._all_current_images))
+        
+        # 开始分帧渲染
+        self._render_timer = QTimer(self)
+        self._render_timer.timeout.connect(self._render_chunk)
+        self._render_timer.start(0) # 0ms 延迟，让出主线程后立即执行
+
+    def _render_chunk(self):
+        """分帧渲染核心逻辑，每次只渲染一小批，防止主线程卡死"""
+        if self._loaded_count >= self._target_load_count:
+            self._render_timer.stop()
+            self._is_loading = False
+            return
+            
+        # 获取用户设置的单次渲染上限
+        max_batch_size = self.config.get("render_batch_size", 50)
+        
+        end_idx = min(self._loaded_count + max_batch_size, self._target_load_count)
+        batch_images = self._all_current_images[self._loaded_count:end_idx]
+        
+        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
         current_size = self.config.get("thumbnail_size", 120)
         
-        for index, image_path in enumerate(images):
+        for i, image_path in enumerate(batch_images):
+            index = self._loaded_count + i
             row = index // columns
             col = index % columns
             
@@ -941,9 +1095,15 @@ class GalleryInterface(QWidget):
             card.hover_ended.connect(self.on_hover_ended)
             
             card.set_selectable(self.is_selection_mode)
+            # 恢复选中状态
+            if image_path in self.selected_paths:
+                card.set_selected(True)
+                
             card.selection_changed.connect(self.on_selection_changed)
             
             self.gallery_layout.addWidget(card, row, col)
+            
+        self._loaded_count = end_idx
 
     # ================== 批量选择与交互逻辑 ==================
 
@@ -956,6 +1116,8 @@ class GalleryInterface(QWidget):
         if enabled:
             can_remove = self.current_category not in ("全部表情", "未分类")
             self.btn_batch_remove.setVisible(can_remove)
+        else:
+            self.selected_paths.clear()
         
         for i in range(self.gallery_layout.count()):
             item = self.gallery_layout.itemAt(i)
@@ -967,28 +1129,35 @@ class GalleryInterface(QWidget):
         self.update_selection_count()
         
     def update_selection_count(self):
-        count = len(self.get_selected_paths())
+        count = len(self.selected_paths)
         self.selected_count_label.setText(f"已选择 {count} 项")
         
     def get_selected_paths(self):
-        paths = []
-        for i in range(self.gallery_layout.count()):
-            item = self.gallery_layout.itemAt(i)
-            if item and item.widget() and getattr(item.widget(), 'is_selected', False):
-                paths.append(item.widget().image_path)
-        return paths
+        return list(self.selected_paths)
 
     def on_selection_changed(self, path, selected):
+        if selected:
+            self.selected_paths.add(path)
+        else:
+            self.selected_paths.discard(path)
         self.update_selection_count()
         
     def select_all_cards(self):
-        paths = self.get_selected_paths()
-        total = self.gallery_layout.count()
-        select = len(paths) < total
-        for i in range(total):
+        # 全选时，直接将当前分类下的所有图片路径加入集合
+        is_all_selected = len(self.selected_paths) == len(self._all_current_images)
+        
+        if is_all_selected:
+            self.selected_paths.clear()
+        else:
+            self.selected_paths = set(self._all_current_images)
+            
+        # 更新已渲染的卡片 UI
+        for i in range(self.gallery_layout.count()):
             item = self.gallery_layout.itemAt(i)
             if item and item.widget():
-                item.widget().set_selected(select)
+                item.widget().set_selected(not is_all_selected)
+                
+        self.update_selection_count()
 
     def batch_delete(self):
         paths = self.get_selected_paths()
@@ -1209,22 +1378,14 @@ class GalleryInterface(QWidget):
             return
             
         if mime_data.hasUrls():
-            saved_count = 0
-            skipped_count = 0
+            local_files = []
             for url in mime_data.urls():
                 if url.isLocalFile():
                     filepath = url.toLocalFile()
                     abs_filepath = os.path.normcase(os.path.abspath(filepath))
                     abs_storage = os.path.normcase(os.path.abspath(self.storage.images_dir))
                     if not abs_filepath.startswith(abs_storage):
-                        saved_path, is_duplicate = self.storage.save_file(filepath)
-                        if saved_path:
-                            if is_duplicate:
-                                skipped_count += 1
-                            else:
-                                saved_count += 1
-                            if self.current_category not in ("全部表情", "未分类"):
-                                self.storage.add_image_to_category(saved_path, self.current_category)
+                        local_files.append(filepath)
                 elif url.scheme() in ("http", "https"):
                     self.show_success("正在下载", "正在从网络获取图片，请稍候...")
                     thread = DownloadThread(url.toString(), self)
@@ -1234,14 +1395,8 @@ class GalleryInterface(QWidget):
             
             event.accept()
             
-            if saved_count > 0 or skipped_count > 0:
-                def delayed_refresh():
-                    self.refresh_gallery()
-                    msg = []
-                    if saved_count > 0: msg.append(f"成功添加了 {saved_count} 个表情包")
-                    if skipped_count > 0: msg.append(f"跳过了 {skipped_count} 个重复表情")
-                    self.show_success("导入完成", "，".join(msg))
-                QTimer.singleShot(50, delayed_refresh)
+            if local_files:
+                self._start_background_import(local_files)
 
     def _reorder_widgets(self, new_order_paths):
         widgets = []
@@ -1336,7 +1491,7 @@ class GalleryInterface(QWidget):
         if self.storage.add_image_to_category(image_path, cat_name):
             self.show_success("添加成功", f"已添加到分类 '{cat_name}'")
             if self.current_category == "未分类":
-                self.refresh_gallery()
+                self.remove_card_by_path(image_path)
 
     def _set_category_icon(self, image_path):
         self.storage.set_category_icon(self.current_category, image_path)
@@ -1345,7 +1500,7 @@ class GalleryInterface(QWidget):
 
     def _remove_from_cat(self, image_path):
         if self.storage.remove_image_from_category(image_path, self.current_category):
-            self.refresh_gallery()
+            self.remove_card_by_path(image_path)
             self.show_success("移除成功")
 
     def _delete_current_category(self):
@@ -1368,27 +1523,101 @@ class GalleryInterface(QWidget):
             self.storage.set_image_keywords(image_path, text)
             self.show_success("关键词已保存")
 
+    def _start_background_import(self, filepaths):
+        if self.import_thread and self.import_thread.isRunning():
+            self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
+            return
+            
+        self._pending_import_images.clear()
+        self.import_thread = ImportThread(filepaths, self.storage, self.current_category, self)
+        self.import_thread.progress.connect(self._on_import_progress)
+        self.import_thread.image_imported.connect(self._on_image_imported)
+        self.import_thread.finished.connect(self._on_import_finished)
+        
+        # 创建一个持久的 InfoBar 用于显示进度
+        self._import_info_bar = InfoBar.info(
+            title="正在导入",
+            content=f"准备导入 {len(filepaths)} 个文件...",
+            orient=Qt.Horizontal,
+            isClosable=False,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1, # 不自动关闭
+            parent=self
+        )
+        
+        self.import_thread.start()
+
+    def _on_image_imported(self, image_path):
+        """接收后台线程发来的新图片路径，攒够一批就渲染"""
+        # 只有在“全部表情”或当前导入的目标分类下，才需要实时显示
+        if self.current_category in ("全部表情", "未分类") or self.current_category == self.import_thread.target_category:
+            self._pending_import_images.append(image_path)
+            
+            batch_size = self.config.get("render_batch_size", 50)
+            if len(self._pending_import_images) >= batch_size:
+                self._render_pending_imports()
+
+    def _render_pending_imports(self):
+        """将积攒的新图片追加到网格末尾"""
+        if not self._pending_import_images:
+            return
+            
+        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
+        current_size = self.config.get("thumbnail_size", 120)
+        
+        for image_path in self._pending_import_images:
+            # 避免重复添加
+            if image_path not in self._all_current_images:
+                self._all_current_images.append(image_path)
+                
+                index = self._loaded_count
+                row = index // columns
+                col = index % columns
+                
+                card = EmojiCard(image_path, size=current_size)
+                card.customContextMenuRequested.connect(lambda pos, w=card: self.show_context_menu(w, pos))
+                card.clicked.connect(self.on_image_clicked)
+                card.delete_requested.connect(self.on_delete_requested)
+                
+                card.hover_started.connect(self.on_hover_started)
+                card.hover_ended.connect(self.on_hover_ended)
+                
+                card.set_selectable(self.is_selection_mode)
+                card.selection_changed.connect(self.on_selection_changed)
+                
+                self.gallery_layout.addWidget(card, row, col)
+                self._loaded_count += 1
+                
+        self._pending_import_images.clear()
+        
+        # 自动滚动到底部，让用户看到新出来的图片
+        scrollbar = self.scroll_area.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _on_import_progress(self, current, total):
+        if hasattr(self, '_import_info_bar') and self._import_info_bar:
+            if hasattr(self._import_info_bar, 'contentLabel'):
+                self._import_info_bar.contentLabel.setText(f"正在处理: {current} / {total}")
+
+    def _on_import_finished(self, saved_count, skipped_count):
+        if hasattr(self, '_import_info_bar') and self._import_info_bar:
+            self._import_info_bar.close()
+            self._import_info_bar = None
+            
+        # 把最后剩下不足一批的图片渲染出来
+        self._render_pending_imports()
+            
+        if saved_count > 0 or skipped_count > 0:
+            msg = []
+            if saved_count > 0: msg.append(f"成功添加了 {saved_count} 个表情包")
+            if skipped_count > 0: msg.append(f"跳过了 {skipped_count} 个重复表情")
+            self.show_success("导入完成", "，".join(msg))
+
     def handle_global_paste(self):
         data_type, data = self.clipboard.get_data_from_clipboard()
         
         if data_type == 'file':
-            saved_count = 0
-            skipped_count = 0
-            for filepath in data:
-                saved_path, is_duplicate = self.storage.save_file(filepath)
-                if saved_path:
-                    if is_duplicate:
-                        skipped_count += 1
-                    else:
-                        saved_count += 1
-                    if self.current_category not in ("全部表情", "未分类"):
-                        self.storage.add_image_to_category(saved_path, self.current_category)
-            if saved_count > 0 or skipped_count > 0:
-                self.refresh_gallery()
-                msg = []
-                if saved_count > 0: msg.append(f"保存了 {saved_count} 个文件")
-                if skipped_count > 0: msg.append(f"跳过了 {skipped_count} 个重复文件")
-                self.show_success("剪贴板导入完成", "，".join(msg))
+            self._start_background_import(data)
         elif data_type == 'image':
             saved_path, is_duplicate = self.storage.save_image(data)
             if saved_path:
