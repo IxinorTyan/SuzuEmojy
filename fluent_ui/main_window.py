@@ -1,8 +1,7 @@
 import os
 import ctypes
-import ctypes.wintypes
 
-from PySide6.QtCore import Qt, QObject, Signal, QSize, QEvent, QAbstractNativeEventFilter, QCoreApplication
+from PySide6.QtCore import Qt, QObject, Signal, QSize, QEvent, QTimer
 from PySide6.QtGui import QIcon, QShortcut, QKeySequence
 from PySide6.QtWidgets import QApplication
 
@@ -18,21 +17,9 @@ from fluent_ui.views.setting_view import SettingInterface
 
 user32 = ctypes.windll.user32
 
-class GlobalHotkeyFilter(QAbstractNativeEventFilter):
-    """拦截 Windows 原生消息以处理 RegisterHotKey"""
-    def __init__(self, hotkey_id, callback):
-        super().__init__()
-        self.hotkey_id = hotkey_id
-        self.callback = callback
-
-    def nativeEventFilter(self, eventType, message):
-        if eventType == b"windows_generic_MSG" or eventType == "windows_generic_MSG":
-            msg = ctypes.wintypes.MSG.from_address(message.__int__())
-            # WM_HOTKEY = 0x0312
-            if msg.message == 0x0312 and msg.wParam == self.hotkey_id:
-                self.callback()
-                return True, 0
-        return False, 0
+class HotkeySignal(QObject):
+    """跨线程桥接信号"""
+    activated = Signal()
 
 class MainWindow(FramelessWindow):
     """
@@ -148,60 +135,46 @@ class MainWindow(FramelessWindow):
 
 
     def _init_global_hotkey(self):
-        self.hotkey_id = 0x1A2B # 自定义一个唯一的快捷键 ID
-        self.native_filter = GlobalHotkeyFilter(self.hotkey_id, self.toggle_window)
-        QCoreApplication.instance().installNativeEventFilter(self.native_filter)
+        self.hotkey_signal = HotkeySignal()
+        self.hotkey_signal.activated.connect(self.toggle_window)
+        self.hotkey_listener = None
         self.bind_global_hotkey()
 
-    def _parse_hotkey_string(self, hotkey_str):
-        """将类似 'ctrl+shift+e' 的字符串解析为 Windows API 需要的 modifiers 和 vk"""
-        MOD_ALT = 0x0001
-        MOD_CONTROL = 0x0002
-        MOD_SHIFT = 0x0004
-        MOD_WIN = 0x0008
-        
-        modifiers = 0
-        vk = 0
-        
+    def _parse_pynput_hotkey(self, hotkey_str):
+        """将 'ctrl+shift+e' 转换为 pynput 格式 '<ctrl>+<shift>+e'"""
         parts = hotkey_str.lower().split('+')
+        pynput_parts = []
         for part in parts:
             part = part.strip()
-            if part == 'ctrl':
-                modifiers |= MOD_CONTROL
-            elif part == 'shift':
-                modifiers |= MOD_SHIFT
-            elif part == 'alt':
-                modifiers |= MOD_ALT
-            elif part == 'win':
-                modifiers |= MOD_WIN
+            if part in ('ctrl', 'shift', 'alt', 'win'):
+                pynput_parts.append(f"<{part}>")
             else:
-                # 假设最后一个部分是普通按键
-                if len(part) == 1:
-                    vk = ord(part.upper())
-                else:
-                    # 处理特殊按键，这里仅做简单映射，可根据需要扩展
-                    key_map = {
-                        'f1': 0x70, 'f2': 0x71, 'f3': 0x72, 'f4': 0x73,
-                        'f5': 0x74, 'f6': 0x75, 'f7': 0x76, 'f8': 0x77,
-                        'f9': 0x78, 'f10': 0x79, 'f11': 0x7A, 'f12': 0x7B,
-                        'space': 0x20, 'enter': 0x0D, 'esc': 0x1B, 'tab': 0x09
-                    }
-                    vk = key_map.get(part, 0)
-                    
-        return modifiers, vk
+                pynput_parts.append(part)
+        return "+".join(pynput_parts)
 
     def bind_global_hotkey(self):
-        # 先注销旧的快捷键
-        user32.UnregisterHotKey(ctypes.c_void_p(int(self.winId())), self.hotkey_id)
+        try:
+            if self.hotkey_listener:
+                self.hotkey_listener.stop()
+                self.hotkey_listener = None
+        except Exception:
+            pass
             
         hotkey_str = self.config.get("global_hotkey", "ctrl+shift+e")
         if hotkey_str:
-            modifiers, vk = self._parse_hotkey_string(hotkey_str)
-            if vk != 0:
-                # 注册新的快捷键
-                success = user32.RegisterHotKey(ctypes.c_void_p(int(self.winId())), self.hotkey_id, modifiers, vk)
-                if not success:
-                    print(f"Failed to bind native hotkey: {hotkey_str}")
+            try:
+                from pynput import keyboard
+                pynput_hotkey = self._parse_pynput_hotkey(hotkey_str)
+                
+                def on_activate():
+                    self.hotkey_signal.activated.emit()
+                    
+                self.hotkey_listener = keyboard.GlobalHotKeys({
+                    pynput_hotkey: on_activate
+                })
+                self.hotkey_listener.start()
+            except Exception as e:
+                print(f"Failed to bind pynput hotkey: {e}")
 
     def toggle_window(self):
         if self.isVisible() and self.isActiveWindow():
@@ -281,7 +254,7 @@ class MainWindow(FramelessWindow):
         self.gallery_interface.handle_global_paste()
 
     def nativeEvent(self, eventType, message):
-        """监听 Windows 底层消息"""
+        """监听 Windows 底层消息，处理睡眠唤醒后快捷键失效的问题"""
         try:
             msg = message.contents
             # WM_POWERBROADCAST = 0x0218
@@ -289,8 +262,7 @@ class MainWindow(FramelessWindow):
                 # PBT_APMRESUMEAUTOMATIC = 0x0012 (系统自动唤醒)
                 # PBT_APMRESUMESUSPEND = 0x0007 (系统唤醒并恢复交互)
                 if msg.wParam == 0x0012 or msg.wParam == 0x0007:
-                    # 唤醒后重新注册一次原生快捷键以防万一
-                    from PySide6.QtCore import QTimer
+                    # 延迟重新绑定快捷键，确保系统钩子机制已完全恢复
                     QTimer.singleShot(2000, self.bind_global_hotkey)
         except Exception:
             pass
