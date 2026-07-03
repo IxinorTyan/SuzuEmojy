@@ -215,8 +215,10 @@ class StorageService:
         if category_name not in categories:
             categories[category_name] = []
             
-        if filepath not in categories[category_name]:
-            categories[category_name].append(filepath)
+        # 统一转换为绝对路径进行比较，避免路径格式不一致导致重复添加
+        abs_filepath = self._to_abspath(filepath)
+        if abs_filepath not in categories[category_name]:
+            categories[category_name].append(abs_filepath)
             self.save_categories(categories)
             return True
         return False
@@ -224,8 +226,9 @@ class StorageService:
     def remove_image_from_category(self, filepath, category_name):
         """将图片从指定分类移除"""
         categories = self.get_all_categories()
-        if category_name in categories and filepath in categories[category_name]:
-            categories[category_name].remove(filepath)
+        abs_filepath = self._to_abspath(filepath)
+        if category_name in categories and abs_filepath in categories[category_name]:
+            categories[category_name].remove(abs_filepath)
             self.save_categories(categories)
             return True
         return False
