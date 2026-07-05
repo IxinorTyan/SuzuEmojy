@@ -1366,12 +1366,16 @@ class GalleryInterface(QWidget):
                 
             if source_path and target_path and source_path != target_path:
                 images = self.storage.get_all_images()
-                if source_path in images and target_path in images:
-                    images.remove(source_path)
-                    target_idx = images.index(target_path)
+                # 统一使用标准化绝对路径进行比对，防止路径格式不一致导致排序失效
+                norm_source = self.storage._to_abspath(os.path.basename(source_path))
+                norm_target = self.storage._to_abspath(os.path.basename(target_path))
+                
+                if norm_source in images and norm_target in images:
+                    images.remove(norm_source)
+                    target_idx = images.index(norm_target)
                     if insert_after:
                         target_idx += 1
-                    images.insert(target_idx, source_path)
+                    images.insert(target_idx, norm_source)
                     self.storage.save_order(images)
                     self._reorder_widgets(images)
             event.accept()

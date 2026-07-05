@@ -427,7 +427,8 @@ class StorageService:
                 self._hashes_cache[file_hash] = filename
                 self._save_hashes()
                 
-            return filepath, False
+            # 统一返回标准化后的绝对路径，防止后续 UI 交互中出现路径字符串匹配失败的 Bug
+            return self._to_abspath(filename), False
             
         except Exception as e:
             print(f"[ERROR] 图片标准化保存失败: {e}")
