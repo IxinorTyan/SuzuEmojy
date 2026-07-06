@@ -16,6 +16,7 @@ def main():
         "--windows-icon-from-ico=hi.ico",
         "--include-data-file=hi.ico=hi.ico",
         "--output-dir=dist",
+        "--output-filename=SuzuEmojy.exe",
         "--assume-yes-for-downloads",
         "--include-package=qfluentwidgets",
         "--include-package=services",
@@ -53,7 +54,7 @@ def main():
         shutil.move("dist/main.dist", bin_dir)
         
         # 3. 复制文档和数据
-        files_to_copy = ["README.md", "说明书.md", "依赖装不上,没招了你就试试点这个吧,记得附上报错日志.bat"]
+        files_to_copy = ["README.md", "说明书.md"]
         for f in files_to_copy:
             if os.path.exists(f):
                 shutil.copy2(f, release_dir)
@@ -69,10 +70,11 @@ import subprocess
 
 def main():
     base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-    bin_exe = os.path.join(base_dir, "bin", "main.exe")
+    bin_exe = os.path.join(base_dir, "bin", "SuzuEmojy.exe")
     
     if os.path.exists(bin_exe):
-        subprocess.Popen([bin_exe], cwd=os.path.join(base_dir, "bin"), creationflags=subprocess.CREATE_NO_WINDOW)
+        # 注意：cwd 必须设置为 base_dir (即 SuzuEmojy_Release 根目录)，这样核心程序才能正确找到外面的 data 文件夹
+        subprocess.Popen([bin_exe], cwd=base_dir, creationflags=subprocess.CREATE_NO_WINDOW)
     else:
         import tkinter as tk
         from tkinter import messagebox
