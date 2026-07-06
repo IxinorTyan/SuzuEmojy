@@ -11,7 +11,12 @@ class StorageService:
         import sys
         # 确保数据目录在项目根目录下的 data/images
         if getattr(sys, 'frozen', False):
-            self.base_dir = os.path.dirname(sys.executable)
+            exe_dir = os.path.dirname(sys.executable)
+            # 如果核心程序在 bin 目录下，则数据目录在上一级
+            if os.path.basename(exe_dir).lower() == "bin":
+                self.base_dir = os.path.dirname(exe_dir)
+            else:
+                self.base_dir = exe_dir
         else:
             self.base_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
         self.images_dir = os.path.join(self.base_dir, "data", "images")
