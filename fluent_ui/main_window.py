@@ -184,9 +184,17 @@ class MainWindow(FramelessWindow):
                 leave_event = QEvent(QEvent.Leave)
                 QApplication.sendEvent(self.titleBar.closeBtn, leave_event)
             self.hide()
+            
+            # 深度休眠：隐藏窗口后清空图库内存，降低后台常驻内存占用
+            if hasattr(self, 'gallery_interface'):
+                self.gallery_interface.clear_gallery()
         else:
             self._update_background()
             self.show_gallery()
+            
+            # 唤醒时重新加载图库
+            if hasattr(self, 'gallery_interface'):
+                self.gallery_interface.refresh_gallery()
             
             # 唤醒时也重置一次，双重保险
             if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'closeBtn'):

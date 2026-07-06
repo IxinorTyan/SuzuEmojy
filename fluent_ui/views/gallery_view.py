@@ -1004,11 +1004,8 @@ class GalleryInterface(QWidget):
             columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
             self._rearrange_gallery(columns)
 
-    def refresh_gallery(self):
-        """重置并开始分帧加载图片"""
-        self._is_loading = True
-        
-        # 停止可能正在进行的渲染任务
+    def clear_gallery(self):
+        """深度休眠：清空所有卡片并强制垃圾回收，释放内存"""
         if hasattr(self, '_render_timer') and self._render_timer.isActive():
             self._render_timer.stop()
             
@@ -1017,9 +1014,22 @@ class GalleryInterface(QWidget):
             if item.widget():
                 item.widget().setParent(None)
                 item.widget().deleteLater()
+                
+        self._all_current_images = []
+        self._loaded_count = 0
+        self._pending_import_images.clear()
+        
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+
+    def refresh_gallery(self):
+        """重置并开始分帧加载图片"""
+        self._is_loading = True
+        
+        self.clear_gallery()
 
         self._all_current_images = self.storage.search_images(self.search_keyword, self.current_category)
-        self._loaded_count = 0
         
         # 切换分类时清空多选状态
         if not self.is_selection_mode:
