@@ -748,6 +748,17 @@ class GalleryInterface(QWidget):
         
         # 首次强制刷新
         self.sidebar.refresh_list("全部表情")
+        
+        # 滚动位置记录
+        self._saved_scroll_position = 0
+
+    def save_scroll_position(self):
+        if hasattr(self, 'scroll_area'):
+            self._saved_scroll_position = self.scroll_area.verticalScrollBar().value()
+
+    def restore_scroll_position(self):
+        if hasattr(self, 'scroll_area'):
+            self.scroll_area.verticalScrollBar().setValue(self._saved_scroll_position)
 
     def _init_ui(self):
         self.main_layout = QHBoxLayout(self)

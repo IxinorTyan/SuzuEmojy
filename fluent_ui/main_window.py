@@ -183,18 +183,15 @@ class MainWindow(FramelessWindow):
                 self.titleBar.closeBtn.setState(0) # 0 通常代表 Normal 状态
                 leave_event = QEvent(QEvent.Leave)
                 QApplication.sendEvent(self.titleBar.closeBtn, leave_event)
-            self.hide()
-            
-            # 深度休眠：隐藏窗口后清空图库内存，降低后台常驻内存占用
+                
+            # 记录滚动位置
             if hasattr(self, 'gallery_interface'):
-                self.gallery_interface.clear_gallery()
+                self.gallery_interface.save_scroll_position()
+                
+            self.hide()
         else:
             self._update_background()
             self.show_gallery()
-            
-            # 唤醒时重新加载图库
-            if hasattr(self, 'gallery_interface'):
-                self.gallery_interface.refresh_gallery()
             
             # 唤醒时也重置一次，双重保险
             if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'closeBtn'):
@@ -206,6 +203,10 @@ class MainWindow(FramelessWindow):
             self.activateWindow()
             self.raise_()
             user32.SetForegroundWindow(ctypes.c_void_p(int(self.winId())))
+            
+            # 在下一帧恢复滚动位置
+            if hasattr(self, 'gallery_interface'):
+                QTimer.singleShot(0, self.gallery_interface.restore_scroll_position)
 
     def apply_window_flags(self):
         """
