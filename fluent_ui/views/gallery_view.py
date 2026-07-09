@@ -735,6 +735,11 @@ class GalleryInterface(QWidget):
         self._batch_size = 50
         self._is_loading = False
         
+        # 懒加载状态
+        self._all_card_widgets = []
+        self._hidden_widgets = {}
+        self._cleanup_threshold = 200
+        
         # 实时导入显示状态
         self._pending_import_images = []
         
@@ -876,12 +881,71 @@ class GalleryInterface(QWidget):
         # 监听滚动条实现懒加载
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
-    def _on_scroll(self, value):
-        if self._is_loading: return
+    def _apply_lazy_loading(self):
+        if not hasattr(self, '_all_card_widgets'):
+            return
+            
+        if len(self._all_card_widgets) < getattr(self, '_cleanup_threshold', 200):
+            return
+            
         scrollbar = self.scroll_area.verticalScrollBar()
-        # 当滚动到距离底部 100px 以内时，加载下一批
-        if scrollbar.maximum() - value < 100:
-            self._load_next_batch()
+        scroll_y = scrollbar.value()
+        viewport_height = self.scroll_area.viewport().height()
+        
+        visible_top = scroll_y
+        visible_bottom = scroll_y + viewport_height
+        
+        self.grid_container.setUpdatesEnabled(False)
+        from PySide6.QtWidgets import QSpacerItem, QSizePolicy
+        from PySide6.QtCore import QSignalBlocker
+        
+        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
+        current_size = self.config.get("thumbnail_size", 120)
+        
+        for index, widget in enumerate(self._all_card_widgets):
+            row = index // columns
+            col = index % columns
+            
+            card_y = 8 + row * (current_size + 10)
+            card_bottom = card_y + current_size
+            
+            is_far_above = card_bottom < visible_top - 500
+            is_far_below = card_y > visible_bottom + 500
+            
+            is_near = (card_bottom >= visible_top - 200) and (card_y <= visible_bottom + 200)
+            
+            state_key = (row, col)
+            
+            if is_far_above or is_far_below:
+                if state_key not in self._hidden_widgets:
+                    self.gallery_layout.removeWidget(widget)
+                    widget.hide()
+                    
+                    spacer = QSpacerItem(current_size, current_size, QSizePolicy.Fixed, QSizePolicy.Fixed)
+                    self.gallery_layout.addItem(spacer, row, col)
+                    
+                    self._hidden_widgets[state_key] = spacer
+            elif is_near:
+                if state_key in self._hidden_widgets:
+                    spacer = self._hidden_widgets.pop(state_key)
+                    self.gallery_layout.removeItem(spacer)
+                    
+                    blocker = QSignalBlocker(widget)
+                    self.gallery_layout.addWidget(widget, row, col)
+                    widget.show()
+                    del blocker
+                    
+        self.grid_container.setUpdatesEnabled(True)
+        self.grid_container.update()
+
+    def _on_scroll(self, value):
+        if not self._is_loading:
+            scrollbar = self.scroll_area.verticalScrollBar()
+            # 当滚动到距离底部 100px 以内时，加载下一批
+            if scrollbar.maximum() - value < 100:
+                self._load_next_batch()
+                
+        self._apply_lazy_loading()
 
     def _on_splitter_moved(self, pos, index):
         self.config.set("splitter_sizes", self.splitter.sizes())
@@ -944,12 +1008,8 @@ class GalleryInterface(QWidget):
 
 
     def _apply_thumbnail_size(self, size):
-        for i in range(self.gallery_layout.count()):
-            item = self.gallery_layout.itemAt(i)
-            if item and item.widget():
-                widget = item.widget()
-                if isinstance(widget, EmojiCard):
-                    widget.update_size(size)
+        for widget in getattr(self, '_all_card_widgets', []):
+            widget.update_size(size)
         self._trigger_responsive_layout(force=True)
 
     def showEvent(self, event):
@@ -971,27 +1031,46 @@ class GalleryInterface(QWidget):
             self._rearrange_gallery(columns)
 
     def _rearrange_gallery(self, columns):
-        widgets = []
+        self.grid_container.setUpdatesEnabled(False)
+        
         while self.gallery_layout.count():
-            item = self.gallery_layout.takeAt(0)
-            if item.widget(): widgets.append(item.widget())
-                
-        for index, widget in enumerate(widgets):
-            self.gallery_layout.addWidget(widget, index // columns, index % columns)
+            self.gallery_layout.takeAt(0)
+            
+        self._hidden_widgets.clear()
+        
+        from PySide6.QtCore import QSignalBlocker
+        
+        for index, widget in enumerate(getattr(self, '_all_card_widgets', [])):
+            row = index // columns
+            col = index % columns
+            
+            blocker = QSignalBlocker(widget)
+            self.gallery_layout.addWidget(widget, row, col)
+            widget.show()
+            del blocker
+            
+        self.grid_container.setUpdatesEnabled(True)
+        self.grid_container.update()
+        
+        self._apply_lazy_loading()
 
     def remove_card_by_path(self, image_path):
         """局部刷新：仅移除指定的卡片并重排，避免全局重绘卡顿"""
         widget_to_remove = None
-        for i in range(self.gallery_layout.count()):
-            item = self.gallery_layout.itemAt(i)
-            if item and item.widget() and getattr(item.widget(), 'image_path', None) == image_path:
-                widget_to_remove = item.widget()
+        for widget in getattr(self, '_all_card_widgets', []):
+            if getattr(widget, 'image_path', None) == image_path:
+                widget_to_remove = widget
                 break
                 
         if widget_to_remove:
+            self.grid_container.setUpdatesEnabled(False)
+            
             self.gallery_layout.removeWidget(widget_to_remove)
+            widget_to_remove.hide()
             widget_to_remove.setParent(None)
             widget_to_remove.deleteLater()
+            
+            self._all_card_widgets.remove(widget_to_remove)
             
             if image_path in self._all_current_images:
                 self._all_current_images.remove(image_path)
@@ -1003,21 +1082,38 @@ class GalleryInterface(QWidget):
                 
             columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
             self._rearrange_gallery(columns)
+            
+            self.grid_container.setUpdatesEnabled(True)
+            self.grid_container.update()
 
     def clear_gallery(self):
         """深度休眠：清空所有卡片并强制垃圾回收，释放内存"""
         if hasattr(self, '_render_timer') and self._render_timer.isActive():
             self._render_timer.stop()
             
+        self.grid_container.setUpdatesEnabled(False)
+            
         while self.gallery_layout.count():
-            item = self.gallery_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            self.gallery_layout.takeAt(0)
+            
+        for widget in getattr(self, '_all_card_widgets', []):
+            try:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+            except RuntimeError:
+                pass
                 
         self._all_current_images = []
         self._loaded_count = 0
         self._pending_import_images.clear()
+        self.selected_paths.clear()
+        
+        self._all_card_widgets = []
+        self._hidden_widgets = {}
+        
+        self.grid_container.setUpdatesEnabled(True)
+        self.grid_container.update()
         
         # 强制垃圾回收
         import gc
@@ -1080,6 +1176,7 @@ class GalleryInterface(QWidget):
         if self._loaded_count >= self._target_load_count:
             self._render_timer.stop()
             self._is_loading = False
+            self._apply_lazy_loading()
             return
             
         # 获取用户设置的单次渲染上限
@@ -1090,6 +1187,9 @@ class GalleryInterface(QWidget):
         
         columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
         current_size = self.config.get("thumbnail_size", 120)
+        
+        self.grid_container.setUpdatesEnabled(False)
+        from PySide6.QtCore import QSignalBlocker
         
         for i, image_path in enumerate(batch_images):
             index = self._loaded_count + i
@@ -1111,9 +1211,17 @@ class GalleryInterface(QWidget):
                 
             card.selection_changed.connect(self.on_selection_changed)
             
+            if not hasattr(self, '_all_card_widgets'):
+                self._all_card_widgets = []
+            self._all_card_widgets.append(card)
+            
+            blocker = QSignalBlocker(card)
             self.gallery_layout.addWidget(card, row, col)
+            del blocker
             
         self._loaded_count = end_idx
+        self.grid_container.setUpdatesEnabled(True)
+        self.grid_container.update()
 
     # ================== 批量选择与交互逻辑 ==================
 
@@ -1129,12 +1237,10 @@ class GalleryInterface(QWidget):
         else:
             self.selected_paths.clear()
         
-        for i in range(self.gallery_layout.count()):
-            item = self.gallery_layout.itemAt(i)
-            if item and item.widget():
-                item.widget().set_selectable(enabled)
-                if not enabled:
-                    item.widget().set_selected(False)
+        for widget in getattr(self, '_all_card_widgets', []):
+            widget.set_selectable(enabled)
+            if not enabled:
+                widget.set_selected(False)
                     
         self.update_selection_count()
         
@@ -1162,10 +1268,8 @@ class GalleryInterface(QWidget):
             self.selected_paths = set(self._all_current_images)
             
         # 更新已渲染的卡片 UI
-        for i in range(self.gallery_layout.count()):
-            item = self.gallery_layout.itemAt(i)
-            if item and item.widget():
-                item.widget().set_selected(not is_all_selected)
+        for widget in getattr(self, '_all_card_widgets', []):
+            widget.set_selected(not is_all_selected)
                 
         self.update_selection_count()
 
@@ -1413,23 +1517,19 @@ class GalleryInterface(QWidget):
                 self._start_background_import(local_files)
 
     def _reorder_widgets(self, new_order_paths):
-        widgets = []
-        while self.gallery_layout.count():
-            item = self.gallery_layout.takeAt(0)
-            if item.widget(): widgets.append(item.widget())
-                
-        widget_dict = {w.image_path: w for w in widgets if isinstance(w, EmojiCard)}
+        widget_dict = {w.image_path: w for w in getattr(self, '_all_card_widgets', [])}
         
         sorted_widgets = []
         for path in new_order_paths:
             if path in widget_dict: sorted_widgets.append(widget_dict[path])
                 
-        for w in widgets:
+        for w in getattr(self, '_all_card_widgets', []):
             if w not in sorted_widgets: sorted_widgets.append(w)
                 
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // 130))
-        for index, widget in enumerate(sorted_widgets):
-            self.gallery_layout.addWidget(widget, index // columns, index % columns)
+        self._all_card_widgets = sorted_widgets
+        
+        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
+        self._rearrange_gallery(columns)
 
     def force_refresh_sidebar_icons(self):
         """外部调用以重新应用图标尺寸"""
@@ -1542,10 +1642,8 @@ class GalleryInterface(QWidget):
             self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
             return
             
-        self._pending_import_images.clear()
         self.import_thread = ImportThread(filepaths, self.storage, self.current_category, self)
         self.import_thread.progress.connect(self._on_import_progress)
-        self.import_thread.image_imported.connect(self._on_image_imported)
         self.import_thread.finished.connect(self._on_import_finished)
         
         # 创建一个持久的 InfoBar 用于显示进度
@@ -1561,53 +1659,6 @@ class GalleryInterface(QWidget):
         
         self.import_thread.start()
 
-    def _on_image_imported(self, image_path):
-        """接收后台线程发来的新图片路径，攒够一批就渲染"""
-        # 只有在“全部表情”或当前导入的目标分类下，才需要实时显示
-        if self.current_category in ("全部表情", "未分类") or self.current_category == self.import_thread.target_category:
-            self._pending_import_images.append(image_path)
-            
-            batch_size = self.config.get("render_batch_size", 50)
-            if len(self._pending_import_images) >= batch_size:
-                self._render_pending_imports()
-
-    def _render_pending_imports(self):
-        """将积攒的新图片追加到网格末尾"""
-        if not self._pending_import_images:
-            return
-            
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
-        current_size = self.config.get("thumbnail_size", 120)
-        
-        for image_path in self._pending_import_images:
-            # 避免重复添加
-            if image_path not in self._all_current_images:
-                self._all_current_images.append(image_path)
-                
-                index = self._loaded_count
-                row = index // columns
-                col = index % columns
-                
-                card = EmojiCard(image_path, size=current_size)
-                card.customContextMenuRequested.connect(lambda pos, w=card: self.show_context_menu(w, pos))
-                card.clicked.connect(self.on_image_clicked)
-                card.delete_requested.connect(self.on_delete_requested)
-                
-                card.hover_started.connect(self.on_hover_started)
-                card.hover_ended.connect(self.on_hover_ended)
-                
-                card.set_selectable(self.is_selection_mode)
-                card.selection_changed.connect(self.on_selection_changed)
-                
-                self.gallery_layout.addWidget(card, row, col)
-                self._loaded_count += 1
-                
-        self._pending_import_images.clear()
-        
-        # 自动滚动到底部，让用户看到新出来的图片
-        scrollbar = self.scroll_area.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
     def _on_import_progress(self, current, total):
         if hasattr(self, '_import_info_bar') and self._import_info_bar:
             if hasattr(self._import_info_bar, 'contentLabel'):
@@ -1618,8 +1669,7 @@ class GalleryInterface(QWidget):
             self._import_info_bar.close()
             self._import_info_bar = None
             
-        # 把最后剩下不足一批的图片渲染出来
-        self._render_pending_imports()
+        self.refresh_gallery()
             
         if saved_count > 0 or skipped_count > 0:
             msg = []
