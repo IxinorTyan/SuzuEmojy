@@ -23,7 +23,7 @@ def get_window_class_name(hwnd):
     return buff.value
 
 class DownloadThread(QThread):
-    finished = Signal(bool, bytes, str, str)
+    finished = Signal(bool, str, str, str) # success, temp_filepath, error_msg, url
     
     def __init__(self, url, parent=None):
         super().__init__(parent)
@@ -32,27 +32,52 @@ class DownloadThread(QThread):
     def run(self):
         import urllib.request
         import urllib.error
+        import tempfile
+        import os
         try:
             req = urllib.request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
             with urllib.request.urlopen(req, timeout=10) as response:
+                # 检查 Content-Type
+                content_type = response.headers.get('Content-Type', '').lower()
+                is_image = content_type.startswith('image/')
+                
+                # 如果 Content-Type 不明确，检查 URL 后缀
+                if not is_image:
+                    import urllib.parse
+                    parsed_url = urllib.parse.urlparse(self.url)
+                    _, ext = os.path.splitext(parsed_url.path)
+                    if ext.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
+                        is_image = True
+                        
+                if not is_image:
+                    self.finished.emit(False, "", "该链接不是有效的图片资源", self.url)
+                    return
+                    
                 content = response.read()
-                self.finished.emit(True, content, "", self.url)
+                
+                # 写入临时文件
+                fd, temp_path = tempfile.mkstemp(suffix=".tmp")
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(content)
+                    
+                self.finished.emit(True, temp_path, "", self.url)
         except Exception as e:
-            self.finished.emit(False, b"", str(e), self.url)
+            self.finished.emit(False, "", str(e), self.url)
 
 class ImportThread(QThread):
     """后台异步导入文件的线程，防止批量导入时主线程卡死"""
     progress = Signal(int, int) # current, total
-    image_imported = Signal(str) # 实时发送新导入的图片路径
     finished = Signal(int, int) # saved_count, skipped_count
     
-    def __init__(self, filepaths, storage, target_category, parent=None):
+    def __init__(self, filepaths, storage, target_category, delete_after=False, parent=None):
         super().__init__(parent)
         self.filepaths = filepaths
         self.storage = storage
         self.target_category = target_category
+        self.delete_after = delete_after
         
     def run(self):
+        import os
         saved_count = 0
         skipped_count = 0
         total = len(self.filepaths)
@@ -64,11 +89,15 @@ class ImportThread(QThread):
                     skipped_count += 1
                 else:
                     saved_count += 1
-                    # 仅当是新文件时，才发送实时显示信号
-                    self.image_imported.emit(saved_path)
                     
                 if self.target_category not in ("全部表情", "未分类"):
                     self.storage.add_image_to_category(saved_path, self.target_category)
+                    
+            if self.delete_after and os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
             
             # 每处理一个文件汇报一次进度
             self.progress.emit(i + 1, total)
@@ -957,6 +986,10 @@ class GalleryInterface(QWidget):
                 self._load_next_batch()
                 
         self._apply_lazy_loading()
+        
+        # 重置空闲定时器
+        from fluent_ui.components.emoji_card import ThumbnailCache
+        ThumbnailCache().reset_idle_timer()
 
     def _on_splitter_moved(self, pos, index):
         self.config.set("splitter_sizes", self.splitter.sizes())
@@ -998,10 +1031,18 @@ class GalleryInterface(QWidget):
         self.current_category = category_name
         self.refresh_gallery()
         
+        # 重置空闲定时器
+        from fluent_ui.components.emoji_card import ThumbnailCache
+        ThumbnailCache().reset_idle_timer()
+        
     def set_search_keyword(self, keyword):
         """由顶栏调用，切换搜索词"""
         self.search_keyword = keyword
         self.refresh_gallery()
+        
+        # 重置空闲定时器
+        from fluent_ui.components.emoji_card import ThumbnailCache
+        ThumbnailCache().reset_idle_timer()
 
     def show_success(self, title, content=""):
         InfoBar.success(title, content, duration=2000, position=InfoBarPosition.TOP_RIGHT, parent=self)
@@ -1022,6 +1063,10 @@ class GalleryInterface(QWidget):
         for widget in getattr(self, '_all_card_widgets', []):
             widget.update_size(size)
         self._trigger_responsive_layout(force=True)
+        
+        # 重置空闲定时器
+        from fluent_ui.components.emoji_card import ThumbnailCache
+        ThumbnailCache().reset_idle_timer()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1098,7 +1143,7 @@ class GalleryInterface(QWidget):
             self.grid_container.update()
 
     def clear_gallery(self):
-        """深度休眠：清空所有卡片并强制垃圾回收，释放内存"""
+        """清空所有卡片并强制垃圾回收，释放内存"""
         if hasattr(self, '_render_timer') and self._render_timer.isActive():
             self._render_timer.stop()
             
@@ -1159,7 +1204,7 @@ class GalleryInterface(QWidget):
         viewport_width = self.scroll_area.viewport().width()
         viewport_height = self.scroll_area.viewport().height()
         
-        # 修复初始启动时视口大小未计算导致只加载2张图的Bug
+        # 确保初始启动时视口大小正确计算
         if viewport_width < 100 or viewport_height < 100:
             geometry = self.config.get("window_geometry", None)
             if geometry and len(geometry) == 4:
@@ -1648,12 +1693,12 @@ class GalleryInterface(QWidget):
             self.storage.set_image_keywords(image_path, text)
             self.show_success("关键词已保存")
 
-    def _start_background_import(self, filepaths):
+    def _start_background_import(self, filepaths, delete_after=False):
         if self.import_thread and self.import_thread.isRunning():
             self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
             return
             
-        self.import_thread = ImportThread(filepaths, self.storage, self.current_category, self)
+        self.import_thread = ImportThread(filepaths, self.storage, self.current_category, delete_after, self)
         self.import_thread.progress.connect(self._on_import_progress)
         self.import_thread.finished.connect(self._on_import_finished)
         
@@ -1711,7 +1756,7 @@ class GalleryInterface(QWidget):
             thread.finished.connect(self._on_download_finished)
             thread.start()
 
-    def _on_download_finished(self, success, content, error_msg, url):
+    def _on_download_finished(self, success, temp_filepath, error_msg, url):
         for t in self.download_threads[:]:
             if t.url == url:
                 self.download_threads.remove(t)
@@ -1721,15 +1766,5 @@ class GalleryInterface(QWidget):
             self.show_error("下载失败", f"无法获取网络图片: {error_msg}")
             return
             
-        saved_path, is_duplicate = self.storage.save_downloaded_data(url, content)
-        
-        if saved_path:
-            if self.current_category not in ("全部表情", "未分类"):
-                self.storage.add_image_to_category(saved_path, self.current_category)
-            self.refresh_gallery()
-            if is_duplicate:
-                self.show_success("导入完成", "该网络图片已存在，已跳过保存")
-            else:
-                self.show_success("保存成功", "网络图片已保存")
-        else:
-            self.show_error("保存失败", "无法保存下载的图片数据")
+        # 将下载好的临时文件交给统一的导入流程，并要求导入后删除临时文件
+        self._start_background_import([temp_filepath], delete_after=True)

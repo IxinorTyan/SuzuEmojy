@@ -44,7 +44,13 @@ class ClipboardService(QObject):
                 if img_url.startswith("http://") or img_url.startswith("https://"):
                     return 'network_url', img_url
                     
-        # 3. 退而求其次，判断是否包含直接的图像数据 (比如截图/不支持富文本的复制)
+        # 3. 判断是否是纯文本的 URL (比如直接复制了一个图片链接)
+        if mime_data.hasText():
+            text = mime_data.text().strip()
+            if text.startswith("http://") or text.startswith("https://"):
+                return 'network_url', text
+
+        # 4. 退而求其次，判断是否包含直接的图像数据 (比如截图/不支持富文本的复制)
         if mime_data.hasImage():
             image = self.clipboard.image()
             if not image.isNull():

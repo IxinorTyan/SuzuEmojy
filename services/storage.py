@@ -356,18 +356,6 @@ class StorageService:
                 result.append(img)
         return result
 
-    def _detect_real_extension(self, header_bytes, default_ext):
-        """根据文件头（魔数）探测真实的文件格式"""
-        if header_bytes.startswith(b'GIF'):
-            return '.gif'
-        elif header_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
-            return '.png'
-        elif header_bytes.startswith(b'\xff\xd8\xff'):
-            return '.jpg'
-        elif header_bytes.startswith(b'RIFF') and len(header_bytes) >= 12 and header_bytes[8:12] == b'WEBP':
-            return '.webp'
-        return default_ext
-
     def generate_new_filename(self, extension=".png"):
         """生成基于时间戳的新文件名"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -476,34 +464,6 @@ class StorageService:
         except Exception as e:
             print(f"[ERROR] 读取文件失败: {e}")
             return None, False
-
-    def save_downloaded_data(self, url, content):
-        """
-        保存从网络下载的二进制数据并进行标准化
-        :return: (保存后的绝对路径, 是否是已存在的重复图片)
-        """
-        import urllib.parse
-        
-        # 尝试从 URL 提取正确的后缀
-        parsed_url = urllib.parse.urlparse(url)
-        path = parsed_url.path
-        _, ext = os.path.splitext(path)
-        ext = ext.lower()
-        
-        # 如果获取不到或者是非常见后缀，尝试从整个 URL 中推断
-        if ext not in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
-            url_lower = url.lower()
-            if '.webp' in url_lower or 'format=webp' in url_lower:
-                ext = '.webp'
-            elif '.gif' in url_lower or 'format=gif' in url_lower:
-                ext = '.gif'
-            elif '.jpg' in url_lower or '.jpeg' in url_lower or 'format=jpg' in url_lower:
-                ext = '.jpg'
-            else:
-                ext = '.png'
-                
-        # 统一走标准化流程
-        return self._standardize_and_save(content, ext)
 
     def delete_image(self, filepath):
         """

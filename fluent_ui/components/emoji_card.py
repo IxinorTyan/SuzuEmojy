@@ -1,7 +1,73 @@
 from PySide6.QtWidgets import QLabel, QApplication, QMenu
-from PySide6.QtGui import QCursor, QDrag, QPixmap, QImageReader
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QSize
+from PySide6.QtGui import QCursor, QDrag, QPixmap, QImageReader, QPixmapCache
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QSize, QTimer
 from qfluentwidgets import TransparentToolButton, FluentIcon
+
+class ThumbnailCache:
+    _instance = None
+    _initialized = False
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if not self._initialized:
+            self._normal_limit_kb = 80 * 1024  # 正常操作时 80MB
+            self._idle_limit_kb = 40 * 1024    # 空闲收缩时 40MB
+            
+            QPixmapCache.setCacheLimit(self._normal_limit_kb)
+            
+            # 空闲收缩定时器 (60秒)
+            self._idle_timer = QTimer()
+            self._idle_timer.setSingleShot(True)
+            self._idle_timer.timeout.connect(self._on_idle_timeout)
+            self._idle_timer.start(60000)
+            
+            self._initialized = True
+
+    def reset_idle_timer(self):
+        """由外部交互(滚动、切换分类等)调用，重置空闲状态"""
+        if QPixmapCache.cacheLimit() != self._normal_limit_kb:
+            QPixmapCache.setCacheLimit(self._normal_limit_kb)
+        self._idle_timer.start(60000)
+
+    def _on_idle_timeout(self):
+        """空闲超时，收缩缓存上限以释放部分内存"""
+        QPixmapCache.setCacheLimit(self._idle_limit_kb)
+
+    def get_thumbnail(self, image_path, target_size):
+        cache_key = f"{image_path}|{target_size}x{target_size}"
+        
+        pixmap = QPixmap()
+        if QPixmapCache.find(cache_key, pixmap):
+            return pixmap
+            
+        try:
+            reader = QImageReader(image_path)
+            orig_size = reader.size()
+            
+            if orig_size.isValid():
+                # 计算保持宽高比的缩放尺寸
+                orig_size.scale(target_size, target_size, Qt.KeepAspectRatio)
+                # 让图片直接解码为目标大小，大幅降低内存峰值和 CPU 开销
+                reader.setScaledSize(orig_size)
+                
+            img = reader.read()
+            if img and not img.isNull():
+                pixmap = QPixmap.fromImage(img)
+                
+                # 确保最终尺寸不超过 target_size，并应用平滑缩放以保证画质
+                if pixmap.width() > target_size or pixmap.height() > target_size:
+                    pixmap = pixmap.scaled(target_size, target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    
+                QPixmapCache.insert(cache_key, pixmap)
+                return pixmap
+        except Exception as e:
+            print(f"[Error] ThumbnailCache failed to load image: {image_path}, error: {e}")
+            
+        return None
 
 class EmojiCard(QLabel):
     """
@@ -29,10 +95,10 @@ class EmojiCard(QLabel):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         
         self.setAlignment(Qt.AlignCenter)
-        self._load_image()
 
         self.setObjectName("EmojiCard")
         self.update_style()
+        self.update_size(self.current_size)
 
     def set_selectable(self, selectable):
         self.is_selectable = selectable
@@ -101,39 +167,17 @@ class EmojiCard(QLabel):
     def clear_resources(self):
         self.clear()
 
-    def _load_image(self):
-        try:
-            # 安全加载图片
-            reader = QImageReader(self.image_path)
-            
-            # 智能缓存策略：获取图片原始大小
-            orig_size = reader.size()
-            max_cache_size = 500
-            
-            # 只有当原图大得离谱(超过 500x500)时，才进行源头裁剪以防内存 OOM
-            # 如果原图较小，则保留原图的高清画质
-            if orig_size.isValid() and (orig_size.width() > max_cache_size or orig_size.height() > max_cache_size):
-                orig_size.scale(max_cache_size, max_cache_size, Qt.KeepAspectRatio)
-                reader.setScaledSize(orig_size)
-                
-            img = reader.read()
-            if img and not img.isNull():
-                self._original_pixmap = QPixmap.fromImage(img)
-                self.update_size(self.current_size)
-            else:
-                print(f"[Warning] Failed to read image: {self.image_path}")
-        except Exception as e:
-            print(f"[Error] Loading image crashed: {self.image_path}, error: {e}")
-            
     def update_size(self, new_size):
         self.current_size = new_size
         self.setFixedSize(new_size, new_size)
-        if hasattr(self, '_original_pixmap') and self._original_pixmap and not self._original_pixmap.isNull():
-            # 图片缩放为控件大小减去 padding
-            target_img_size = max(10, new_size - 16)
-            # 画质优化：放弃粗糙的 FastTransformation，改用 SmoothTransformation(双线性插值)
-            # 配合上面保存的高清基准图，这样缩小显示的缩略图边缘会非常平滑和锐利
-            self.setPixmap(self._original_pixmap.scaled(target_img_size, target_img_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        
+        target_img_size = max(10, new_size - 16)
+        pixmap = ThumbnailCache().get_thumbnail(self.image_path, target_img_size)
+        
+        if pixmap and not pixmap.isNull():
+            self.setPixmap(pixmap)
+        else:
+            self.clear()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
