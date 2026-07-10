@@ -58,6 +58,31 @@ class MainWindow(FramelessWindow):
         if font.pointSize() <= 0:
             font.setPointSize(9)
             self.setFont(font)
+            
+        self.ensure_window_visible()
+
+    def ensure_window_visible(self):
+        """
+        检查窗口是否完全位于所有屏幕的可用区域之外。
+        如果是，则将其移动到主屏幕中央，防止高DPI或多显示器配置改变导致窗口丢失。
+        """
+        from PySide6.QtGui import QGuiApplication
+        
+        frame_geo = self.frameGeometry()
+        is_visible = False
+        
+        for screen in QGuiApplication.screens():
+            if frame_geo.intersects(screen.availableGeometry()):
+                is_visible = True
+                break
+                
+        if not is_visible:
+            primary_screen = QGuiApplication.primaryScreen()
+            if primary_screen:
+                available_geo = primary_screen.availableGeometry()
+                new_x = available_geo.x() + (available_geo.width() - frame_geo.width()) // 2
+                new_y = available_geo.y() + (available_geo.height() - frame_geo.height()) // 2
+                self.move(new_x, new_y)
 
     def _update_background(self):
         """处理深色模式背景"""
