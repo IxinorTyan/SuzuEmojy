@@ -766,8 +766,12 @@ class GalleryInterface(QWidget):
         
         # 懒加载状态
         self._all_card_widgets = []
-        self._hidden_widgets = {}
         self._cleanup_threshold = 200
+        
+        # 滚动节流定时器
+        self._lazy_load_timer = QTimer(self)
+        self._lazy_load_timer.setSingleShot(True)
+        self._lazy_load_timer.timeout.connect(self._apply_lazy_loading)
         
         # 实时导入显示状态
         self._pending_import_images = []
@@ -835,6 +839,11 @@ class GalleryInterface(QWidget):
         self.search_box = SearchLineEdit(self.top_bar)
         self.search_box.setPlaceholderText("搜索表情关键词...")
         self.search_box.setFixedWidth(240)
+        # 搜索防抖定时器
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self._execute_search)
+        
         self.search_box.textChanged.connect(self.set_search_keyword)
         
         self.top_bar_layout.addStretch() # 把搜索框推到右边
@@ -935,48 +944,27 @@ class GalleryInterface(QWidget):
         visible_top = scroll_y
         visible_bottom = scroll_y + viewport_height
         
-        self.grid_container.setUpdatesEnabled(False)
-        from PySide6.QtWidgets import QSpacerItem, QSizePolicy
-        from PySide6.QtCore import QSignalBlocker
-        
         columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
         current_size = self.config.get("thumbnail_size", 120)
         
         for index, widget in enumerate(self._all_card_widgets):
             row = index // columns
-            col = index % columns
             
             card_y = 8 + row * (current_size + 10)
             card_bottom = card_y + current_size
             
             is_far_above = card_bottom < visible_top - 500
             is_far_below = card_y > visible_bottom + 500
-            
             is_near = (card_bottom >= visible_top - 200) and (card_y <= visible_bottom + 200)
             
-            state_key = (row, col)
-            
             if is_far_above or is_far_below:
-                if state_key not in self._hidden_widgets:
-                    self.gallery_layout.removeWidget(widget)
-                    widget.hide()
-                    
-                    spacer = QSpacerItem(current_size, current_size, QSizePolicy.Fixed, QSizePolicy.Fixed)
-                    self.gallery_layout.addItem(spacer, row, col)
-                    
-                    self._hidden_widgets[state_key] = spacer
+                if getattr(widget, '_is_loaded', True):
+                    widget.clear_resources()
+                    widget._is_loaded = False
             elif is_near:
-                if state_key in self._hidden_widgets:
-                    spacer = self._hidden_widgets.pop(state_key)
-                    self.gallery_layout.removeItem(spacer)
-                    
-                    blocker = QSignalBlocker(widget)
-                    self.gallery_layout.addWidget(widget, row, col)
-                    widget.show()
-                    del blocker
-                    
-        self.grid_container.setUpdatesEnabled(True)
-        self.grid_container.update()
+                if not getattr(widget, '_is_loaded', True):
+                    widget.update_size(current_size)
+                    widget._is_loaded = True
 
     def _on_scroll(self, value):
         if not self._is_loading:
@@ -985,7 +973,8 @@ class GalleryInterface(QWidget):
             if scrollbar.maximum() - value < 100:
                 self._load_next_batch()
                 
-        self._apply_lazy_loading()
+        # 滚动节流：延迟 32ms 执行懒加载，合并高频滚动事件
+        self._lazy_load_timer.start(32)
         
         # 重置空闲定时器
         from fluent_ui.components.emoji_card import ThumbnailCache
@@ -1036,8 +1025,12 @@ class GalleryInterface(QWidget):
         ThumbnailCache().reset_idle_timer()
         
     def set_search_keyword(self, keyword):
-        """由顶栏调用，切换搜索词"""
+        """由顶栏调用，切换搜索词（带防抖）"""
         self.search_keyword = keyword
+        # 延迟 300ms 执行搜索，避免连续输入时卡顿
+        self._search_timer.start(300)
+        
+    def _execute_search(self):
         self.refresh_gallery()
         
         # 重置空闲定时器
@@ -1092,8 +1085,6 @@ class GalleryInterface(QWidget):
         while self.gallery_layout.count():
             self.gallery_layout.takeAt(0)
             
-        self._hidden_widgets.clear()
-        
         from PySide6.QtCore import QSignalBlocker
         
         for index, widget in enumerate(getattr(self, '_all_card_widgets', [])):
@@ -1166,7 +1157,6 @@ class GalleryInterface(QWidget):
         self.selected_paths.clear()
         
         self._all_card_widgets = []
-        self._hidden_widgets = {}
         
         self.grid_container.setUpdatesEnabled(True)
         self.grid_container.update()
@@ -1269,6 +1259,7 @@ class GalleryInterface(QWidget):
             
             if not hasattr(self, '_all_card_widgets'):
                 self._all_card_widgets = []
+            card._is_loaded = True
             self._all_card_widgets.append(card)
             
             blocker = QSignalBlocker(card)

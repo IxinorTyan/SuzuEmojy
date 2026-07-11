@@ -27,6 +27,17 @@ class StorageService:
             os.makedirs(self.images_dir)
             
         self._hashes_cache = self._load_hashes()
+        
+        # 内存缓存与脏标记
+        self._images_cache = []
+        self._images_dirty = True
+        
+        self._categories_cache = {}
+        self._image_to_categories_cache = {}
+        self._categories_dirty = True
+        
+        self._metadata_cache = {}
+        self._metadata_dirty = True
 
     def _load_hashes(self):
         if not os.path.exists(self.hashes_file):
@@ -104,8 +115,13 @@ class StorageService:
 
     def get_all_images(self):
         """扫描并返回所有保存的图片绝对路径列表（支持自定义排序）"""
+        if not self._images_dirty:
+            return self._images_cache
+            
         if not os.path.exists(self.images_dir):
-            return []
+            self._images_cache = []
+            self._images_dirty = False
+            return self._images_cache
             
         supported_formats = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
         actual_filenames = []
@@ -125,19 +141,26 @@ class StorageService:
                 # 兼容旧版本：如果里面是绝对路径，全部提取为纯文件名
                 saved_filenames = [self._to_filename(p) for p in saved_order]
                 
-                # 构建一个新的排序列表：
+                # 算法优化：使用 set 进行 O(1) 查找
+                actual_set = set(actual_filenames)
+                saved_set = set(saved_filenames)
+                
                 # 1. 过滤掉 JSON 中有但实际硬盘上已经不存在的文件名
-                valid_saved_filenames = [f for f in saved_filenames if f in actual_filenames]
+                valid_saved_filenames = [f for f in saved_filenames if f in actual_set]
                 
                 # 2. 找出实际硬盘上有，但 JSON 里没记录的新文件（这些排在最前面）
-                new_filenames = [f for f in actual_filenames if f not in valid_saved_filenames]
+                new_filenames = [f for f in actual_filenames if f not in saved_set]
                 
                 ordered_filenames = new_filenames + valid_saved_filenames
-                return [self._to_abspath(f) for f in ordered_filenames]
+                self._images_cache = [self._to_abspath(f) for f in ordered_filenames]
+                self._images_dirty = False
+                return self._images_cache
             except Exception as e:
                 print(f"读取排序配置失败: {e}")
                 
-        return [self._to_abspath(f) for f in actual_filenames]
+        self._images_cache = [self._to_abspath(f) for f in actual_filenames]
+        self._images_dirty = False
+        return self._images_cache
 
     def save_order(self, filepaths):
         """保存用户自定义的表情包排序顺序（只保存文件名）"""
@@ -145,6 +168,7 @@ class StorageService:
         try:
             with open(self.order_file, 'w', encoding='utf-8') as f:
                 json.dump(filenames, f, indent=4, ensure_ascii=False)
+            self._images_dirty = True
         except Exception as e:
             print(f"保存排序失败: {e}")
 
@@ -154,8 +178,15 @@ class StorageService:
     
     def get_all_categories(self):
         """获取所有分类及其包含的图片绝对路径列表"""
+        if not self._categories_dirty:
+            return self._categories_cache
+            
         if not os.path.exists(self.categories_file):
-            return {}
+            self._categories_cache = {}
+            self._image_to_categories_cache = {}
+            self._categories_dirty = False
+            return self._categories_cache
+            
         try:
             with open(self.categories_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -163,14 +194,30 @@ class StorageService:
                 # 数据迁移和清理：兼容旧版绝对路径，只向外暴露存在的绝对路径
                 all_real_images = set(self.get_all_images()) # get_all_images 现在返回规范的绝对路径
                 cleaned_data = {}
+                reverse_map = {}
+                
                 for category, paths in data.items():
                     # 把存着的文件名（或旧绝对路径）全部转为当前的绝对路径
                     abs_paths = [self._to_abspath(p) for p in paths]
-                    cleaned_data[category] = [p for p in abs_paths if p in all_real_images]
-                return cleaned_data
+                    valid_paths = [p for p in abs_paths if p in all_real_images]
+                    cleaned_data[category] = valid_paths
+                    
+                    # 构建反向映射缓存，用于 O(1) 查找图片所属分类
+                    for p in valid_paths:
+                        if p not in reverse_map:
+                            reverse_map[p] = []
+                        reverse_map[p].append(category)
+                        
+                self._categories_cache = cleaned_data
+                self._image_to_categories_cache = reverse_map
+                self._categories_dirty = False
+                return self._categories_cache
         except Exception as e:
             print(f"[ERROR] StorageService.get_all_categories: 读取分类失败 {e}")
-            return {}
+            self._categories_cache = {}
+            self._image_to_categories_cache = {}
+            self._categories_dirty = False
+            return self._categories_cache
 
     def save_categories(self, categories_data):
         """保存分类数据，内部将绝对路径全部转换为文件名以确保可移植性"""
@@ -182,6 +229,7 @@ class StorageService:
         try:
             with open(self.categories_file, 'w', encoding='utf-8') as f:
                 json.dump(portable_data, f, indent=4, ensure_ascii=False)
+            self._categories_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_categories: 保存分类失败 {e}")
 
@@ -251,18 +299,18 @@ class StorageService:
             return [p for p in all_ordered if p not in classified_paths]
             
         paths = categories.get(category_name, [])
+        # 算法优化：使用 set 进行 O(1) 查找
+        paths_set = set(paths)
         # 为了保证显示顺序跟 "全部" 中一致，我们基于所有图片的顺序来进行过滤
-        result = [p for p in all_ordered if p in paths]
+        result = [p for p in all_ordered if p in paths_set]
         return result
 
     def get_categories_by_image(self, filepath):
         """反向查询：获取指定图片所属的所有分类名称列表"""
-        categories = self.get_all_categories()
-        belong_to = []
-        for cat_name, paths in categories.items():
-            if filepath in paths:
-                belong_to.append(cat_name)
-        return belong_to
+        # 确保缓存已加载
+        self.get_all_categories()
+        # 算法优化：直接从反向映射缓存中 O(1) 获取
+        return self._image_to_categories_cache.get(filepath, [])
 
     # ==========================
     # 分类图标 (Category Icons) 相关逻辑
@@ -309,16 +357,26 @@ class StorageService:
     
     def get_all_metadata(self):
         """获取所有图片的关键词元数据，并映射回绝对路径"""
+        if not self._metadata_dirty:
+            return self._metadata_cache
+            
         if not os.path.exists(self.metadata_file):
-            return {}
+            self._metadata_cache = {}
+            self._metadata_dirty = False
+            return self._metadata_cache
+            
         try:
             with open(self.metadata_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 # 将存入的文件名转回绝对路径
-                return {self._to_abspath(k): v for k, v in data.items()}
+                self._metadata_cache = {self._to_abspath(k): v for k, v in data.items()}
+                self._metadata_dirty = False
+                return self._metadata_cache
         except Exception as e:
             print(f"[ERROR] StorageService.get_all_metadata: 读取元数据失败 {e}")
-            return {}
+            self._metadata_cache = {}
+            self._metadata_dirty = False
+            return self._metadata_cache
 
     def save_metadata(self, metadata):
         """保存关键词元数据，内部将绝对路径转换为文件名"""
@@ -326,6 +384,7 @@ class StorageService:
         try:
             with open(self.metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(portable_data, f, indent=4, ensure_ascii=False)
+            self._metadata_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_metadata: 保存元数据失败 {e}")
 
@@ -417,6 +476,7 @@ class StorageService:
                 self._save_hashes()
                 
             # 统一返回标准化后的绝对路径，防止后续 UI 交互中出现路径字符串匹配失败的 Bug
+            self._images_dirty = True
             return self._to_abspath(filename), False
             
         except Exception as e:
@@ -502,6 +562,7 @@ class StorageService:
                     del self._hashes_cache[hash_to_remove]
                     self._save_hashes()
                     
+                self._images_dirty = True
                 return True
         except Exception as e:
             print(f"删除图片失败: {e}")
