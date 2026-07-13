@@ -202,7 +202,7 @@ class CategoryListWidget(QListWidget):
                         if self.parent().storage.add_image_to_category(source_path, target_cat):
                             self.parent().gallery_view.show_success("添加成功", f"已快速添加到分类 '{target_cat}'")
                             # 如果当前在未分类视图，添加后需要刷新以移除该图片
-                            if self.parent().gallery_view.current_category == "未分类":
+                            if self.parent().gallery_view.filter_state.unclassified:
                                 self.parent().gallery_view.remove_card_by_path(source_path)
             event.accept()
         else:
@@ -535,7 +535,7 @@ class CategorySidebar(QWidget):
                     self.list_widget.setCurrentRow(0)
                 self.list_widget.blockSignals(False)
                 
-                self._create_new_category()
+                QTimer.singleShot(50, self._create_new_category)
                 return
 
             if self.gallery_view and hasattr(self.gallery_view, 'gallery_layout'):
@@ -1052,7 +1052,7 @@ class GalleryInterface(QWidget):
                 pixmap.fill(Qt.transparent)
                 return QIcon(pixmap)
         
-        action_no_tag = Action(get_check_icon(self.filter_state.no_tag), "无 Tag", parent=menu)
+        action_no_tag = Action(get_check_icon(self.filter_state.no_tag), "无关键词", parent=menu)
         action_no_tag.triggered.connect(lambda: self._update_filter('no_tag', not self.filter_state.no_tag))
         menu.addAction(action_no_tag)
         
@@ -1446,7 +1446,9 @@ class GalleryInterface(QWidget):
                 count += 1
         self.show_success("批量添加成功", f"已将 {count} 个表情添加到 '{cat_name}'")
         self.set_selection_mode(False)
-        self.on_images_changed()
+        if self.filter_state.unclassified:
+            for p in paths:
+                self.remove_card_by_path(p)
 
     def _execute_batch_remove(self, paths):
         if not paths: return
@@ -1795,7 +1797,8 @@ class GalleryInterface(QWidget):
     def _add_to_cat(self, image_path, cat_name):
         if self.storage.add_image_to_category(image_path, cat_name):
             self.show_success("添加成功", f"已添加到分类 '{cat_name}'")
-            self.on_images_changed()
+            if self.filter_state.unclassified:
+                self.remove_card_by_path(image_path)
 
     def _set_category_icon(self, image_path):
         self.storage.set_category_icon(self.current_category, image_path)
