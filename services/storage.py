@@ -290,13 +290,6 @@ class StorageService:
             return all_ordered
             
         categories = self.get_all_categories()
-        
-        if category_name == "未分类":
-            # 筛选出不属于任何分类的图片
-            classified_paths = set()
-            for paths in categories.values():
-                classified_paths.update(paths)
-            return [p for p in all_ordered if p not in classified_paths]
             
         paths = categories.get(category_name, [])
         # 算法优化：使用 set 进行 O(1) 查找
@@ -311,6 +304,16 @@ class StorageService:
         self.get_all_categories()
         # 算法优化：直接从反向映射缓存中 O(1) 获取
         return self._image_to_categories_cache.get(filepath, [])
+
+    def get_image_to_categories_map(self):
+        """获取图片到分类的反向映射字典"""
+        self.get_all_categories() # 确保缓存已加载
+        return self._image_to_categories_cache
+
+    def is_animated(self, filepath):
+        """判断图片是否为动图格式"""
+        ext = os.path.splitext(filepath)[1].lower()
+        return ext in ['.gif', '.webp']
 
     # ==========================
     # 分类图标 (Category Icons) 相关逻辑
@@ -355,6 +358,44 @@ class StorageService:
     # 关键词 (Metadata) 相关逻辑
     # ==========================
     
+    @staticmethod
+    def parse_tags(tags_str):
+        """将空格分隔的字符串解析为去重且保序的标签列表"""
+        if not tags_str: return []
+        tags = []
+        for t in tags_str.split(' '):
+            if t and t not in tags:
+                tags.append(t)
+        return tags
+
+    @staticmethod
+    def serialize_tags(tags_list):
+        """将标签列表序列化为空格分隔的字符串"""
+        return " ".join(tags_list)
+
+    @staticmethod
+    def merge_tags(existing_tags_str, new_tags_str):
+        """合并标签：追加新标签并去重，保持原有顺序"""
+        existing_list = StorageService.parse_tags(existing_tags_str)
+        new_list = StorageService.parse_tags(new_tags_str)
+        
+        for tag in new_list:
+            if tag not in existing_list:
+                existing_list.append(tag)
+                
+        return StorageService.serialize_tags(existing_list)
+
+    @staticmethod
+    def remove_tags(existing_tags_str, remove_tags_str):
+        """删除标签：从现有标签中移除指定的标签，不存在则忽略"""
+        existing_list = StorageService.parse_tags(existing_tags_str)
+        remove_list = StorageService.parse_tags(remove_tags_str)
+        
+        # 列表推导式过滤掉需要删除的标签，天然支持"不存在即忽略"且保序
+        final_list = [tag for tag in existing_list if tag not in remove_list]
+        
+        return StorageService.serialize_tags(final_list)
+
     def get_all_metadata(self):
         """获取所有图片的关键词元数据，并映射回绝对路径"""
         if not self._metadata_dirty:

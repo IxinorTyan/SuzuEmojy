@@ -13,18 +13,28 @@ def main():
     if not shared_memory.create(1):
         sys.exit(0)
     
+    from services.config import ConfigService
+    config_service = ConfigService()
+    
+    if config_service.get("use_system_font", False):
+        try:
+            system_font = app.font().family()
+            if system_font:
+                from qfluentwidgets import setFontFamilies
+                setFontFamilies([system_font])
+        except Exception as e:
+            print(f"Failed to set system font: {e}")
+            
     from PySide6.QtWidgets import QSystemTrayIcon
     from PySide6.QtGui import QIcon
     from qfluentwidgets import setTheme, Theme, RoundMenu, Action
     from services.storage import StorageService
     from services.clipboard import ClipboardService
-    from services.config import ConfigService
     
     app.setQuitOnLastWindowClosed(False)
     
     from fluent_ui.main_window import MainWindow
     
-    config_service = ConfigService()
     storage_service = StorageService()
     clipboard_service = ClipboardService()
     

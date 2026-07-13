@@ -275,6 +275,18 @@ class MainWindow(FramelessWindow):
         elif changed_key in ["sidebar_icon_size", "show_sidebar_tooltip"]:
             self.gallery_interface.force_refresh_sidebar_icons()
             
+        elif changed_key == "use_system_font":
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.warning(
+                title="需要重启",
+                content="字体设置已更改，请重启软件以应用更改。",
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=5000,
+                parent=self
+            )
+            
         else:
             self.apply_window_flags()
             self.bind_global_hotkey()

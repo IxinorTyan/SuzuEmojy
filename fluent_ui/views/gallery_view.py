@@ -258,9 +258,10 @@ class CategorySidebar(QWidget):
         self.list_widget.currentItemChanged.connect(self._on_item_changed)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         
-        self.is_grid_mode = False
+        self.is_grid_mode = self.config.get("sidebar_is_grid_mode", False) if self.config else False
         
         self.update_theme()
+        self._apply_grid_mode(self.is_grid_mode, is_init=True)
         self.refresh_list()
 
     def _on_item_double_clicked(self, item):
@@ -270,8 +271,14 @@ class CategorySidebar(QWidget):
 
     def toggle_grid_mode(self):
         self.is_grid_mode = not self.is_grid_mode
-        
-        if self.is_grid_mode:
+        if self.config:
+            self.config.set("sidebar_is_grid_mode", self.is_grid_mode)
+        self._apply_grid_mode(self.is_grid_mode, is_init=False)
+        self.refresh_list(self.list_widget.currentItem().data(Qt.UserRole) if self.list_widget.currentItem() else "全部表情")
+
+    def _apply_grid_mode(self, is_grid, is_init=False):
+        """应用网格或列表模式的 UI 设置"""
+        if is_grid:
             # 切换到网格模式
             self.setMaximumWidth(16777215) # 解除最大宽度限制，允许自由拖拽
             self.list_widget.setViewMode(QListWidget.ListMode)
@@ -282,15 +289,14 @@ class CategorySidebar(QWidget):
             self.list_widget.setSpacing(10)
             self.list_widget.setWordWrap(True)
             
-            # 强制展开左侧边栏
-            if self.gallery_view and hasattr(self.gallery_view, 'splitter'):
+            # 恢复网格模式保存的宽度 (仅在非初始化时执行，初始化由 GalleryInterface._init_ui 统一处理)
+            if not is_init and self.gallery_view and hasattr(self.gallery_view, 'splitter'):
                 splitter = self.gallery_view.splitter
                 total_width = sum(splitter.sizes())
-                # 展开到大约 300px 宽度
-                target_width = min(300, total_width // 2)
+                target_width = self.config.get("sidebar_width_grid", 300) if self.config else 300
+                target_width = min(target_width, total_width - 100) # 保证右侧至少留 100px
                 splitter.setSizes([target_width, total_width - target_width])
                 if hasattr(self.gallery_view, '_trigger_responsive_layout'):
-                    # 延迟触发重排，等待 splitter 尺寸真正更新完毕
                     QTimer.singleShot(10, lambda: self.gallery_view._trigger_responsive_layout(force=True))
         else:
             # 切换回列表模式
@@ -303,16 +309,15 @@ class CategorySidebar(QWidget):
             self.list_widget.setSpacing(0)
             self.list_widget.setWordWrap(False)
             
-            # 恢复窄边栏
-            if self.gallery_view and hasattr(self.gallery_view, 'splitter'):
+            # 恢复列表模式保存的宽度 (仅在非初始化时执行)
+            if not is_init and self.gallery_view and hasattr(self.gallery_view, 'splitter'):
                 splitter = self.gallery_view.splitter
                 total_width = sum(splitter.sizes())
-                splitter.setSizes([140, total_width - 140])
+                target_width = self.config.get("sidebar_width_list", 140) if self.config else 140
+                target_width = min(target_width, 400) # 列表模式最大 400px
+                splitter.setSizes([target_width, total_width - target_width])
                 if hasattr(self.gallery_view, '_trigger_responsive_layout'):
-                    # 延迟触发重排，等待 splitter 尺寸真正更新完毕
                     QTimer.singleShot(10, lambda: self.gallery_view._trigger_responsive_layout(force=True))
-                
-        self.refresh_list(self.list_widget.currentItem().data(Qt.UserRole) if self.list_widget.currentItem() else "全部表情")
 
     def update_theme(self):
         from qfluentwidgets import isDarkTheme
@@ -463,12 +468,6 @@ class CategorySidebar(QWidget):
                 item.setTextAlignment(Qt.AlignCenter)
             self.list_widget.addItem(item)
             
-        item_unclassified = QListWidgetItem(FIF.HELP.icon(), "未分类")
-        item_unclassified.setData(Qt.UserRole, "未分类")
-        if getattr(self, 'is_grid_mode', False):
-            item_unclassified.setTextAlignment(Qt.AlignCenter)
-        self.list_widget.addItem(item_unclassified)
-        
         item_add = QListWidgetItem(FIF.ADD.icon(), "新建分类")
         item_add.setData(Qt.UserRole, "新建分类")
         if getattr(self, 'is_grid_mode', False):
@@ -718,6 +717,17 @@ class CategorySidebar(QWidget):
                 msg = "分类已删除(哭哭)" if is_suzu else "分类已删除"
                 self.gallery_view.show_success(msg)
 
+class FilterState:
+    """统一的图片过滤状态"""
+    def __init__(self):
+        self.no_tag = False
+        self.unclassified = False
+        self.is_gif = False
+        self.is_static = False
+        
+    def is_active(self):
+        return self.no_tag or self.unclassified or self.is_gif or self.is_static
+
 class GalleryInterface(QWidget):
     """
     重构后的 Gallery 视图，包含左侧分类栏和右侧表情网格
@@ -732,6 +742,7 @@ class GalleryInterface(QWidget):
         # 内部状态
         self.current_category = "全部表情"
         self.search_keyword = ""
+        self.filter_state = FilterState()
         self.last_active_window = None
         self.is_selection_mode = False
         
@@ -846,8 +857,14 @@ class GalleryInterface(QWidget):
         
         self.search_box.textChanged.connect(self.set_search_keyword)
         
+        # 筛选按钮
+        self.btn_filter = TransparentToolButton(FIF.FILTER, self.top_bar)
+        self.btn_filter.setToolTip("筛选")
+        self.btn_filter.clicked.connect(self._show_filter_menu)
+        
         self.top_bar_layout.addStretch() # 把搜索框推到右边
         self.top_bar_layout.addWidget(self.btn_multi_select)
+        self.top_bar_layout.addWidget(self.btn_filter)
         self.top_bar_layout.addWidget(self.search_box)
         
         self.right_layout.addWidget(self.top_bar)
@@ -881,26 +898,14 @@ class GalleryInterface(QWidget):
         
         self.selected_count_label = BodyLabel("已选择 0 项")
         self.btn_select_all = PushButton("全选")
-        self.btn_batch_add = PushButton(FIF.FOLDER_ADD.icon(), "移动到分类...")
-        self.btn_batch_remove = PushButton(FIF.REMOVE.icon(), "移出分类")
-        self.btn_batch_export = PushButton(FIF.DOWNLOAD.icon(), "导出")
-        self.btn_batch_delete = PushButton(FIF.DELETE.icon(), "批量删除")
         self.btn_exit_selection = PushButton("退出多选")
         
         self.command_bar_layout.addWidget(self.selected_count_label)
         self.command_bar_layout.addStretch()
         self.command_bar_layout.addWidget(self.btn_select_all)
-        self.command_bar_layout.addWidget(self.btn_batch_add)
-        self.command_bar_layout.addWidget(self.btn_batch_remove)
-        self.command_bar_layout.addWidget(self.btn_batch_export)
-        self.command_bar_layout.addWidget(self.btn_batch_delete)
         self.command_bar_layout.addWidget(self.btn_exit_selection)
         
         self.btn_select_all.clicked.connect(self.select_all_cards)
-        self.btn_batch_add.clicked.connect(self.batch_add_to_category)
-        self.btn_batch_remove.clicked.connect(self.batch_remove_from_category)
-        self.btn_batch_export.clicked.connect(self.batch_export)
-        self.btn_batch_delete.clicked.connect(self.batch_delete)
         self.btn_exit_selection.clicked.connect(lambda: self.set_selection_mode(False))
         
         self.right_layout.addWidget(self.command_bar)
@@ -908,15 +913,21 @@ class GalleryInterface(QWidget):
         
         self.splitter.addWidget(self.right_container)
         
-        # 恢复上次保存的比例
-        saved_sizes = self.config.get("splitter_sizes", [200, 800])
-        self.splitter.setSizes(saved_sizes)
+        # 恢复上次保存的侧边栏宽度
+        is_grid = getattr(self.sidebar, 'is_grid_mode', False)
+        if is_grid:
+            target_width = self.config.get("sidebar_width_grid", 300)
+        else:
+            target_width = self.config.get("sidebar_width_list", 140)
+            
+        # 初始设置一个合理的总宽度比例，后续 resizeEvent 会自动调整右侧
+        self.splitter.setSizes([target_width, 800])
         self.splitter.setCollapsible(0, False)
         
-        # 初始化检查是否应直接进入图标模式
-        if saved_sizes[0] < 100:
+        # 初始化检查是否应直接进入图标模式 (仅在列表模式下生效)
+        if not is_grid and target_width < 100:
             self.sidebar.set_icon_only_mode(True)
-            self.splitter.setSizes([60, sum(saved_sizes) - 60])
+            self.splitter.setSizes([60, 800])
             
         self.main_layout.addWidget(self.splitter, stretch=1)
         
@@ -981,22 +992,36 @@ class GalleryInterface(QWidget):
         ThumbnailCache().reset_idle_timer()
 
     def _on_splitter_moved(self, pos, index):
-        self.config.set("splitter_sizes", self.splitter.sizes())
+        sizes = self.splitter.sizes()
+        if sizes:
+            sidebar_width = sizes[0]
+            if getattr(self.sidebar, 'is_grid_mode', False):
+                self.config.set("sidebar_width_grid", sidebar_width)
+            else:
+                self.config.set("sidebar_width_list", sidebar_width)
         self._trigger_responsive_layout()
 
     def eventFilter(self, obj, event):
         if hasattr(self, 'splitter') and obj == self.splitter.handle(1):
             if event.type() == event.Type.MouseButtonRelease:
                 sizes = self.splitter.sizes()
+                if not sizes: return False
+                
+                sidebar_width = sizes[0]
                 # 如果左侧边栏处于网格模式，不执行吸附逻辑，允许自由调整宽度
                 if not getattr(self.sidebar, 'is_grid_mode', False):
-                    if sizes[0] < 100:
-                        diff = sizes[0] - 60
+                    if sidebar_width < 100:
+                        diff = sidebar_width - 60
                         self.splitter.setSizes([60, sizes[1] + diff])
-                    elif sizes[0] >= 100 and sizes[0] < 140:
-                        diff = sizes[0] - 140
+                        sidebar_width = 60
+                    elif sidebar_width >= 100 and sidebar_width < 140:
+                        diff = sidebar_width - 140
                         self.splitter.setSizes([140, sizes[1] + diff])
-                self.config.set("splitter_sizes", self.splitter.sizes())
+                        sidebar_width = 140
+                        
+                    self.config.set("sidebar_width_list", sidebar_width)
+                else:
+                    self.config.set("sidebar_width_grid", sidebar_width)
 
         if obj == self.scroll_area.viewport() and event.type() == event.Type.Wheel:
             if QApplication.keyboardModifiers() & Qt.ControlModifier:
@@ -1013,16 +1038,64 @@ class GalleryInterface(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
+    def _show_filter_menu(self):
+        menu = RoundMenu(parent=self)
+        
+        # 辅助函数：根据选中状态返回对应的图标（选中显示对号，未选中显示透明占位图标以保证文字对齐）
+        def get_check_icon(is_checked):
+            from PySide6.QtGui import QPixmap
+            if is_checked:
+                return FIF.ACCEPT.icon()
+            else:
+                # 创建一个透明的 QPixmap 作为占位符，尺寸与标准图标一致
+                pixmap = QPixmap(16, 16)
+                pixmap.fill(Qt.transparent)
+                return QIcon(pixmap)
+        
+        action_no_tag = Action(get_check_icon(self.filter_state.no_tag), "无 Tag", parent=menu)
+        action_no_tag.triggered.connect(lambda: self._update_filter('no_tag', not self.filter_state.no_tag))
+        menu.addAction(action_no_tag)
+        
+        menu.addSeparator()
+        
+        action_unclassified = Action(get_check_icon(self.filter_state.unclassified), "未分类", parent=menu)
+        action_unclassified.triggered.connect(lambda: self._update_filter('unclassified', not self.filter_state.unclassified))
+        menu.addAction(action_unclassified)
+        
+        menu.addSeparator()
+        
+        action_gif = Action(get_check_icon(self.filter_state.is_gif), "动图", parent=menu)
+        action_gif.triggered.connect(lambda: self._update_filter('is_gif', not self.filter_state.is_gif))
+        menu.addAction(action_gif)
+        
+        action_static = Action(get_check_icon(self.filter_state.is_static), "静态图片", parent=menu)
+        action_static.triggered.connect(lambda: self._update_filter('is_static', not self.filter_state.is_static))
+        menu.addAction(action_static)
+        
+        if self.filter_state.is_active():
+            menu.addSeparator()
+            action_clear = Action("清除筛选", parent=menu)
+            action_clear.triggered.connect(self._clear_filter)
+            menu.addAction(action_clear)
+            
+        from PySide6.QtCore import QPoint
+        pos = self.btn_filter.mapToGlobal(QPoint(0, self.btn_filter.height()))
+        menu.exec(pos)
+
+    def _update_filter(self, key, value):
+        setattr(self.filter_state, key, value)
+        self.on_images_changed()
+
+    def _clear_filter(self):
+        self.filter_state = FilterState()
+        self.on_images_changed()
+
     def set_category(self, category_name):
         """由左侧边栏调用，切换显示的数据"""
         if self.is_selection_mode:
             self.set_selection_mode(False)
         self.current_category = category_name
-        self.refresh_gallery()
-        
-        # 重置空闲定时器
-        from fluent_ui.components.emoji_card import ThumbnailCache
-        ThumbnailCache().reset_idle_timer()
+        self.on_images_changed()
         
     def set_search_keyword(self, keyword):
         """由顶栏调用，切换搜索词（带防抖）"""
@@ -1031,11 +1104,7 @@ class GalleryInterface(QWidget):
         self._search_timer.start(300)
         
     def _execute_search(self):
-        self.refresh_gallery()
-        
-        # 重置空闲定时器
-        from fluent_ui.components.emoji_card import ThumbnailCache
-        ThumbnailCache().reset_idle_timer()
+        self.on_images_changed()
 
     def show_success(self, title, content=""):
         InfoBar.success(title, content, duration=2000, position=InfoBarPosition.TOP_RIGHT, parent=self)
@@ -1151,10 +1220,8 @@ class GalleryInterface(QWidget):
             except RuntimeError:
                 pass
                 
-        self._all_current_images = []
         self._loaded_count = 0
         self._pending_import_images.clear()
-        self.selected_paths.clear()
         
         self._all_card_widgets = []
         
@@ -1165,20 +1232,67 @@ class GalleryInterface(QWidget):
         import gc
         gc.collect()
 
-    def refresh_gallery(self):
-        """重置并开始分帧加载图片"""
-        self._is_loading = True
-        
-        self.clear_gallery()
+    def _matches_category(self, image_path, category_name, categories_map):
+        if category_name == "全部表情": return True
+        return category_name in categories_map.get(image_path, [])
 
-        self._all_current_images = self.storage.search_images(self.search_keyword, self.current_category)
+    def _matches_keyword(self, image_path, keyword, metadata):
+        if not keyword: return True
+        img_kw = metadata.get(image_path, "").lower()
+        return keyword in img_kw or keyword in os.path.basename(image_path).lower()
+
+    def _matches_filter(self, image_path, filter_state, metadata, categories_map):
+        if not filter_state.is_active(): return True
         
-        # 切换分类时清空多选状态
-        if not self.is_selection_mode:
-            self.selected_paths.clear()
-            
+        if filter_state.no_tag and metadata.get(image_path, "").strip(): return False
+        if filter_state.unclassified and categories_map.get(image_path): return False
+        
+        is_anim = self.storage.is_animated(image_path)
+        if filter_state.is_gif and not filter_state.is_static and not is_anim: return False
+        if filter_state.is_static and not filter_state.is_gif and is_anim: return False
+        
+        return True
+
+    def _filter_images(self):
+        """统一的图片过滤管道"""
+        all_images = self.storage.get_all_images()
+        metadata = self.storage.get_all_metadata()
+        categories_map = self.storage.get_image_to_categories_map()
+        
+        keyword = self.search_keyword.strip().lower()
+        
+        return [
+            img for img in all_images
+            if self._matches_category(img, self.current_category, categories_map)
+            and self._matches_keyword(img, keyword, metadata)
+            and self._matches_filter(img, self.filter_state, metadata, categories_map)
+        ]
+
+    def on_images_changed(self):
+        """统一的图片变更刷新入口"""
+        # 1. 重新执行统一过滤管道
+        self._all_current_images = self._filter_images()
+        
+        # 2. 清理多选状态中已经被过滤掉的图片
+        if self.is_selection_mode:
+            valid_selected = {p for p in self.selected_paths if p in self._all_current_images}
+            if len(valid_selected) != len(self.selected_paths):
+                self.selected_paths = valid_selected
+                self.update_selection_count()
+                
+        # 3. 触发 UI 重绘 (复用现有的懒加载重排逻辑)
+        self._is_loading = True
+        self.clear_gallery()
         self._is_loading = False
         self._load_next_batch()
+        
+        # 重置空闲定时器
+        from fluent_ui.components.emoji_card import ThumbnailCache
+        ThumbnailCache().reset_idle_timer()
+
+    def refresh_gallery(self):
+        """兼容旧接口，直接调用统一刷新入口"""
+        self.on_images_changed()
 
     def _load_next_batch(self):
         if self._is_loading or self._loaded_count >= len(self._all_current_images):
@@ -1277,11 +1391,7 @@ class GalleryInterface(QWidget):
         self.command_bar.setVisible(enabled)
         self.btn_multi_select.setVisible(not enabled)
         
-        # 动态控制“移出分类”按钮的显示
-        if enabled:
-            can_remove = self.current_category not in ("全部表情", "未分类")
-            self.btn_batch_remove.setVisible(can_remove)
-        else:
+        if not enabled:
             self.selected_paths.clear()
         
         for widget in getattr(self, '_all_card_widgets', []):
@@ -1320,54 +1430,29 @@ class GalleryInterface(QWidget):
                 
         self.update_selection_count()
 
-    def batch_delete(self):
-        paths = self.get_selected_paths()
+    def _execute_batch_delete(self, paths):
         if not paths: return
         from qfluentwidgets import MessageBox
         dialog = MessageBox("批量删除确认", f"确定要彻底删除选中的 {len(paths)} 个表情包吗？", self.window())
         if dialog.exec():
             for p in paths:
                 self.storage.delete_image(p)
-            self.refresh_gallery()
+            self.on_images_changed()
             self.show_success("批量删除成功")
             self.set_selection_mode(False)
 
-    def batch_add_to_category(self):
-        paths = self.get_selected_paths()
-        if not paths: return
-        
-        menu = RoundMenu(parent=self)
-        categories = self.storage.get_all_categories()
-        
-        has_valid_cat = False
-        for cat_name in categories.keys():
-            if cat_name in ("全部表情", "未分类", "新建分类"): continue
-            has_valid_cat = True
-            action = Action(cat_name, parent=menu)
-            action.triggered.connect(lambda checked=False, c=cat_name: self._execute_batch_add(paths, c))
-            menu.addAction(action)
-            
-        if not has_valid_cat:
-            menu.addAction(Action("(无可用分类)", parent=menu))
-            
-        from PySide6.QtCore import QPoint
-        pos = self.btn_batch_add.mapToGlobal(QPoint(0, -menu.sizeHint().height() or -150))
-        menu.exec(pos)
-
     def _execute_batch_add(self, paths, cat_name):
+        if not paths: return
         count = 0
         for p in paths:
             if self.storage.add_image_to_category(p, cat_name):
                 count += 1
         self.show_success("批量添加成功", f"已将 {count} 个表情添加到 '{cat_name}'")
         self.set_selection_mode(False)
-        if self.current_category == "未分类":
-            self.refresh_gallery()
+        self.on_images_changed()
 
-    def batch_remove_from_category(self):
-        paths = self.get_selected_paths()
+    def _execute_batch_remove(self, paths):
         if not paths: return
-        
         count = 0
         for p in paths:
             if self.storage.remove_image_from_category(p, self.current_category):
@@ -1375,10 +1460,9 @@ class GalleryInterface(QWidget):
                 
         self.show_success("批量移出成功", f"已将 {count} 个表情从 '{self.current_category}' 移出")
         self.set_selection_mode(False)
-        self.refresh_gallery()
+        self.on_images_changed()
 
-    def batch_export(self):
-        paths = self.get_selected_paths()
+    def _execute_batch_export(self, paths):
         if not paths: return
         
         # 去重，防止在全部表情视图下选中了重复的路径
@@ -1598,6 +1682,14 @@ class GalleryInterface(QWidget):
                 self.show_success("已删除")
 
     def show_context_menu(self, widget, position):
+        if self.is_selection_mode and widget.is_selected:
+            menu = self._build_batch_context_menu(self.get_selected_paths())
+        else:
+            menu = self._build_single_context_menu(widget)
+            
+        menu.exec(widget.mapToGlobal(position))
+
+    def _build_single_context_menu(self, widget):
         image_path = widget.image_path
         menu = RoundMenu(parent=self)
         
@@ -1609,9 +1701,10 @@ class GalleryInterface(QWidget):
             add_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
         else:
             for cat_name in categories.keys():
-                action = Action(cat_name, parent=menu)
-                action.triggered.connect(lambda checked=False, p=image_path, c=cat_name: self._add_to_cat(p, c))
-                add_to_cat_menu.addAction(action)
+                if cat_name not in ("全部表情", "未分类", "新建分类"):
+                    action = Action(cat_name, parent=menu)
+                    action.triggered.connect(lambda checked=False, p=image_path, c=cat_name: self._add_to_cat(p, c))
+                    add_to_cat_menu.addAction(action)
                     
         if self.current_category != "全部表情":
             menu.addSeparator()
@@ -1642,7 +1735,57 @@ class GalleryInterface(QWidget):
         delete_action.triggered.connect(lambda: QTimer.singleShot(50, lambda: self.on_delete_requested(widget, image_path)))
         menu.addAction(delete_action)
         
-        menu.exec(widget.mapToGlobal(position))
+        return menu
+
+    def _build_batch_context_menu(self, paths):
+        menu = RoundMenu(parent=self)
+        
+        add_to_cat_menu = RoundMenu(title="移动到分类...", parent=menu)
+        categories = self.storage.get_all_categories()
+        menu.addMenu(add_to_cat_menu)
+        
+        has_valid_cat = False
+        for cat_name in categories.keys():
+            if cat_name not in ("全部表情", "未分类", "新建分类"):
+                has_valid_cat = True
+                action = Action(cat_name, parent=menu)
+                action.triggered.connect(lambda checked=False, p=paths, c=cat_name: self._execute_batch_add(p, c))
+                add_to_cat_menu.addAction(action)
+                
+        if not has_valid_cat:
+            add_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
+            
+        if self.current_category not in ("全部表情", "未分类"):
+            remove_action = Action(f"从分类 '{self.current_category}' 移出", parent=menu)
+            remove_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_remove(p))
+            menu.addAction(remove_action)
+            
+        menu.addSeparator()
+        
+        tags_menu = RoundMenu(title="标签", parent=menu)
+        menu.addMenu(tags_menu)
+        
+        add_tags_action = Action("添加标签...", parent=tags_menu)
+        add_tags_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_add_tags(p))
+        tags_menu.addAction(add_tags_action)
+        
+        remove_tags_action = Action("删除标签...", parent=tags_menu)
+        remove_tags_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_remove_tags(p))
+        tags_menu.addAction(remove_tags_action)
+        
+        menu.addSeparator()
+        
+        export_action = Action("导出已选项...", parent=menu)
+        export_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_export(p))
+        menu.addAction(export_action)
+        
+        menu.addSeparator()
+        
+        delete_action = Action(f"彻底删除已选的 {len(paths)} 项", parent=menu)
+        delete_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_delete(p))
+        menu.addAction(delete_action)
+        
+        return menu
 
     def _enter_batch_selection_from_menu(self, widget):
         self.set_selection_mode(True)
@@ -1651,8 +1794,7 @@ class GalleryInterface(QWidget):
     def _add_to_cat(self, image_path, cat_name):
         if self.storage.add_image_to_category(image_path, cat_name):
             self.show_success("添加成功", f"已添加到分类 '{cat_name}'")
-            if self.current_category == "未分类":
-                self.remove_card_by_path(image_path)
+            self.on_images_changed()
 
     def _set_category_icon(self, image_path):
         self.storage.set_category_icon(self.current_category, image_path)
@@ -1661,7 +1803,7 @@ class GalleryInterface(QWidget):
 
     def _remove_from_cat(self, image_path):
         if self.storage.remove_image_from_category(image_path, self.current_category):
-            self.remove_card_by_path(image_path)
+            self.on_images_changed()
             self.show_success("移除成功")
 
     def _delete_current_category(self):
@@ -1680,9 +1822,52 @@ class GalleryInterface(QWidget):
             QLineEdit.Normal, current_kw
         )
         if ok:
-            text = text.strip()
-            self.storage.set_image_keywords(image_path, text)
+            # 单项编辑依然保持覆盖逻辑，但使用统一的序列化方法保证格式规范
+            tags_list = self.storage.parse_tags(text)
+            final_str = self.storage.serialize_tags(tags_list)
+            self.storage.set_image_keywords(image_path, final_str)
+            self.on_images_changed()
             self.show_success("关键词已保存")
+
+    def _execute_batch_add_tags(self, paths):
+        if not paths: return
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+        text, ok = QInputDialog.getText(
+            self.window(), "批量添加标签", "输入要追加的标签 (多个词用空格隔开):", 
+            QLineEdit.Normal, ""
+        )
+        if ok and text.strip():
+            new_tags_str = text.strip()
+            count = 0
+            for p in paths:
+                existing_tags = self.storage.get_image_keywords(p)
+                merged_tags = self.storage.merge_tags(existing_tags, new_tags_str)
+                if merged_tags != existing_tags:
+                    self.storage.set_image_keywords(p, merged_tags)
+                    count += 1
+            self.on_images_changed()
+            self.show_success("批量添加标签成功", f"已为 {count} 个表情追加了标签")
+            self.set_selection_mode(False)
+
+    def _execute_batch_remove_tags(self, paths):
+        if not paths: return
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+        text, ok = QInputDialog.getText(
+            self.window(), "批量删除标签", "输入要删除的标签 (多个词用空格隔开):", 
+            QLineEdit.Normal, ""
+        )
+        if ok and text.strip():
+            remove_tags_str = text.strip()
+            count = 0
+            for p in paths:
+                existing_tags = self.storage.get_image_keywords(p)
+                final_tags = self.storage.remove_tags(existing_tags, remove_tags_str)
+                if final_tags != existing_tags:
+                    self.storage.set_image_keywords(p, final_tags)
+                    count += 1
+            self.on_images_changed()
+            self.show_success("批量删除标签成功", f"已从 {count} 个表情中移除了标签")
+            self.set_selection_mode(False)
 
     def _start_background_import(self, filepaths, delete_after=False):
         if self.import_thread and self.import_thread.isRunning():
@@ -1716,7 +1901,7 @@ class GalleryInterface(QWidget):
             self._import_info_bar.close()
             self._import_info_bar = None
             
-        self.refresh_gallery()
+        self.on_images_changed()
             
         if saved_count > 0 or skipped_count > 0:
             msg = []
@@ -1734,7 +1919,7 @@ class GalleryInterface(QWidget):
             if saved_path:
                 if self.current_category not in ("全部表情", "未分类"):
                     self.storage.add_image_to_category(saved_path, self.current_category)
-                self.refresh_gallery()
+                self.on_images_changed()
                 if is_duplicate:
                     self.show_success("导入完成", "该图片已存在，已跳过保存")
                 else:

@@ -147,6 +147,19 @@ class SettingInterface(ScrollArea):
             parent=self.themeGroup
         )
         
+        from qfluentwidgets import BoolValidator, ConfigItem
+        self.useSystemFontConfigItem = ConfigItem(
+            "Theme", "UseSystemFont", False,
+            BoolValidator()
+        )
+        self.useSystemFontConfigItem.value = self.config.get("use_system_font", False)
+        
+        self.useSystemFontCard = SwitchSettingCard(
+            FIF.FONT, "使用系统默认字体", "关闭以使用组件库默认字体。开启后将跟随系统字体，但可能出现排版错位、文字被裁剪等显示问题。更改后需重启软件生效。",
+            configItem=self.useSystemFontConfigItem, parent=self.themeGroup
+        )
+        self.useSystemFontCard.setChecked(self.config.get("use_system_font", False))
+        
         self.advancedGroup = SettingCardGroup("高级设置", self.scrollWidget)
         
         from qfluentwidgets import RangeConfigItem, RangeValidator, RangeSettingCard
@@ -229,6 +242,7 @@ class SettingInterface(ScrollArea):
 
         self.windowGroup.addSettingCard(self.alwaysTopCard)
         self.themeGroup.addSettingCard(self.themeCard)
+        self.themeGroup.addSettingCard(self.useSystemFontCard)
         self.advancedGroup.addSettingCard(self.previewDelayCard)
         self.advancedGroup.addSettingCard(self.previewSizeCard)
         self.advancedGroup.addSettingCard(self.sidebarIconSizeCard)
@@ -259,6 +273,7 @@ class SettingInterface(ScrollArea):
                 self._save_config("theme_mode", theme_keys[index], True)
                 
         self.themeCard.comboBox.currentIndexChanged.connect(on_theme_changed)
+        self.useSystemFontCard.checkedChanged.connect(lambda v: self._save_config("use_system_font", v, True))
 
     def _on_always_top_changed(self, is_checked):
         self._save_config("always_on_top", is_checked, True)

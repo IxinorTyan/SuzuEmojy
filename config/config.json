@@ -1,6 +1,9 @@
 {
     "QFluentWidgets": {
+        "FontFamilies": [
+            "Microsoft YaHei UI"
+        ],
         "ThemeColor": "#ff009faa",
-        "ThemeMode": "Dark"
+        "ThemeMode": "Light"
     }
 }
