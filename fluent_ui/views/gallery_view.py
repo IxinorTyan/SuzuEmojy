@@ -1115,10 +1115,7 @@ class GalleryInterface(QWidget):
     def track_active_window(self):
         hwnd = user32.GetForegroundWindow()
         if hwnd and hwnd != int(self.window().winId()):
-            class_name = get_window_class_name(hwnd)
-            # 过滤掉桌面和任务栏等系统窗口，防止误粘贴文件到桌面
-            if class_name not in ("Progman", "WorkerW", "Shell_TrayWnd"):
-                self.last_active_window = hwnd
+            self.last_active_window = hwnd
 
 
     def _apply_thumbnail_size(self, size):
@@ -1518,10 +1515,14 @@ class GalleryInterface(QWidget):
 
     def on_image_clicked(self, image_path):
         if self.clipboard.copy_image_to_clipboard(image_path):
-            # 再次检查 last_active_window 是否仍然有效且不是桌面
+            # 再次检查 last_active_window 是否仍然有效且不是桌面/资源管理器等系统关键窗口
             if self.last_active_window and user32.IsWindow(self.last_active_window):
                 class_name = get_window_class_name(self.last_active_window)
-                if class_name not in ("Progman", "WorkerW", "Shell_TrayWnd"):
+                system_classes = (
+                    "Progman", "WorkerW", "Shell_TrayWnd", 
+                    "CabinetWClass", "ExploreWClass", "Windows.UI.Core.CoreWindow"
+                )
+                if class_name not in system_classes:
                     user32.SetForegroundWindow(self.last_active_window)
                     QTimer.singleShot(100, self.simulate_paste)
                     return
