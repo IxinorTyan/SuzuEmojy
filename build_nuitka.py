@@ -21,6 +21,38 @@ def main():
         "--include-package=qfluentwidgets",
         "--include-package=services",
         "--include-package=fluent_ui",
+        "--include-package=certifi",
+        "--include-package-data=certifi",
+        "--include-package=imageio_ffmpeg",
+        "--include-package-data=imageio_ffmpeg",
+        "--include-data-dir=C:/Users/14915/miniconda3/Lib/site-packages/imageio_ffmpeg/binaries=imageio_ffmpeg/binaries",
+
+        # ---- 体积优化：排除 imageio 可选依赖拖进来的科学计算库 ----
+        # numpy 先保留，因为 imageio 的帧数据本身就是 ndarray，硬排除大概率运行时崩溃
+        "--nofollow-import-to=scipy",
+        "--nofollow-import-to=matplotlib",
+        "--nofollow-import-to=pandas",
+        "--nofollow-import-to=sympy",
+        "--nofollow-import-to=numpy.testing",
+        "--nofollow-import-to=numpy.f2py",
+        "--nofollow-import-to=numpy.distutils",
+        "--nofollow-import-to=numpy.array_api",
+
+        # ---- 体积优化：去掉用不到的测试/构建相关模块 ----
+        "--noinclude-pytest-mode=nofollow",
+        "--noinclude-setuptools-mode=nofollow",
+        "--noinclude-unittest-mode=nofollow",
+
+        # ---- 体积优化：PySide6 翻译文件通常几十MB用不上，先去掉 ----
+        "--noinclude-qt-translations",
+
+        # ---- 体积优化：去掉断言和docstring（编译期生效，收益不大但无副作用）----
+        "--python-flag=no_asserts",
+        "--python-flag=no_docstrings",
+
+        # ---- 编译报告：用来核对每个模块实际占用的体积，别再靠猜 ----
+        "--report=dist/compilation-report.xml",
+
         "main.py"
     ]
 

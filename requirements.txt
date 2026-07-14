@@ -4,3 +4,5 @@ PySideSix-Frameless-Window>=0.4.0
 keyboard>=0.13.5
 Pillow>=10.0.0
 pynput>=1.7.6
+certifi>=2023.7.22
+imageio-ffmpeg>=0.4.9

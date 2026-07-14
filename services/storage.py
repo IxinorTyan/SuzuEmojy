@@ -7,6 +7,8 @@ import io
 from PIL import Image
 
 class StorageService:
+    SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.webm')
+
     def __init__(self):
         import sys
         # 确保数据目录在项目根目录下的 data/images
@@ -16,6 +18,8 @@ class StorageService:
         else:
             self.base_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
         self.images_dir = os.path.join(self.base_dir, "data", "images")
+        self.inbox_dir = os.path.join(self.base_dir, "data", "inbox")
+        self.inbox_failed_dir = os.path.join(self.inbox_dir, "failed")
         self.order_file = os.path.join(self.base_dir, "data", "order.json")
         self.categories_file = os.path.join(self.base_dir, "data", "categories.json")
         self.metadata_file = os.path.join(self.base_dir, "data", "metadata.json")
@@ -25,6 +29,10 @@ class StorageService:
         # 如果目录不存在，自动创建
         if not os.path.exists(self.images_dir):
             os.makedirs(self.images_dir)
+        if not os.path.exists(self.inbox_dir):
+            os.makedirs(self.inbox_dir)
+        if not os.path.exists(self.inbox_failed_dir):
+            os.makedirs(self.inbox_failed_dir)
             
         self._hashes_cache = self._load_hashes()
         
@@ -123,10 +131,9 @@ class StorageService:
             self._images_dirty = False
             return self._images_cache
             
-        supported_formats = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
         actual_filenames = []
         for filename in os.listdir(self.images_dir):
-            if filename.lower().endswith(supported_formats):
+            if filename.lower().endswith(self.SUPPORTED_FORMATS):
                 actual_filenames.append(filename)
         
         # 默认按文件名倒序（最新的在前）
@@ -326,7 +333,7 @@ class StorageService:
             with open(self.icons_file, 'r', encoding='utf-8') as f:
                 icons = json.load(f)
                 for cat, val in icons.items():
-                    if any(val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+                    if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
                         icons[cat] = self._to_abspath(val)
                 return icons
         except Exception:
@@ -335,7 +342,7 @@ class StorageService:
     def save_category_icons(self, icons_data):
         portable_data = {}
         for cat, val in icons_data.items():
-            if any(val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+            if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
                 portable_data[cat] = self._to_filename(val)
             else:
                 portable_data[cat] = val
@@ -474,9 +481,10 @@ class StorageService:
             
             if is_animated:
                 # 动图不进行重编码，直接使用二进制哈希查重并保存原始数据
+                # 此时进来的动图只可能是 .gif 了（因为外层已经把 webm 和动态 webp 转成了 gif）
                 file_hash = self._calculate_bytes_hash(data_bytes)
                 final_bytes = data_bytes
-                final_ext = original_ext if original_ext in ['.gif', '.webp'] else '.gif'
+                final_ext = '.gif'
             else:
                 # 静态图：强制转换为 RGBA 模式
                 if img.mode != 'RGBA':
