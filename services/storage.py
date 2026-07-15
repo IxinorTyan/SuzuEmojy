@@ -494,7 +494,6 @@ class StorageService:
                 file_hash = self._calculate_pixel_hash(img)
                 
                 # 创建一个全新的纯净画布，剥离所有 ICC profile 和 EXIF 等元数据
-                # 这是防止 Qt 读取 PNG 失败 (Failed to read image) 的关键步骤
                 clean_img = Image.new('RGBA', img.size)
                 clean_img.paste(img, (0, 0))
                 
@@ -524,7 +523,6 @@ class StorageService:
                 self._hashes_cache[file_hash] = filename
                 self._save_hashes()
                 
-            # 统一返回标准化后的绝对路径，防止后续 UI 交互中出现路径字符串匹配失败的 Bug
             self._images_dirty = True
             return self._to_abspath(filename), False
             

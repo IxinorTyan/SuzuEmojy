@@ -1,0 +1,604 @@
+<?xml version='1.0' encoding='utf8'?>
+<nuitka-compilation-report nuitka_version="4.1.3" nuitka_commercial_version="not installed" mode="accelerated" completion="error exit message (1)" exit_message="Failed unexpectedly in Scons C backend compilation.">
+  <scons_environment c_compiler="zig" the_cc_name="zig.exe" the_compiler="~\AppData\Local\Nuitka\Nuitka\Cache\DOWNLO~1\pip\private-8c1f6f32\Lib\site-packages\ziglang\zig.exe" c_flags="-march=x86-64-v3" cc_flags="-march=x86-64-v3" />
+  <scons_error_reports>
+    <scons_error_report>
+      <command>"C:\\Users\\14915\\AppData\\Local\\Nuitka\\Nuitka\\Cache\\DOWNLO~1\\pip\\private-8c1f6f32\\Lib\\site-packages\\ziglang\\zig.exe" cc -o "__constants_data.o" -c -std=c11 -fvisibility=hidden -fwrapv -pipe -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-constant-logical-operand -Wno-unused-but-set-variable -O3 -march=x86-64-v3 -march=x86-64-v3 -D_NUITKA_EXE_MODE -D__ZIG__ -D__NUITKA_NO_ASSERT__ -D_NUITKA_CONSTANTS_FROM_CODE -D_NUITKA_FILE_REFERENCE_ORIGINAL_MODE -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\zlib -IC:\Users\14915\miniconda3\include -IC:\Users\14915\miniconda3\include\internal\mimalloc -I. -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\include -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\static_src -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\libbacktrace "__constants_data.c"</command>
+      <stderr>
+info: available CPUs for architecture 'x86_64':
+ alderlake
+ amdfam10
+ arrowlake
+ arrowlake_s
+ athlon
+ athlon64
+ athlon64_sse3
+ athlon_4
+ athlon_fx
+ athlon_mp
+ athlon_tbird
+ athlon_xp
+ atom
+ atom_sse4_2_movbe
+ barcelona
+ bdver1
+ bdver2
+ bdver3
+ bdver4
+ bonnell
+ broadwell
+ btver1
+ btver2
+ c3
+ c3_2
+ cannonlake
+ cascadelake
+ clearwaterforest
+ cooperlake
+ core2
+ corei7
+ diamondrapids
+ emeraldrapids
+ generic
+ geode
+ goldmont
+ goldmont_plus
+ gracemont
+ grandridge
+ graniterapids
+ graniterapids_d
+ haswell
+ i386
+ i486
+ i586
+ i686
+ i86
+ icelake_client
+ icelake_server
+ ivybridge
+ k6
+ k6_2
+ k6_3
+ k8
+ k8_sse3
+ knl
+ knm
+ lakemont
+ lunarlake
+ meteorlake
+ nehalem
+ nocona
+ opteron
+ opteron_sse3
+ pantherlake
+ penryn
+ pentium
+ pentium2
+ pentium3
+ pentium3m
+ pentium4
+ pentium_m
+ pentium_mmx
+ pentiumpro
+ prescott
+ raptorlake
+ rocketlake
+ sandybridge
+ sapphirerapids
+ sierraforest
+ silvermont
+ skx
+ skylake
+ skylake_avx512
+ slm
+ tigerlake
+ tremont
+ westmere
+ winchip2
+ winchip_c6
+ x86_64
+ x86_64_v2
+ x86_64_v3
+ x86_64_v4
+ yonah
+ znver1
+ znver2
+ znver3
+ znver4
+ znver5
+
+error: unknown CPU: 'x86'
+</stderr>
+    </scons_error_report>
+    <scons_error_report>
+      <command>"C:\\Users\\14915\\AppData\\Local\\Nuitka\\Nuitka\\Cache\\DOWNLO~1\\pip\\private-8c1f6f32\\Lib\\site-packages\\ziglang\\zig.exe" cc -o "__constants.o" -c -std=c11 -fvisibility=hidden -fwrapv -pipe -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-constant-logical-operand -Wno-unused-but-set-variable -O3 -march=x86-64-v3 -march=x86-64-v3 -D_NUITKA_EXE_MODE -D__ZIG__ -D__NUITKA_NO_ASSERT__ -D_NUITKA_CONSTANTS_FROM_CODE -D_NUITKA_FILE_REFERENCE_ORIGINAL_MODE -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\zlib -IC:\Users\14915\miniconda3\include -IC:\Users\14915\miniconda3\include\internal\mimalloc -I. -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\include -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\static_src -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\libbacktrace "__constants.c"</command>
+      <stderr>
+info: available CPUs for architecture 'x86_64':
+ alderlake
+ amdfam10
+ arrowlake
+ arrowlake_s
+ athlon
+ athlon64
+ athlon64_sse3
+ athlon_4
+ athlon_fx
+ athlon_mp
+ athlon_tbird
+ athlon_xp
+ atom
+ atom_sse4_2_movbe
+ barcelona
+ bdver1
+ bdver2
+ bdver3
+ bdver4
+ bonnell
+ broadwell
+ btver1
+ btver2
+ c3
+ c3_2
+ cannonlake
+ cascadelake
+ clearwaterforest
+ cooperlake
+ core2
+ corei7
+ diamondrapids
+ emeraldrapids
+ generic
+ geode
+ goldmont
+ goldmont_plus
+ gracemont
+ grandridge
+ graniterapids
+ graniterapids_d
+ haswell
+ i386
+ i486
+ i586
+ i686
+ i86
+ icelake_client
+ icelake_server
+ ivybridge
+ k6
+ k6_2
+ k6_3
+ k8
+ k8_sse3
+ knl
+ knm
+ lakemont
+ lunarlake
+ meteorlake
+ nehalem
+ nocona
+ opteron
+ opteron_sse3
+ pantherlake
+ penryn
+ pentium
+ pentium2
+ pentium3
+ pentium3m
+ pentium4
+ pentium_m
+ pentium_mmx
+ pentiumpro
+ prescott
+ raptorlake
+ rocketlake
+ sandybridge
+ sapphirerapids
+ sierraforest
+ silvermont
+ skx
+ skylake
+ skylake_avx512
+ slm
+ tigerlake
+ tremont
+ westmere
+ winchip2
+ winchip_c6
+ x86_64
+ x86_64_v2
+ x86_64_v3
+ x86_64_v4
+ yonah
+ znver1
+ znver2
+ znver3
+ znver4
+ znver5
+
+error: unknown CPU: 'x86'
+</stderr>
+    </scons_error_report>
+    <scons_error_report>
+      <command>"C:\\Users\\14915\\AppData\\Local\\Nuitka\\Nuitka\\Cache\\DOWNLO~1\\pip\\private-8c1f6f32\\Lib\\site-packages\\ziglang\\zig.exe" cc -o "__helpers.o" -c -std=c11 -fvisibility=hidden -fwrapv -pipe -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-constant-logical-operand -Wno-unused-but-set-variable -O3 -march=x86-64-v3 -march=x86-64-v3 -D_NUITKA_EXE_MODE -D__ZIG__ -D__NUITKA_NO_ASSERT__ -D_NUITKA_CONSTANTS_FROM_CODE -D_NUITKA_FILE_REFERENCE_ORIGINAL_MODE -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\zlib -IC:\Users\14915\miniconda3\include -IC:\Users\14915\miniconda3\include\internal\mimalloc -I. -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\include -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\static_src -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\libbacktrace "__helpers.c"</command>
+      <stderr>
+info: available CPUs for architecture 'x86_64':
+ alderlake
+ amdfam10
+ arrowlake
+ arrowlake_s
+ athlon
+ athlon64
+ athlon64_sse3
+ athlon_4
+ athlon_fx
+ athlon_mp
+ athlon_tbird
+ athlon_xp
+ atom
+ atom_sse4_2_movbe
+ barcelona
+ bdver1
+ bdver2
+ bdver3
+ bdver4
+ bonnell
+ broadwell
+ btver1
+ btver2
+ c3
+ c3_2
+ cannonlake
+ cascadelake
+ clearwaterforest
+ cooperlake
+ core2
+ corei7
+ diamondrapids
+ emeraldrapids
+ generic
+ geode
+ goldmont
+ goldmont_plus
+ gracemont
+ grandridge
+ graniterapids
+ graniterapids_d
+ haswell
+ i386
+ i486
+ i586
+ i686
+ i86
+ icelake_client
+ icelake_server
+ ivybridge
+ k6
+ k6_2
+ k6_3
+ k8
+ k8_sse3
+ knl
+ knm
+ lakemont
+ lunarlake
+ meteorlake
+ nehalem
+ nocona
+ opteron
+ opteron_sse3
+ pantherlake
+ penryn
+ pentium
+ pentium2
+ pentium3
+ pentium3m
+ pentium4
+ pentium_m
+ pentium_mmx
+ pentiumpro
+ prescott
+ raptorlake
+ rocketlake
+ sandybridge
+ sapphirerapids
+ sierraforest
+ silvermont
+ skx
+ skylake
+ skylake_avx512
+ slm
+ tigerlake
+ tremont
+ westmere
+ winchip2
+ winchip_c6
+ x86_64
+ x86_64_v2
+ x86_64_v3
+ x86_64_v4
+ yonah
+ znver1
+ znver2
+ znver3
+ znver4
+ znver5
+
+error: unknown CPU: 'x86'
+</stderr>
+    </scons_error_report>
+    <scons_error_report>
+      <command>"C:\\Users\\14915\\AppData\\Local\\Nuitka\\Nuitka\\Cache\\DOWNLO~1\\pip\\private-8c1f6f32\\Lib\\site-packages\\ziglang\\zig.exe" cc -o "__loader.o" -c -std=c11 -fvisibility=hidden -fwrapv -pipe -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-constant-logical-operand -Wno-unused-but-set-variable -O3 -march=x86-64-v3 -march=x86-64-v3 -D_NUITKA_EXE_MODE -D__ZIG__ -D__NUITKA_NO_ASSERT__ -D_NUITKA_CONSTANTS_FROM_CODE -D_NUITKA_FILE_REFERENCE_ORIGINAL_MODE -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\zlib -IC:\Users\14915\miniconda3\include -IC:\Users\14915\miniconda3\include\internal\mimalloc -I. -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\include -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\static_src -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\libbacktrace "__loader.c"</command>
+      <stderr>
+info: available CPUs for architecture 'x86_64':
+ alderlake
+ amdfam10
+ arrowlake
+ arrowlake_s
+ athlon
+ athlon64
+ athlon64_sse3
+ athlon_4
+ athlon_fx
+ athlon_mp
+ athlon_tbird
+ athlon_xp
+ atom
+ atom_sse4_2_movbe
+ barcelona
+ bdver1
+ bdver2
+ bdver3
+ bdver4
+ bonnell
+ broadwell
+ btver1
+ btver2
+ c3
+ c3_2
+ cannonlake
+ cascadelake
+ clearwaterforest
+ cooperlake
+ core2
+ corei7
+ diamondrapids
+ emeraldrapids
+ generic
+ geode
+ goldmont
+ goldmont_plus
+ gracemont
+ grandridge
+ graniterapids
+ graniterapids_d
+ haswell
+ i386
+ i486
+ i586
+ i686
+ i86
+ icelake_client
+ icelake_server
+ ivybridge
+ k6
+ k6_2
+ k6_3
+ k8
+ k8_sse3
+ knl
+ knm
+ lakemont
+ lunarlake
+ meteorlake
+ nehalem
+ nocona
+ opteron
+ opteron_sse3
+ pantherlake
+ penryn
+ pentium
+ pentium2
+ pentium3
+ pentium3m
+ pentium4
+ pentium_m
+ pentium_mmx
+ pentiumpro
+ prescott
+ raptorlake
+ rocketlake
+ sandybridge
+ sapphirerapids
+ sierraforest
+ silvermont
+ skx
+ skylake
+ skylake_avx512
+ slm
+ tigerlake
+ tremont
+ westmere
+ winchip2
+ winchip_c6
+ x86_64
+ x86_64_v2
+ x86_64_v3
+ x86_64_v4
+ yonah
+ znver1
+ znver2
+ znver3
+ znver4
+ znver5
+
+error: unknown CPU: 'x86'
+</stderr>
+    </scons_error_report>
+    <scons_error_report>
+      <command>"C:\\Users\\14915\\AppData\\Local\\Nuitka\\Nuitka\\Cache\\DOWNLO~1\\pip\\private-8c1f6f32\\Lib\\site-packages\\ziglang\\zig.exe" cc -o "module.__main__.o" -c -std=c11 -fvisibility=hidden -fwrapv -pipe -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-constant-logical-operand -Wno-unused-but-set-variable -O3 -march=x86-64-v3 -march=x86-64-v3 -D_NUITKA_EXE_MODE -D__ZIG__ -D__NUITKA_NO_ASSERT__ -D_NUITKA_CONSTANTS_FROM_CODE -D_NUITKA_FILE_REFERENCE_ORIGINAL_MODE -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\zlib -IC:\Users\14915\miniconda3\include -IC:\Users\14915\miniconda3\include\internal\mimalloc -I. -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\include -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\static_src -IC:\Users\14915\MINICO~1\Lib\SITE-P~1\nuitka\build\inline_copy\libbacktrace "module.__main__.c"</command>
+      <stderr>
+info: available CPUs for architecture 'x86_64':
+ alderlake
+ amdfam10
+ arrowlake
+ arrowlake_s
+ athlon
+ athlon64
+ athlon64_sse3
+ athlon_4
+ athlon_fx
+ athlon_mp
+ athlon_tbird
+ athlon_xp
+ atom
+ atom_sse4_2_movbe
+ barcelona
+ bdver1
+ bdver2
+ bdver3
+ bdver4
+ bonnell
+ broadwell
+ btver1
+ btver2
+ c3
+ c3_2
+ cannonlake
+ cascadelake
+ clearwaterforest
+ cooperlake
+ core2
+ corei7
+ diamondrapids
+ emeraldrapids
+ generic
+ geode
+ goldmont
+ goldmont_plus
+ gracemont
+ grandridge
+ graniterapids
+ graniterapids_d
+ haswell
+ i386
+ i486
+ i586
+ i686
+ i86
+ icelake_client
+ icelake_server
+ ivybridge
+ k6
+ k6_2
+ k6_3
+ k8
+ k8_sse3
+ knl
+ knm
+ lakemont
+ lunarlake
+ meteorlake
+ nehalem
+ nocona
+ opteron
+ opteron_sse3
+ pantherlake
+ penryn
+ pentium
+ pentium2
+ pentium3
+ pentium3m
+ pentium4
+ pentium_m
+ pentium_mmx
+ pentiumpro
+ prescott
+ raptorlake
+ rocketlake
+ sandybridge
+ sapphirerapids
+ sierraforest
+ silvermont
+ skx
+ skylake
+ skylake_avx512
+ slm
+ tigerlake
+ tremont
+ westmere
+ winchip2
+ winchip_c6
+ x86_64
+ x86_64_v2
+ x86_64_v3
+ x86_64_v4
+ yonah
+ znver1
+ znver2
+ znver3
+ znver4
+ znver5
+
+error: unknown CPU: 'x86'
+</stderr>
+    </scons_error_report>
+  </scons_error_reports>
+  <module name="__main__" kind="PythonMainModule" usage="root_module" reason="Root module" source_path="${cwd}\test.py">
+    <optimization-time pass="1" time="0.0000" micro_passes="3" />
+    <optimization-time pass="2" time="0.0000" micro_passes="1" />
+    <code-generation-time time="0.0312" />
+    <module_usages>
+      <module_usage name="site" finding="excluded" line="1" exclusion_reason="Not following into stdlib unless standalone or requested to follow into stdlib." />
+      <module_usage name="pywin32_bootstrap" finding="absolute" line="1" />
+    </module_usages>
+  </module>
+  <performance>
+    <memory_usage name="after_launch" value="43929600" />
+    <memory_usage name="before_c_code_generation" value="56668160" />
+    <memory_usage name="before_running_scons" value="57630720" />
+  </performance>
+  <data_composer blob_size="1089" total="115">
+    <module_data filename="__bytecode.const" blob_name=".bytecode" blob_size="3" input_size="0" />
+    <module_data filename="__constants.const" blob_name="" blob_size="971" input_size="2390" />
+    <module_data filename="module.__main__.const" blob_name="__main__" blob_size="83" input_size="132" />
+  </data_composer>
+  <performance-totals>
+    <optimization-time pass="1" time="0.0000" module_count="1" />
+    <optimization-time pass="2" time="0.0000" module_count="1" />
+    <optimization-time pass="all" time="0.0000" module_count="1" />
+    <code-generation-time time="0.0312" module_count="1" />
+  </performance-totals>
+  <python_binary filename="${cwd}\test.exe" backend_resource_mode="c23_embed" reproducible="no" />
+  <command_line>
+    <option value="--show-scons" />
+    <option value="test.py" />
+  </command_line>
+  <plugins>
+    <plugin name="anti-bloat" user_enabled="no" />
+    <plugin name="gi" user_enabled="no" />
+    <plugin name="implicit-imports" user_enabled="no" />
+    <plugin name="multiprocessing" user_enabled="no" />
+    <plugin name="options-nanny" user_enabled="no" />
+    <plugin name="pkg-resources" user_enabled="no" />
+    <plugin name="transformers" user_enabled="no" />
+  </plugins>
+  <distributions />
+  <python python_exe="${sys.prefix}\python.exe" python_flavor="Anaconda Python" python_version="3.13.11" os_name="Windows" os_release="11" arch_name="x86_64" filesystem_encoding="utf-8" gil="yes">
+    <search_path>
+      <path value="${cwd}" />
+      <path value="${sys.prefix}\DLLs" />
+      <path value="${sys.prefix}\Lib" />
+      <path value="${sys.prefix}" />
+      <path value="~\AppData\Roaming\Python\Python313\site-packages" />
+      <path value="~\AppData\Roaming\Python\Python313\site-packages\win32" />
+      <path value="~\AppData\Roaming\Python\Python313\site-packages\win32\lib" />
+      <path value="~\AppData\Roaming\Python\Python313\site-packages\pythonwin" />
+      <path value="${sys.prefix}\Lib\site-packages" />
+      <path value="${sys.prefix}\Lib\site-packages\win32" />
+      <path value="${sys.prefix}\Lib\site-packages\win32\lib" />
+      <path value="${sys.prefix}\Lib\site-packages\pythonwin" />
+      <path value="${sys.prefix}\Lib\site-packages\setuptools\_vendor" />
+    </search_path>
+  </python>
+  <output run_filename="${cwd}\test.cmd" />
+</nuitka-compilation-report>

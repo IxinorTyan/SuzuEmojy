@@ -60,7 +60,19 @@ def main():
     print("This may take a while, please wait...")
     
     # Run the build process
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    env = os.environ.copy()
+    # Clear existing CFLAGS/CCFLAGS to avoid conflicts
+    for key in ["CFLAGS", "CCFLAGS", "CXXFLAGS", "LDFLAGS", "CPPFLAGS"]:
+        if key in env:
+            del env[key]
+            
+    # Force x86_64_v3 architecture to enable AVX2 but avoid AVX-512 instructions
+    # x86_64_v3 includes AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE, XSAVE
+    # Note: Zig compiler requires underscores (x86_64_v3) instead of hyphens
+    env["CFLAGS"] = "-march=x86_64_v3"
+    env["CCFLAGS"] = "-march=x86_64_v3"
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     
     for line in process.stdout:
         print(line, end="")
@@ -137,6 +149,21 @@ if __name__ == "__main__":
         if os.path.exists("mini_launcher.py"): os.remove("mini_launcher.py")
         if os.path.exists("SuzuEmojy.spec"): os.remove("SuzuEmojy.spec")
         if os.path.exists("build"): shutil.rmtree("build")
+        
+        print("\n====================================")
+        print("Running AVX-512 verification...")
+        print("====================================")
+        
+        # 运行 AVX-512 检测脚本
+        check_script = "check_avx512.py"
+        if os.path.exists(check_script):
+            check_cmd = [sys.executable, check_script, os.path.join(bin_dir, "SuzuEmojy.exe")]
+            check_process = subprocess.run(check_cmd)
+            if check_process.returncode != 0:
+                print("\n====================================")
+                print("BUILD FAILED: AVX-512 instructions detected in the binary!")
+                print("====================================")
+                sys.exit(1)
         
         print("\n====================================")
         print("All Done!")
