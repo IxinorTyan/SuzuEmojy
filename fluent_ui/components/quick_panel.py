@@ -80,7 +80,7 @@ class QuickPanel(QWidget):
         
         # 搜索框
         self.search_box = SearchLineEdit(self.bg_widget)
-        self.search_box.setPlaceholderText("搜索表情...")
+        self.search_box.setPlaceholderText("搜索关键词...")
         self.search_box.textChanged.connect(self._on_search_text_changed)
         self.bg_layout.addWidget(self.search_box)
         
@@ -243,8 +243,10 @@ class QuickPanel(QWidget):
             card.hover_ended.connect(self._on_card_hover_ended)
             self._all_card_widgets.append(card)
             
-        # 不在这里立即触发布局，而是等待窗口 show 之后再触发
-        # 以确保能拿到正确的 viewport 宽度
+        # 如果窗口已经可见（用户在搜索框中输入），则立即触发布局
+        # 如果窗口不可见（刚唤醒），则等待 show_at_cursor 中的延迟触发
+        if self.isVisible():
+            self._trigger_responsive_layout(force=True)
 
     def _trigger_responsive_layout(self, force=False):
         if not self._all_card_widgets:
