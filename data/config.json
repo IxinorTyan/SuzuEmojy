@@ -1,6 +1,6 @@
 {
     "always_on_top": true,
-    "preview_delay": 494,
+    "preview_delay": 500,
     "preview_size": 320,
     "use_system_font": false,
     "thumbnail_size": 60,
@@ -10,13 +10,17 @@
         470
     ],
     "window_geometry": [
-        75,
-        159,
-        590,
+        768,
+        229,
+        597,
         389
     ],
     "sidebar_icon_size": 20,
     "category_grid_icon_size": 20,
     "sidebar_is_grid_mode": false,
-    "sidebar_width_list": 60
+    "sidebar_width_list": 60,
+    "quick_panel_thumbnail_size": 52,
+    "quick_panel_height": 300,
+    "global_hotkey": "ctrl+shift+e",
+    "quick_panel_hotkey": "ctrl+shift+d"
 }

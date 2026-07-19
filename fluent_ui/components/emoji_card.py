@@ -86,6 +86,8 @@ class EmojiCard(QLabel):
         self._drag_start_pos = None
         self._is_dragging = False
         self.current_size = size
+        self._loaded_size = 0  # 记录当前实际加载的图片尺寸
+        self._is_loaded = False
         
         self.is_selectable = False
         self.is_selected = False
@@ -164,20 +166,32 @@ class EmojiCard(QLabel):
             
             painter.drawPolyline([p1, p2, p3])
 
+    def needs_reload(self, target_size):
+        return not self._is_loaded or self._loaded_size != target_size
+
     def clear_resources(self):
         self.clear()
+        self._is_loaded = False
+        self._loaded_size = 0
 
-    def update_size(self, new_size):
+    def update_size(self, new_size, load_image=True):
         self.current_size = new_size
         self.setFixedSize(new_size, new_size)
         
+        if not load_image:
+            return
+            
         target_img_size = max(10, new_size - 16)
         pixmap = ThumbnailCache().get_thumbnail(self.image_path, target_img_size)
         
         if pixmap and not pixmap.isNull():
             self.setPixmap(pixmap)
+            self._is_loaded = True
+            self._loaded_size = new_size
         else:
             self.clear()
+            self._is_loaded = False
+            self._loaded_size = 0
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

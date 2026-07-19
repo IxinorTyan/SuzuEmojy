@@ -25,6 +25,7 @@ class StorageService:
         self.metadata_file = os.path.join(self.base_dir, "data", "metadata.json")
         self.icons_file = os.path.join(self.base_dir, "data", "category_icons.json")
         self.hashes_file = os.path.join(self.base_dir, "data", "hashes.json")
+        self.recent_file = os.path.join(self.base_dir, "data", "recent.json")
         
         # 如果目录不存在，自动创建
         if not os.path.exists(self.images_dir):
@@ -46,6 +47,8 @@ class StorageService:
         
         self._metadata_cache = {}
         self._metadata_dirty = True
+        
+        self._recent_cache = None
 
     def _load_hashes(self):
         if not os.path.exists(self.hashes_file):
@@ -321,6 +324,61 @@ class StorageService:
         """判断图片是否为动图格式"""
         ext = os.path.splitext(filepath)[1].lower()
         return ext in ['.gif', '.webp']
+
+    # ==========================
+    # 最近使用 (Recent) 相关逻辑
+    # ==========================
+    
+    def get_recent_images(self):
+        """获取最近使用的表情列表（绝对路径）"""
+        if self._recent_cache is not None:
+            return self._recent_cache
+            
+        if not os.path.exists(self.recent_file):
+            self._recent_cache = []
+            return self._recent_cache
+            
+        try:
+            with open(self.recent_file, 'r', encoding='utf-8') as f:
+                filenames = json.load(f)
+                
+            # 转换为绝对路径并过滤掉已删除的文件
+            all_images = set(self.get_all_images())
+            valid_paths = []
+            for fname in filenames:
+                abs_path = self._to_abspath(fname)
+                if abs_path in all_images:
+                    valid_paths.append(abs_path)
+                    
+            self._recent_cache = valid_paths
+            return self._recent_cache
+        except Exception as e:
+            print(f"[ERROR] 读取最近使用记录失败: {e}")
+            self._recent_cache = []
+            return self._recent_cache
+            
+    def add_recent_image(self, filepath, limit=30):
+        """添加一条最近使用记录（LRU机制）"""
+        recent_paths = self.get_recent_images()
+        abs_path = self._to_abspath(filepath)
+        
+        if abs_path in recent_paths:
+            recent_paths.remove(abs_path)
+            
+        recent_paths.insert(0, abs_path)
+        
+        if len(recent_paths) > limit:
+            recent_paths = recent_paths[:limit]
+            
+        self._recent_cache = recent_paths
+        
+        # 保存到文件（只存文件名）
+        try:
+            filenames = [self._to_filename(p) for p in recent_paths]
+            with open(self.recent_file, 'w', encoding='utf-8') as f:
+                json.dump(filenames, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] 保存最近使用记录失败: {e}")
 
     # ==========================
     # 分类图标 (Category Icons) 相关逻辑
@@ -601,6 +659,16 @@ class StorageService:
                 # 清理哈希缓存
                 filename = self._to_filename(filepath)
                 hash_to_remove = None
+                
+                # 清理最近使用记录
+                if self._recent_cache is not None and filepath in self._recent_cache:
+                    self._recent_cache.remove(filepath)
+                    try:
+                        filenames = [self._to_filename(p) for p in self._recent_cache]
+                        with open(self.recent_file, 'w', encoding='utf-8') as f:
+                            json.dump(filenames, f, indent=4, ensure_ascii=False)
+                    except Exception:
+                        pass
                 for h, f in self._hashes_cache.items():
                     if f == filename:
                         hash_to_remove = h

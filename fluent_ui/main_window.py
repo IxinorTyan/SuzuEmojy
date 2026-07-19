@@ -20,6 +20,7 @@ user32 = ctypes.windll.user32
 class HotkeySignal(QObject):
     """跨线程桥接信号"""
     activated = Signal()
+    quick_activated = Signal()
 
 class MainWindow(FramelessWindow):
     """
@@ -146,6 +147,9 @@ class MainWindow(FramelessWindow):
         
         self.main_layout.addWidget(self.stacked_widget)
         
+        from fluent_ui.components.quick_panel import QuickPanel
+        self.quick_panel = QuickPanel(self.storage, self.clipboard, self.config)
+        
     def show_settings(self):
         """暴露给外部托盘图标调用的接口，用于切换到设置页"""
         self.stacked_widget.setCurrentWidget(self.setting_interface)
@@ -162,6 +166,7 @@ class MainWindow(FramelessWindow):
     def _init_global_hotkey(self):
         self.hotkey_signal = HotkeySignal()
         self.hotkey_signal.activated.connect(self.toggle_window)
+        self.hotkey_signal.quick_activated.connect(self.toggle_quick_panel)
         self.hotkey_listener = None
         self.bind_global_hotkey()
 
@@ -186,24 +191,44 @@ class MainWindow(FramelessWindow):
             pass
             
         hotkey_str = self.config.get("global_hotkey", "ctrl+shift+e")
-        if hotkey_str:
-            try:
-                from pynput import keyboard
+        quick_hotkey_str = self.config.get("quick_panel_hotkey", "alt+2")
+        
+        hotkeys_dict = {}
+        
+        try:
+            from pynput import keyboard
+            
+            if hotkey_str:
                 pynput_hotkey = self._parse_pynput_hotkey(hotkey_str)
-                
                 def on_activate():
                     self.hotkey_signal.activated.emit()
-                    
-                self.hotkey_listener = keyboard.GlobalHotKeys({
-                    pynput_hotkey: on_activate
-                })
+                hotkeys_dict[pynput_hotkey] = on_activate
+                
+            if quick_hotkey_str:
+                pynput_quick_hotkey = self._parse_pynput_hotkey(quick_hotkey_str)
+                def on_quick_activate():
+                    self.hotkey_signal.quick_activated.emit()
+                hotkeys_dict[pynput_quick_hotkey] = on_quick_activate
+                
+            if hotkeys_dict:
+                self.hotkey_listener = keyboard.GlobalHotKeys(hotkeys_dict)
                 self.hotkey_listener.start()
-            except Exception as e:
-                print(f"Failed to bind pynput hotkey: {e}")
+        except Exception as e:
+            print(f"Failed to bind pynput hotkey: {e}")
+
+    def toggle_quick_panel(self):
+        if self.quick_panel.isVisible():
+            self.quick_panel.hide_panel()
+        else:
+            # 在面板显示前，记录当前的前台窗口句柄
+            hwnd = user32.GetForegroundWindow()
+            if hwnd and hwnd != int(self.winId()) and hwnd != int(self.quick_panel.winId()):
+                self.quick_panel.set_target_hwnd(hwnd)
+            self.quick_panel.show_at_cursor()
 
     def toggle_window(self):
         if self.isVisible() and self.isActiveWindow():
-            # 修复：在隐藏前强制重置标题栏按钮状态
+            # 在隐藏前强制重置标题栏按钮状态
             if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'closeBtn'):
                 self.titleBar.closeBtn.setState(0) # 0 通常代表 Normal 状态
                 leave_event = QEvent(QEvent.Leave)
@@ -254,7 +279,7 @@ class MainWindow(FramelessWindow):
         if changed_key == "always_on_top":
             self.apply_window_flags()
             
-        elif changed_key == "global_hotkey":
+        elif changed_key in ["global_hotkey", "quick_panel_hotkey"]:
             self.bind_global_hotkey()
             
         elif changed_key == "theme_mode":
@@ -271,6 +296,7 @@ class MainWindow(FramelessWindow):
             
             self.gallery_interface.refresh_gallery()
             self.gallery_interface.sidebar.update_theme()
+            self.quick_panel.update_theme()
             
         elif changed_key in ["sidebar_icon_size", "show_sidebar_tooltip"]:
             self.gallery_interface.force_refresh_sidebar_icons()

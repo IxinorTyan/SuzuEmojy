@@ -855,6 +855,10 @@ class GalleryInterface(QWidget):
         self._all_card_widgets = []
         self._cleanup_threshold = 200
         
+        # 布局常量
+        self.LAYOUT_TOP_MARGIN = 8
+        self.LAYOUT_SPACING = 10
+        
         # 滚动节流定时器
         self._lazy_load_timer = QTimer(self)
         self._lazy_load_timer.setSingleShot(True)
@@ -1021,9 +1025,6 @@ class GalleryInterface(QWidget):
         if not hasattr(self, '_all_card_widgets'):
             return
             
-        if len(self._all_card_widgets) < getattr(self, '_cleanup_threshold', 200):
-            return
-            
         scrollbar = self.scroll_area.verticalScrollBar()
         scroll_y = scrollbar.value()
         viewport_height = self.scroll_area.viewport().height()
@@ -1031,13 +1032,13 @@ class GalleryInterface(QWidget):
         visible_top = scroll_y
         visible_bottom = scroll_y + viewport_height
         
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
+        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + self.LAYOUT_SPACING)))
         current_size = self.config.get("thumbnail_size", 120)
         
         for index, widget in enumerate(self._all_card_widgets):
             row = index // columns
             
-            card_y = 8 + row * (current_size + 10)
+            card_y = self.LAYOUT_TOP_MARGIN + row * (current_size + self.LAYOUT_SPACING)
             card_bottom = card_y + current_size
             
             is_far_above = card_bottom < visible_top - 500
@@ -1047,11 +1048,9 @@ class GalleryInterface(QWidget):
             if is_far_above or is_far_below:
                 if getattr(widget, '_is_loaded', True):
                     widget.clear_resources()
-                    widget._is_loaded = False
             elif is_near:
-                if not getattr(widget, '_is_loaded', True):
+                if widget.needs_reload(current_size):
                     widget.update_size(current_size)
-                    widget._is_loaded = True
 
     def _on_scroll(self, value):
         if not self._is_loading:
@@ -1288,13 +1287,41 @@ class GalleryInterface(QWidget):
 
 
     def _apply_thumbnail_size(self, size):
+        # 第一阶段：仅更新尺寸，不判断可见性
         for widget in getattr(self, '_all_card_widgets', []):
-            widget.update_size(size)
+            widget.update_size(size, load_image=False)
+                
         self._trigger_responsive_layout(force=True)
+        
+        # 第二阶段：等待 layout 完成后，异步刷新可见区域
+        QTimer.singleShot(16, self._refresh_visible_thumbnails)
         
         # 重置空闲定时器
         from fluent_ui.components.emoji_card import ThumbnailCache
         ThumbnailCache().reset_idle_timer()
+
+    def _refresh_visible_thumbnails(self):
+        if not hasattr(self, '_all_card_widgets') or not self._all_card_widgets:
+            return
+            
+        scrollbar = self.scroll_area.verticalScrollBar()
+        scroll_y = scrollbar.value()
+        viewport_height = self.scroll_area.viewport().height()
+        
+        visible_top = scroll_y - 200
+        visible_bottom = scroll_y + viewport_height + 200
+        
+        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + self.LAYOUT_SPACING)))
+        current_size = self.config.get("thumbnail_size", 120)
+        
+        for index, widget in enumerate(self._all_card_widgets):
+            row = index // columns
+            card_y = self.LAYOUT_TOP_MARGIN + row * (current_size + self.LAYOUT_SPACING)
+            card_bottom = card_y + current_size
+            
+            if card_bottom >= visible_top and card_y <= visible_bottom:
+                if widget.needs_reload(current_size):
+                    widget.update_size(current_size, load_image=True)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1306,7 +1333,7 @@ class GalleryInterface(QWidget):
 
     def _trigger_responsive_layout(self, force=False):
         if not hasattr(self, 'scroll_area'): return
-        item_width = self.config.get("thumbnail_size", 120) + 10
+        item_width = self.config.get("thumbnail_size", 120) + self.LAYOUT_SPACING
         area_width = self.scroll_area.viewport().width() - 32
         columns = max(1, area_width // item_width)
         
@@ -1334,7 +1361,8 @@ class GalleryInterface(QWidget):
         self.grid_container.setUpdatesEnabled(True)
         self.grid_container.update()
         
-        self._apply_lazy_loading()
+        # 恢复懒加载定时器，接管缩放结束后的剩余加载任务
+        self._lazy_load_timer.start(32)
 
     def remove_card_by_path(self, image_path):
         """局部刷新：仅移除指定的卡片并重排，避免全局重绘卡顿"""
@@ -1686,6 +1714,10 @@ class GalleryInterface(QWidget):
 
     def on_image_clicked(self, image_path):
         if self.clipboard.copy_image_to_clipboard(image_path):
+            # 记录到最近使用
+            limit = self.config.get("recent_limit", 30)
+            self.storage.add_recent_image(image_path, limit)
+            
             # 再次检查 last_active_window 是否仍然有效且不是桌面/资源管理器等系统关键窗口
             if self.last_active_window and user32.IsWindow(self.last_active_window):
                 class_name = get_window_class_name(self.last_active_window)

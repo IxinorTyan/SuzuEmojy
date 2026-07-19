@@ -222,6 +222,43 @@ class SettingInterface(ScrollArea):
         if hasattr(self.batchSizeCard, 'setValue'):
             self.batchSizeCard.setValue(self.config.get("render_batch_size", 50))
 
+        self.recentLimitConfigItem = RangeConfigItem(
+            "Advanced", "RecentLimit", 30,
+            RangeValidator(1, 999)
+        )
+        self.recentLimitConfigItem.value = self.config.get("recent_limit", 30)
+        
+        self.recentLimitCard = SpinBoxRangeSettingCard(
+            self.recentLimitConfigItem, FIF.HISTORY, "最近使用记录上限", "设置快速面板中显示的最近使用表情数量",
+            parent=self.advancedGroup
+        )
+            
+        self.quickPanelWidthConfigItem = RangeConfigItem(
+            "Advanced", "QuickPanelWidth", 360,
+            RangeValidator(250, 800)
+        )
+        self.quickPanelWidthConfigItem.value = self.config.get("quick_panel_width", 360)
+        
+        self.quickPanelWidthCard = SpinBoxRangeSettingCard(
+            self.quickPanelWidthConfigItem, FIF.FIT_PAGE, "快速面板宽度", "设置快速表情调用面板的宽度（像素）",
+            parent=self.advancedGroup
+        )
+        if hasattr(self.quickPanelWidthCard, 'setValue'):
+            self.quickPanelWidthCard.setValue(self.config.get("quick_panel_width", 360))
+            
+        self.quickPanelHeightConfigItem = RangeConfigItem(
+            "Advanced", "QuickPanelHeight", 480,
+            RangeValidator(150, 1000)
+        )
+        self.quickPanelHeightConfigItem.value = self.config.get("quick_panel_height", 480)
+        
+        self.quickPanelHeightCard = SpinBoxRangeSettingCard(
+            self.quickPanelHeightConfigItem, FIF.FIT_PAGE, "快速面板高度", "设置快速表情调用面板的高度（像素）",
+            parent=self.advancedGroup
+        )
+        if hasattr(self.quickPanelHeightCard, 'setValue'):
+            self.quickPanelHeightCard.setValue(self.config.get("quick_panel_height", 480))
+
         self.sidebarTooltipConfigItem = ConfigItem(
             "Advanced", "SidebarTooltip", True,
             BoolValidator()
@@ -239,6 +276,12 @@ class SettingInterface(ScrollArea):
             self.config.get("global_hotkey", "ctrl+shift+e"),
             parent=self.advancedGroup
         )
+        
+        self.quickHotkeyCard = CustomHotkeySettingCard(
+            "快速面板快捷键", "设置全局唤醒快速表情调用面板的快捷键", FIF.COMMAND_PROMPT,
+            self.config.get("quick_panel_hotkey", "alt+2"),
+            parent=self.advancedGroup
+        )
 
         self.windowGroup.addSettingCard(self.alwaysTopCard)
         self.themeGroup.addSettingCard(self.themeCard)
@@ -247,8 +290,12 @@ class SettingInterface(ScrollArea):
         self.advancedGroup.addSettingCard(self.previewSizeCard)
         self.advancedGroup.addSettingCard(self.sidebarIconSizeCard)
         self.advancedGroup.addSettingCard(self.batchSizeCard)
+        self.advancedGroup.addSettingCard(self.recentLimitCard)
+        self.advancedGroup.addSettingCard(self.quickPanelWidthCard)
+        self.advancedGroup.addSettingCard(self.quickPanelHeightCard)
         self.advancedGroup.addSettingCard(self.sidebarTooltipCard)
         self.advancedGroup.addSettingCard(self.hotkeyCard)
+        self.advancedGroup.addSettingCard(self.quickHotkeyCard)
         
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
@@ -265,7 +312,11 @@ class SettingInterface(ScrollArea):
         self.sidebarIconSizeCard.valueChanged.connect(lambda v: self._save_config("sidebar_icon_size", v, True))
         self.sidebarTooltipCard.checkedChanged.connect(lambda v: self._save_config("show_sidebar_tooltip", v, True))
         self.batchSizeCard.valueChanged.connect(lambda v: self._save_config("render_batch_size", v))
-        self.hotkeyCard.hotkey_changed.connect(lambda v: self._save_config("global_hotkey", v, True))
+        self.recentLimitCard.valueChanged.connect(lambda v: self._save_config("recent_limit", v))
+        self.quickPanelWidthCard.valueChanged.connect(lambda v: self._save_config("quick_panel_width", v))
+        self.quickPanelHeightCard.valueChanged.connect(lambda v: self._save_config("quick_panel_height", v))
+        self.hotkeyCard.hotkey_changed.connect(lambda v: self._on_hotkey_changed("global_hotkey", v, self.hotkeyCard))
+        self.quickHotkeyCard.hotkey_changed.connect(lambda v: self._on_hotkey_changed("quick_panel_hotkey", v, self.quickHotkeyCard))
         
         def on_theme_changed(index):
             theme_keys = ["system", "light", "dark"]
@@ -274,6 +325,28 @@ class SettingInterface(ScrollArea):
                 
         self.themeCard.comboBox.currentIndexChanged.connect(on_theme_changed)
         self.useSystemFontCard.checkedChanged.connect(lambda v: self._save_config("use_system_font", v, True))
+
+    def _on_hotkey_changed(self, key, value, card):
+        other_key = "quick_panel_hotkey" if key == "global_hotkey" else "global_hotkey"
+        other_value = self.config.get(other_key, "alt+2" if other_key == "quick_panel_hotkey" else "ctrl+shift+e")
+        
+        if value and value == other_value:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                title="快捷键冲突",
+                content="该快捷键已被其他功能占用，请重新设置。",
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self
+            )
+            # 恢复原来的值
+            old_value = self.config.get(key, "ctrl+shift+e" if key == "global_hotkey" else "alt+2")
+            card.hotkey_input.setText(old_value)
+            return
+            
+        self._save_config(key, value, True)
 
     def _on_always_top_changed(self, is_checked):
         self._save_config("always_on_top", is_checked, True)
