@@ -80,7 +80,7 @@ class QuickPanel(QWidget):
         
         # 搜索框
         self.search_box = SearchLineEdit(self.bg_widget)
-        self.search_box.setPlaceholderText("搜索表情...")
+        self.search_box.setPlaceholderText("搜索关键词...")
         self.search_box.textChanged.connect(self._on_search_text_changed)
         self.bg_layout.addWidget(self.search_box)
         
