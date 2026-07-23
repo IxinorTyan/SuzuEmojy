@@ -130,6 +130,47 @@ class SettingInterface(ScrollArea):
         
         from qfluentwidgets import ConfigItem, OptionsConfigItem, OptionsValidator, Theme
         
+        from qfluentwidgets import RangeConfigItem, RangeValidator, RangeSettingCard
+        
+        self.previewSizeConfigItem = RangeConfigItem(
+            "Advanced", "PreviewSize", 320,
+            RangeValidator(100, 800)
+        )
+        self.previewSizeConfigItem.value = self.config.get("preview_size", 320)
+        
+        self.previewSizeCard = SpinBoxRangeSettingCard(
+            self.previewSizeConfigItem, FIF.ZOOM, "预览浮窗大小", "设置悬停时弹出的大图的像素尺寸",
+            parent=self.windowGroup
+        )
+        if hasattr(self.previewSizeCard, 'setValue'):
+            self.previewSizeCard.setValue(self.config.get("preview_size", 320))
+            
+        self.quickPanelWidthConfigItem = RangeConfigItem(
+            "Advanced", "QuickPanelWidth", 360,
+            RangeValidator(250, 800)
+        )
+        self.quickPanelWidthConfigItem.value = self.config.get("quick_panel_width", 360)
+        
+        self.quickPanelWidthCard = SpinBoxRangeSettingCard(
+            self.quickPanelWidthConfigItem, FIF.FIT_PAGE, "快速面板宽度", "设置快速表情调用面板的宽度（像素）",
+            parent=self.windowGroup
+        )
+        if hasattr(self.quickPanelWidthCard, 'setValue'):
+            self.quickPanelWidthCard.setValue(self.config.get("quick_panel_width", 360))
+            
+        self.quickPanelHeightConfigItem = RangeConfigItem(
+            "Advanced", "QuickPanelHeight", 480,
+            RangeValidator(150, 1000)
+        )
+        self.quickPanelHeightConfigItem.value = self.config.get("quick_panel_height", 480)
+        
+        self.quickPanelHeightCard = SpinBoxRangeSettingCard(
+            self.quickPanelHeightConfigItem, FIF.FIT_PAGE, "快速面板高度", "设置快速表情调用面板的高度（像素）",
+            parent=self.windowGroup
+        )
+        if hasattr(self.quickPanelHeightCard, 'setValue'):
+            self.quickPanelHeightCard.setValue(self.config.get("quick_panel_height", 480))
+
         self.themeGroup = SettingCardGroup("个性化", self.scrollWidget)
         
         from qfluentwidgets import OptionsValidator, OptionsConfigItem, ComboBoxSettingCard
@@ -160,9 +201,34 @@ class SettingInterface(ScrollArea):
         )
         self.useSystemFontCard.setChecked(self.config.get("use_system_font", False))
         
+        self.sidebarIconSizeConfigItem = RangeConfigItem(
+            "Advanced", "SidebarIconSize", 20,
+            RangeValidator(16, 64)
+        )
+        self.sidebarIconSizeConfigItem.value = self.config.get("sidebar_icon_size", 20)
+        
+        self.sidebarIconSizeCard = SpinBoxRangeSettingCard(
+            self.sidebarIconSizeConfigItem, FIF.FOLDER, "列表模式下侧边栏图标大小", "设置左侧分类列表图标的尺寸",
+            parent=self.themeGroup
+        )
+        if hasattr(self.sidebarIconSizeCard, 'setValue'):
+            self.sidebarIconSizeCard.setValue(self.config.get("sidebar_icon_size", 20))
+            
+        # 沿用现有的 ConfigItem 机制，因为 qfluentwidgets 的 SwitchSettingCard 必须传入 configItem
+        self.showSettingBtnConfigItem = ConfigItem(
+            "Theme", "ShowSettingButton", True,
+            BoolValidator()
+        )
+        self.showSettingBtnConfigItem.value = self.config.get("show_setting_button", True)
+        
+        self.showSettingBtnCard = SwitchSettingCard(
+            FIF.SETTING, "显示设置入口", "在主面板右上角显示快速进入设置的按钮",
+            configItem=self.showSettingBtnConfigItem, parent=self.themeGroup
+        )
+        self.showSettingBtnCard.setChecked(self.config.get("show_setting_button", True))
+        
         self.advancedGroup = SettingCardGroup("高级设置", self.scrollWidget)
         
-        from qfluentwidgets import RangeConfigItem, RangeValidator, RangeSettingCard
         self.previewDelayConfigItem = RangeConfigItem(
             "Advanced", "PreviewDelay", 500,
             RangeValidator(100, 3000)
@@ -175,39 +241,6 @@ class SettingInterface(ScrollArea):
         )
         if hasattr(self.previewDelayCard, 'setValue'):
             self.previewDelayCard.setValue(self.config.get("preview_delay", 500))
-        
-        self.previewSizeConfigItem = RangeConfigItem(
-            "Advanced", "PreviewSize", 320,
-            RangeValidator(100, 800)
-        )
-        self.previewSizeConfigItem.value = self.config.get("preview_size", 320)
-        
-        self.previewSizeCard = SpinBoxRangeSettingCard(
-            self.previewSizeConfigItem, FIF.ZOOM, "预览浮窗大小", "设置悬停时弹出的大图的像素尺寸",
-            parent=self.advancedGroup
-        )
-        if hasattr(self.previewSizeCard, 'setValue'):
-            self.previewSizeCard.setValue(self.config.get("preview_size", 320))
-
-        self.sidebarIconSizeConfigItem = RangeConfigItem(
-            "Advanced", "SidebarIconSize", 20,
-            RangeValidator(16, 64)
-        )
-        self.sidebarIconSizeConfigItem.value = self.config.get("sidebar_icon_size", 20)
-        
-        self.sidebarIconSizeCard = SpinBoxRangeSettingCard(
-            self.sidebarIconSizeConfigItem, FIF.FOLDER, "列表模式下侧边栏图标大小", "设置左侧分类列表图标的尺寸",
-            parent=self.advancedGroup
-        )
-        if hasattr(self.sidebarIconSizeCard, 'setValue'):
-            self.sidebarIconSizeCard.setValue(self.config.get("sidebar_icon_size", 20))
-
-        from qfluentwidgets import BoolValidator, ConfigItem
-        self.sidebarTooltipConfigItem = ConfigItem(
-            "Advanced", "SidebarTooltip", True,
-            BoolValidator()
-        )
-        self.sidebarTooltipConfigItem.value = self.config.get("show_sidebar_tooltip", True)
         
         self.batchSizeConfigItem = RangeConfigItem(
             "Advanced", "BatchSize", 50,
@@ -232,32 +265,6 @@ class SettingInterface(ScrollArea):
             self.recentLimitConfigItem, FIF.HISTORY, "最近使用记录上限", "设置快速面板中显示的最近使用表情数量",
             parent=self.advancedGroup
         )
-            
-        self.quickPanelWidthConfigItem = RangeConfigItem(
-            "Advanced", "QuickPanelWidth", 360,
-            RangeValidator(250, 800)
-        )
-        self.quickPanelWidthConfigItem.value = self.config.get("quick_panel_width", 360)
-        
-        self.quickPanelWidthCard = SpinBoxRangeSettingCard(
-            self.quickPanelWidthConfigItem, FIF.FIT_PAGE, "快速面板宽度", "设置快速表情调用面板的宽度（像素）",
-            parent=self.advancedGroup
-        )
-        if hasattr(self.quickPanelWidthCard, 'setValue'):
-            self.quickPanelWidthCard.setValue(self.config.get("quick_panel_width", 360))
-            
-        self.quickPanelHeightConfigItem = RangeConfigItem(
-            "Advanced", "QuickPanelHeight", 480,
-            RangeValidator(150, 1000)
-        )
-        self.quickPanelHeightConfigItem.value = self.config.get("quick_panel_height", 480)
-        
-        self.quickPanelHeightCard = SpinBoxRangeSettingCard(
-            self.quickPanelHeightConfigItem, FIF.FIT_PAGE, "快速面板高度", "设置快速表情调用面板的高度（像素）",
-            parent=self.advancedGroup
-        )
-        if hasattr(self.quickPanelHeightCard, 'setValue'):
-            self.quickPanelHeightCard.setValue(self.config.get("quick_panel_height", 480))
 
         self.sidebarTooltipConfigItem = ConfigItem(
             "Advanced", "SidebarTooltip", True,
@@ -284,15 +291,18 @@ class SettingInterface(ScrollArea):
         )
 
         self.windowGroup.addSettingCard(self.alwaysTopCard)
+        self.windowGroup.addSettingCard(self.previewSizeCard)
+        self.windowGroup.addSettingCard(self.quickPanelWidthCard)
+        self.windowGroup.addSettingCard(self.quickPanelHeightCard)
+        
         self.themeGroup.addSettingCard(self.themeCard)
+        self.themeGroup.addSettingCard(self.sidebarIconSizeCard)
+        self.themeGroup.addSettingCard(self.showSettingBtnCard)
         self.themeGroup.addSettingCard(self.useSystemFontCard)
+        
         self.advancedGroup.addSettingCard(self.previewDelayCard)
-        self.advancedGroup.addSettingCard(self.previewSizeCard)
-        self.advancedGroup.addSettingCard(self.sidebarIconSizeCard)
         self.advancedGroup.addSettingCard(self.batchSizeCard)
         self.advancedGroup.addSettingCard(self.recentLimitCard)
-        self.advancedGroup.addSettingCard(self.quickPanelWidthCard)
-        self.advancedGroup.addSettingCard(self.quickPanelHeightCard)
         self.advancedGroup.addSettingCard(self.sidebarTooltipCard)
         self.advancedGroup.addSettingCard(self.hotkeyCard)
         self.advancedGroup.addSettingCard(self.quickHotkeyCard)
@@ -310,6 +320,7 @@ class SettingInterface(ScrollArea):
         self.previewDelayCard.valueChanged.connect(lambda v: self._save_config("preview_delay", v))
         self.previewSizeCard.valueChanged.connect(lambda v: self._save_config("preview_size", v))
         self.sidebarIconSizeCard.valueChanged.connect(lambda v: self._save_config("sidebar_icon_size", v, True))
+        self.showSettingBtnCard.checkedChanged.connect(lambda v: self._save_config("show_setting_button", v, True))
         self.sidebarTooltipCard.checkedChanged.connect(lambda v: self._save_config("show_sidebar_tooltip", v, True))
         self.batchSizeCard.valueChanged.connect(lambda v: self._save_config("render_batch_size", v))
         self.recentLimitCard.valueChanged.connect(lambda v: self._save_config("recent_limit", v))

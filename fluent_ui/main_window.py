@@ -145,6 +145,8 @@ class MainWindow(FramelessWindow):
         self.setting_interface.settings_changed.connect(self.on_settings_changed)
         self.stacked_widget.addWidget(self.setting_interface)
         
+        self.gallery_interface.setting_requested.connect(self.show_settings)
+        
         self.main_layout.addWidget(self.stacked_widget)
         
         from fluent_ui.components.quick_panel import QuickPanel
@@ -278,6 +280,10 @@ class MainWindow(FramelessWindow):
         """当设置界面修改了配置时被调用，按需局部刷新"""
         if changed_key == "always_on_top":
             self.apply_window_flags()
+            
+        elif changed_key == "show_setting_button":
+            is_show = self.config.get("show_setting_button", True)
+            self.gallery_interface.btn_setting.setVisible(is_show)
             
         elif changed_key in ["global_hotkey", "quick_panel_hotkey"]:
             self.bind_global_hotkey()

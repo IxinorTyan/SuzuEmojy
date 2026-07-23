@@ -80,8 +80,44 @@ class QuickPanel(QWidget):
         
         # 搜索框
         self.search_box = SearchLineEdit(self.bg_widget)
+        self.search_box.setObjectName("quickPanelSearchBox")
         self.search_box.setPlaceholderText("搜索关键词...")
         self.search_box.textChanged.connect(self._on_search_text_changed)
+        
+        # 隐藏 qfluentwidgets 默认的聚焦底部粗边框 (由 paintEvent 绘制)
+        self.search_box.setCustomFocusedBorderColor(Qt.transparent, Qt.transparent)
+        
+        # 使用 setCustomStyleSheet 追加样式，保留原有的 padding、圆角和字体颜色
+        # 使用 ID 选择器提高优先级，确保覆盖默认的 LineEdit:focus[transparent=true] 样式
+        from qfluentwidgets import setCustomStyleSheet
+        light_qss = """
+            SearchLineEdit#quickPanelSearchBox {
+                border: 1px solid rgba(0, 0, 0, 0.08);
+                background-color: rgba(255, 255, 255, 0.7);
+            }
+            SearchLineEdit#quickPanelSearchBox:hover {
+                background-color: rgba(249, 249, 249, 0.5);
+            }
+            SearchLineEdit#quickPanelSearchBox:focus {
+                border: 1px solid rgba(0, 0, 0, 0.08);
+                background-color: rgba(255, 255, 255, 0.9);
+            }
+        """
+        dark_qss = """
+            SearchLineEdit#quickPanelSearchBox {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+            SearchLineEdit#quickPanelSearchBox:hover {
+                background-color: rgba(255, 255, 255, 0.08);
+            }
+            SearchLineEdit#quickPanelSearchBox:focus {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+        """
+        setCustomStyleSheet(self.search_box, light_qss, dark_qss)
+        
         self.bg_layout.addWidget(self.search_box)
         
         # 滚动区域
@@ -177,22 +213,6 @@ class QuickPanel(QWidget):
     def update_theme(self):
         # 背景绘制已移至 paintEvent，这里只需触发重绘
         self.update()
-        
-        # 通过 QSS 隐藏搜索框的聚焦视觉效果
-        if isDarkTheme():
-            self.search_box.setStyleSheet("""
-                SearchLineEdit:focus {
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    background-color: rgba(255, 255, 255, 0.05);
-                }
-            """)
-        else:
-            self.search_box.setStyleSheet("""
-                SearchLineEdit:focus {
-                    border: 1px solid rgba(0, 0, 0, 0.08);
-                    background-color: rgba(255, 255, 255, 0.7);
-                }
-            """)
 
     def _on_search_text_changed(self, text):
         self.search_timer.start(150)
@@ -328,7 +348,7 @@ class QuickPanel(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
-    def _on_card_clicked(self, path):
+    def _on_card_clicked(self, path, modifiers=None):
         self.clipboard.copy_image_to_clipboard(path)
         limit = self.config.get("recent_limit", 30)
         self.storage.add_recent_image(path, limit)

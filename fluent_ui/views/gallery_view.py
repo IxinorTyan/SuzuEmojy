@@ -806,6 +806,8 @@ class GalleryInterface(QWidget):
     """
     重构后的 Gallery 视图，包含左侧分类栏和右侧表情网格
     """
+    setting_requested = Signal()
+
     def __init__(self, storage_service, clipboard_service, config_service, parent=None):
         super().__init__(parent=parent)
         self.storage = storage_service
@@ -869,6 +871,9 @@ class GalleryInterface(QWidget):
         
         # 多选状态优化
         self.selected_paths = set()
+        self._last_clicked_path = None
+        self._anchor_from_selection_click = False
+        self._shift_selected_paths = set()
         
         # 首次强制刷新
         self.sidebar.refresh_list("全部表情")
@@ -942,9 +947,16 @@ class GalleryInterface(QWidget):
         self.btn_filter.setToolTip("筛选")
         self.btn_filter.clicked.connect(self._show_filter_menu)
         
+        # 设置按钮
+        self.btn_setting = TransparentToolButton(FIF.SETTING, self.top_bar)
+        self.btn_setting.setToolTip("设置")
+        self.btn_setting.setVisible(self.config.get("show_setting_button", True))
+        self.btn_setting.clicked.connect(self.setting_requested.emit)
+        
         self.top_bar_layout.addStretch() # 把搜索框推到右边
         self.top_bar_layout.addWidget(self.btn_multi_select)
         self.top_bar_layout.addWidget(self.btn_filter)
+        self.top_bar_layout.addWidget(self.btn_setting)
         self.top_bar_layout.addWidget(self.search_box)
         
         self.right_layout.addWidget(self.top_bar)
@@ -1587,7 +1599,10 @@ class GalleryInterface(QWidget):
         
         if not enabled:
             self.selected_paths.clear()
-        
+            self._last_clicked_path = None
+            self._anchor_from_selection_click = False
+            self._shift_selected_paths.clear()
+            
         for widget in getattr(self, '_all_card_widgets', []):
             widget.set_selectable(enabled)
             if not enabled:
@@ -1637,15 +1652,64 @@ class GalleryInterface(QWidget):
 
     def _execute_batch_add(self, paths, cat_name):
         if not paths: return
-        count = 0
+        success_count = 0
+        exist_count = 0
+        error_count = 0
+        
         for p in paths:
-            if self.storage.add_image_to_category(p, cat_name):
-                count += 1
-        self.show_success("批量添加成功", f"已将 {count} 个表情添加到 '{cat_name}'")
+            res = self.storage.add_image_to_category(p, cat_name)
+            if res == "success":
+                success_count += 1
+            elif res == "already_exists":
+                exist_count += 1
+            else:
+                error_count += 1
+                
+        msg = f"成功添加 {success_count} 项。"
+        if exist_count > 0:
+            msg += f"\n跳过 {exist_count} 项 (目标分类已存在)。"
+        if error_count > 0:
+            msg += f"\n异常 {error_count} 项 (添加失败)。"
+            
+        if success_count > 0:
+            self.show_success("批量添加完成", msg)
+        else:
+            self.show_error("批量添加未执行", msg)
+            
         self.set_selection_mode(False)
-        if self.filter_state.unclassified:
-            for p in paths:
-                self.remove_card_by_path(p)
+        self.on_images_changed()
+
+    def _execute_batch_move(self, paths, target_cat):
+        if not paths: return
+        success_count = 0
+        exist_count = 0
+        error_count = 0
+        
+        for p in paths:
+            res = self.storage.add_image_to_category(p, target_cat)
+            if res in ("success", "already_exists"):
+                if res == "already_exists":
+                    exist_count += 1
+                if self.storage.remove_image_from_category(p, self.current_category):
+                    success_count += 1
+                else:
+                    error_count += 1
+            else:
+                error_count += 1
+                
+        msg = f"成功移动 {success_count} 项。"
+        if exist_count > 0:
+            msg += f"\n其中 {exist_count} 项在目标分类已存在。"
+        if error_count > 0:
+            msg += f"\n异常 {error_count} 项 (移动失败)。"
+            
+        if success_count > 0:
+            self.show_success("批量移动完成", msg)
+        else:
+            self.show_error("批量移动未执行", msg)
+            
+        self.set_selection_mode(False)
+        self.on_images_changed()
 
     def _execute_batch_remove(self, paths):
         if not paths: return
@@ -1712,7 +1776,37 @@ class GalleryInterface(QWidget):
             kw_str
         )
 
-    def on_image_clicked(self, image_path):
+    def on_image_clicked(self, image_path, modifiers=Qt.NoModifier):
+        is_ctrl = bool(modifiers & Qt.ControlModifier)
+        is_shift = bool(modifiers & Qt.ShiftModifier)
+
+        if is_ctrl or is_shift:
+            if not self.is_selection_mode:
+                self.set_selection_mode(True)
+            
+            if is_shift and self._last_clicked_path and self._anchor_from_selection_click:
+                self._execute_shift_selection(self._last_clicked_path, image_path)
+            else:
+                self._toggle_card_selection(image_path)
+                if self._last_clicked_path != image_path:
+                    self._shift_selected_paths.clear()
+                self._last_clicked_path = image_path
+                
+            self._anchor_from_selection_click = True
+            return
+
+        if self.is_selection_mode:
+            if self._last_clicked_path != image_path:
+                self._shift_selected_paths.clear()
+            self._last_clicked_path = image_path
+            self._anchor_from_selection_click = True
+            return
+
+        if self._last_clicked_path != image_path:
+            self._shift_selected_paths.clear()
+        self._last_clicked_path = image_path
+        self._anchor_from_selection_click = False
+
         if self.clipboard.copy_image_to_clipboard(image_path):
             # 记录到最近使用
             limit = self.config.get("recent_limit", 30)
@@ -1731,6 +1825,47 @@ class GalleryInterface(QWidget):
                     return
             
             self.show_success("已复制到剪切板！")
+
+    def _toggle_card_selection(self, image_path):
+        for widget in getattr(self, '_all_card_widgets', []):
+            if widget.image_path == image_path:
+                widget.set_selected(not widget.is_selected)
+                break
+
+    def _execute_shift_selection(self, start_path, end_path):
+        widgets = getattr(self, '_all_card_widgets', [])
+        start_idx = -1
+        end_idx = -1
+        anchor_selected = True
+        
+        for i, widget in enumerate(widgets):
+            if widget.image_path == start_path:
+                start_idx = i
+                anchor_selected = widget.is_selected
+            if widget.image_path == end_path:
+                end_idx = i
+                
+        if start_idx != -1 and end_idx != -1:
+            min_idx = min(start_idx, end_idx)
+            max_idx = max(start_idx, end_idx)
+            
+            new_shift_paths = set()
+            for i in range(min_idx, max_idx + 1):
+                new_shift_paths.add(widgets[i].image_path)
+                
+            # 恢复多出来的卡片状态
+            for path in self._shift_selected_paths:
+                if path not in new_shift_paths:
+                    for w in widgets:
+                        if w.image_path == path:
+                            w.set_selected(not anchor_selected)
+                            break
+                            
+            # 设置新范围内的卡片状态
+            for i in range(min_idx, max_idx + 1):
+                widgets[i].set_selected(anchor_selected)
+                
+            self._shift_selected_paths = new_shift_paths
 
     def simulate_paste(self):
         VK_CONTROL = 0x11
@@ -1944,27 +2079,48 @@ class GalleryInterface(QWidget):
         image_path = widget.image_path
         menu = RoundMenu(parent=self)
         
-        add_to_cat_menu = RoundMenu(title="添加到分类...", parent=menu)
         categories = self.storage.get_all_categories()
+        is_sub_category = self.current_category in categories
+        
+        # 1. 添加到分类...
+        add_to_cat_menu = RoundMenu(title="添加到分类...", parent=menu)
         menu.addMenu(add_to_cat_menu)
         
-        if not categories:
+        has_valid_add_cat = False
+        for cat_name in categories.keys():
+            if cat_name != self.current_category:
+                has_valid_add_cat = True
+                action = Action(cat_name, parent=menu)
+                action.triggered.connect(lambda checked=False, p=image_path, c=cat_name: self._add_to_cat(p, c))
+                add_to_cat_menu.addAction(action)
+                
+        if not has_valid_add_cat:
             add_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
-        else:
+            
+        # 2. 移动到分类... (仅在子分类下显示)
+        if is_sub_category:
+            move_to_cat_menu = RoundMenu(title="移动到分类...", parent=menu)
+            menu.addMenu(move_to_cat_menu)
+            
+            has_valid_move_cat = False
             for cat_name in categories.keys():
-                if cat_name not in ("全部表情", "未分类", "新建分类"):
+                if cat_name != self.current_category:
+                    has_valid_move_cat = True
                     action = Action(cat_name, parent=menu)
-                    action.triggered.connect(lambda checked=False, p=image_path, c=cat_name: self._add_to_cat(p, c))
-                    add_to_cat_menu.addAction(action)
+                    action.triggered.connect(lambda checked=False, p=image_path, c=cat_name: self._move_to_cat(p, c))
+                    move_to_cat_menu.addAction(action)
                     
-        if self.current_category != "全部表情":
+            if not has_valid_move_cat:
+                move_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
+                
+        if is_sub_category:
             menu.addSeparator()
             
             set_icon_action = Action(f"设为 '{self.current_category}' 的分类图标", parent=menu)
             set_icon_action.triggered.connect(lambda: self._set_category_icon(image_path))
             menu.addAction(set_icon_action)
             
-            remove_action = Action(f"从分类 '{self.current_category}' 移除", parent=menu)
+            remove_action = Action(f"从分类 '{self.current_category}' 移出", parent=menu)
             remove_action.triggered.connect(lambda: self._remove_from_cat(image_path))
             menu.addAction(remove_action)
             
@@ -1991,22 +2147,42 @@ class GalleryInterface(QWidget):
     def _build_batch_context_menu(self, paths):
         menu = RoundMenu(parent=self)
         
-        add_to_cat_menu = RoundMenu(title="移动到分类...", parent=menu)
         categories = self.storage.get_all_categories()
+        is_sub_category = self.current_category in categories
+        
+        # 1. 添加到分类...
+        add_to_cat_menu = RoundMenu(title="添加到分类...", parent=menu)
         menu.addMenu(add_to_cat_menu)
         
-        has_valid_cat = False
+        has_valid_add_cat = False
         for cat_name in categories.keys():
-            if cat_name not in ("全部表情", "未分类", "新建分类"):
-                has_valid_cat = True
+            if cat_name != self.current_category:
+                has_valid_add_cat = True
                 action = Action(cat_name, parent=menu)
                 action.triggered.connect(lambda checked=False, p=paths, c=cat_name: self._execute_batch_add(p, c))
                 add_to_cat_menu.addAction(action)
                 
-        if not has_valid_cat:
+        if not has_valid_add_cat:
             add_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
             
-        if self.current_category not in ("全部表情", "未分类"):
+        # 2. 移动到分类... (仅在子分类下显示)
+        if is_sub_category:
+            move_to_cat_menu = RoundMenu(title="移动到分类...", parent=menu)
+            menu.addMenu(move_to_cat_menu)
+            
+            has_valid_move_cat = False
+            for cat_name in categories.keys():
+                if cat_name != self.current_category:
+                    has_valid_move_cat = True
+                    action = Action(cat_name, parent=menu)
+                    action.triggered.connect(lambda checked=False, p=paths, c=cat_name: self._execute_batch_move(p, c))
+                    move_to_cat_menu.addAction(action)
+                    
+            if not has_valid_move_cat:
+                move_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
+                
+        # 3. 从当前分类移出 (仅在子分类下显示)
+        if is_sub_category:
             remove_action = Action(f"从分类 '{self.current_category}' 移出", parent=menu)
             remove_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_remove(p))
             menu.addAction(remove_action)
@@ -2043,10 +2219,25 @@ class GalleryInterface(QWidget):
         widget.set_selected(True)
 
     def _add_to_cat(self, image_path, cat_name):
-        if self.storage.add_image_to_category(image_path, cat_name):
+        res = self.storage.add_image_to_category(image_path, cat_name)
+        if res == "success":
             self.show_success("添加成功", f"已添加到分类 '{cat_name}'")
-            if self.filter_state.unclassified:
-                self.remove_card_by_path(image_path)
+            self.on_images_changed()
+        elif res == "already_exists":
+            self.show_error("添加失败", f"该图片已存在于分类 '{cat_name}' 中")
+        else:
+            self.show_error("添加失败", "发生未知错误")
+
+    def _move_to_cat(self, image_path, target_cat):
+        res = self.storage.add_image_to_category(image_path, target_cat)
+        if res in ("success", "already_exists"):
+            if self.storage.remove_image_from_category(image_path, self.current_category):
+                self.show_success("移动成功", f"已移动到分类 '{target_cat}'")
+                self.on_images_changed()
+            else:
+                self.show_error("移动异常", "已添加到目标分类，但从当前分类移除失败")
+        else:
+            self.show_error("移动失败", "发生未知错误")
 
     def _set_category_icon(self, image_path):
         self.storage.set_category_icon(self.current_category, image_path)

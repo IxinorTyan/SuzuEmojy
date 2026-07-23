@@ -278,9 +278,12 @@ class StorageService:
         abs_filepath = self._to_abspath(filepath)
         if abs_filepath not in categories[category_name]:
             categories[category_name].append(abs_filepath)
-            self.save_categories(categories)
-            return True
-        return False
+            try:
+                self.save_categories(categories)
+                return "success"
+            except Exception:
+                return "error"
+        return "already_exists"
 
     def remove_image_from_category(self, filepath, category_name):
         """将图片从指定分类移除"""

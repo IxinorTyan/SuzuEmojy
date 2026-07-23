@@ -31,11 +31,21 @@ SuzuEmojy 希望把这些麻烦全部解决。
 按下快捷键即(默认ctrl+shift+e,可更改)可立即打开表情面板。
 选择图片后自动粘贴到原来的聊天窗口(没粘上的话可能是光标失焦,不过这个时候表情包依旧复制在剪切板了)。
 
-\\海量图片依旧流畅\\
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%BF%AB%E6%8D%B7%E6%A1%86.gif" width="80%" alt="快捷框">
+
+快捷窗口.按下快捷键(默认ctrl+shift+d,可更改)快速唤出
+在快捷窗口可以搜索到(仅)自己打过关键词的表情包
+按顺序排列最近使用的表情包(默认30,可自定义1-999)
+
+\\快捷导入\\
 
 <img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%AF%BC%E5%85%A5.gif" width="80%" alt="导入">
 
 即使导入上千张图片。界面依然保持流畅。无需等待全部加载完成。
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%A4%B9.gif" width="80%" alt="文件夹">
+
+支持直接导入分类好的文件夹,会自动创建同名分类夹
 
 \\搜索比翻文件夹快得多\\
 
@@ -59,13 +69,21 @@ SuzuEmojy 希望把这些麻烦全部解决。
 
 批量操作
 
-\\浏览器图片一键收藏\\
-
-(这里因为b站评论区动图只有点开才会加载,所以必须点开才能保存)
+\\图片一键收藏\\
 
 <img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%89%92%E5%9B%BE.gif" width="80%" alt="扒图">
 
-很多网页图片直接拖到聊天软件会变成文件。
+复制粘贴导入(这里因为b站评论区动图只有点开才会加载,所以必须点开才能保存)
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%A4%8D%E5%88%B6url.gif" width="80%" alt="url">
+
+通过复制url尝试下载图片(不过不是所有url都能下载)
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/telegram.gif" width="80%" alt="T">
+
+另存为到(\bin)\data\inbox文件夹实现转换webm(导入,所有另存为都可以这样用)
+
+很多网页图片(webp,webm)直接拖到聊天软件会变成文件。
 
 SuzuEmojy 可以自动重新编码。使其真正作为图片保存。
 

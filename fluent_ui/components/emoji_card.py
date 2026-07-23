@@ -73,7 +73,7 @@ class EmojiCard(QLabel):
     """
     Fluent风格的图片组件，用于在网格中展示缩略图并支持点击事件和拖拽排序
     """
-    clicked = Signal(str)  # 点击信号，传递图片路径
+    clicked = Signal(str, Qt.KeyboardModifiers)  # 点击信号，传递图片路径和键盘修饰键状态
     delete_requested = Signal(object, str) # 请求删除的信号: (Widget实例, 路径)
     selection_changed = Signal(str, bool)  # 选中状态改变信号: (路径, 是否选中)
     
@@ -231,10 +231,11 @@ class EmojiCard(QLabel):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             if not self._is_dragging:
-                if self.is_selectable:
+                modifiers = QApplication.keyboardModifiers()
+                if self.is_selectable and not modifiers:
                     self.set_selected(not self.is_selected)
                 else:
-                    self.clicked.emit(self.image_path)
+                    self.clicked.emit(self.image_path, modifiers)
                 
         self._drag_start_pos = None
         self._is_dragging = False
