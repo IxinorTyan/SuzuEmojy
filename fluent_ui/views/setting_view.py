@@ -368,9 +368,13 @@ class SettingInterface(ScrollArea):
         self.themeCard.setTitle(t("外观模式"))
         self.themeCard.setContent(t("更改软件的深浅色模式"))
         # 更新 ComboBox 的选项文本
-        self.themeCard.comboBox.clear()
-        self.themeCard.comboBox.addItems([t("跟随系统"), t("浅色模式"), t("深色模式")])
-        self.themeCard.comboBox.setCurrentIndex(self.themeConfigItem.options.index(self.themeConfigItem.value))
+        self.themeCard.comboBox.blockSignals(True)
+        try:
+            self.themeCard.comboBox.clear()
+            self.themeCard.comboBox.addItems([t("跟随系统"), t("浅色模式"), t("深色模式")])
+            self.themeCard.comboBox.setCurrentIndex(self.themeConfigItem.options.index(self.themeConfigItem.value))
+        finally:
+            self.themeCard.comboBox.blockSignals(False)
         
         self.themeColorCard.setTitle(t("主题颜色"))
         self.themeColorCard.setContent(t("为浅色和深色模式分别设置强调色和背景色"))
