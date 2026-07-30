@@ -2,9 +2,11 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, SwitchSettingCard, OptionsSettingCard, RangeSettingCard,
-    ScrollArea, ExpandLayout, InfoBar, FluentIcon as FIF, LineEdit, Action, Theme, SpinBox
+    ScrollArea, ExpandLayout, InfoBar, FluentIcon as FIF, LineEdit, Action, Theme, SpinBox,
+    ComboBoxSettingCard
 )
 from PySide6.QtGui import QKeySequence
+from services.i18n import t, i18n_engine, SUPPORTED_LANGUAGES
 
 class SpinBoxRangeSettingCard(RangeSettingCard):
     """
@@ -44,13 +46,13 @@ class CustomHotkeySettingCard(SettingCard):
         from qfluentwidgets import PushButton
         
         self.hotkey_input = LineEdit(self)
-        self.hotkey_input.setPlaceholderText("点击输入框并按下快捷键")
+        self.hotkey_input.setPlaceholderText(t("点击输入框并按下快捷键"))
         self.hotkey_input.setReadOnly(True)
         self.hotkey_input.setText(default_hotkey)
         self.hotkey_input.setFixedWidth(200)
         self.hotkey_input.installEventFilter(self)
         
-        self.btn_clear = PushButton("清除", self)
+        self.btn_clear = PushButton(t("清除"), self)
         self.btn_clear.clicked.connect(lambda: self._update_hotkey(""))
         
         self.hBoxLayout.addWidget(self.hotkey_input, 0, Qt.AlignRight)
@@ -113,7 +115,7 @@ class SettingInterface(ScrollArea):
         self._connect_signals()
 
     def _init_ui(self):
-        self.windowGroup = SettingCardGroup("窗口设置", self.scrollWidget)
+        self.windowGroup = SettingCardGroup(t("窗口设置"), self.scrollWidget)
         
         from qfluentwidgets import BoolValidator, qconfig, ConfigItem
         self.alwaysTopConfigItem = ConfigItem(
@@ -123,7 +125,7 @@ class SettingInterface(ScrollArea):
         self.alwaysTopConfigItem.value = self.config.get("always_on_top", True)
         
         self.alwaysTopCard = SwitchSettingCard(
-            FIF.PIN, "主窗口始终置顶", "让表情包管理器始终显示在其他窗口之上",
+            FIF.PIN, t("主窗口始终置顶"), t("让表情包管理器始终显示在其他窗口之上"),
             configItem=self.alwaysTopConfigItem, parent=self.windowGroup
         )
         self.alwaysTopCard.setChecked(self.config.get("always_on_top", True))
@@ -139,7 +141,7 @@ class SettingInterface(ScrollArea):
         self.previewSizeConfigItem.value = self.config.get("preview_size", 320)
         
         self.previewSizeCard = SpinBoxRangeSettingCard(
-            self.previewSizeConfigItem, FIF.ZOOM, "预览浮窗大小", "设置悬停时弹出的大图的像素尺寸",
+            self.previewSizeConfigItem, FIF.ZOOM, t("预览浮窗大小"), t("设置悬停时弹出的大图的像素尺寸"),
             parent=self.windowGroup
         )
         if hasattr(self.previewSizeCard, 'setValue'):
@@ -152,7 +154,7 @@ class SettingInterface(ScrollArea):
         self.quickPanelWidthConfigItem.value = self.config.get("quick_panel_width", 360)
         
         self.quickPanelWidthCard = SpinBoxRangeSettingCard(
-            self.quickPanelWidthConfigItem, FIF.FIT_PAGE, "快速面板宽度", "设置快速表情调用面板的宽度（像素）",
+            self.quickPanelWidthConfigItem, FIF.FIT_PAGE, t("快速面板宽度"), t("设置快速表情调用面板的宽度（像素）"),
             parent=self.windowGroup
         )
         if hasattr(self.quickPanelWidthCard, 'setValue'):
@@ -165,26 +167,55 @@ class SettingInterface(ScrollArea):
         self.quickPanelHeightConfigItem.value = self.config.get("quick_panel_height", 480)
         
         self.quickPanelHeightCard = SpinBoxRangeSettingCard(
-            self.quickPanelHeightConfigItem, FIF.FIT_PAGE, "快速面板高度", "设置快速表情调用面板的高度（像素）",
+            self.quickPanelHeightConfigItem, FIF.FIT_PAGE, t("快速面板高度"), t("设置快速表情调用面板的高度（像素）"),
             parent=self.windowGroup
         )
         if hasattr(self.quickPanelHeightCard, 'setValue'):
             self.quickPanelHeightCard.setValue(self.config.get("quick_panel_height", 480))
 
-        self.themeGroup = SettingCardGroup("个性化", self.scrollWidget)
+        self.themeGroup = SettingCardGroup(t("个性化"), self.scrollWidget)
         
-        from qfluentwidgets import OptionsValidator, OptionsConfigItem, ComboBoxSettingCard
+        from qfluentwidgets import OptionsValidator, OptionsConfigItem
+        
+        # 语言设置
+        self.languageConfigItem = OptionsConfigItem(
+            "Theme", "Language", "zh",
+            OptionsValidator([lang[0] for lang in SUPPORTED_LANGUAGES]),
+            restart=False
+        )
+        self.languageConfigItem.value = self.config.get("language", "zh")
+        
+        self.languageCard = ComboBoxSettingCard(
+            self.languageConfigItem, FIF.LANGUAGE, t("语言 (Language)"), t("更改软件的显示语言"),
+            texts=[lang[1] for lang in SUPPORTED_LANGUAGES],
+            parent=self.themeGroup
+        )
         
         self.themeConfigItem = OptionsConfigItem(
             "Theme", "Mode", "system",
             OptionsValidator(["system", "light", "dark"]),
             restart=True
         )
-        self.themeConfigItem.value = self.config.get("theme_mode", "system")
+        # 兼容旧配置名 theme_mode，新配置名 appearance_mode
+        appearance_mode = self.config.get("appearance_mode", self.config.get("theme_mode", "system"))
+        self.themeConfigItem.value = appearance_mode
         
         self.themeCard = ComboBoxSettingCard(
-            self.themeConfigItem, FIF.BRUSH, "界面主题", "更改软件的外观主题",
-            texts=["跟随系统", "浅色模式", "深色模式"],
+            self.themeConfigItem, FIF.BRUSH, t("外观模式"), t("更改软件的深浅色模式"),
+            texts=[t("跟随系统"), t("浅色模式"), t("深色模式")],
+            parent=self.themeGroup
+        )
+        
+        from fluent_ui.components.theme_color_card import ThemeColorSettingCard
+        
+        # 兼容旧配置名 theme_color
+        old_theme_color = self.config.get("theme_color", "white")
+        light_key = self.config.get("light_theme_key", old_theme_color)
+        dark_key = self.config.get("dark_theme_key", old_theme_color)
+        
+        self.themeColorCard = ThemeColorSettingCard(
+            t("主题颜色"), t("为浅色和深色模式分别设置强调色和背景色"), FIF.PALETTE,
+            light_key, dark_key,
             parent=self.themeGroup
         )
         
@@ -196,7 +227,7 @@ class SettingInterface(ScrollArea):
         self.useSystemFontConfigItem.value = self.config.get("use_system_font", False)
         
         self.useSystemFontCard = SwitchSettingCard(
-            FIF.FONT, "使用系统默认字体", "关闭以使用组件库默认字体。开启后将跟随系统字体，但可能出现排版错位、文字被裁剪等显示问题。更改后需重启软件生效。",
+            FIF.FONT, t("使用系统默认字体"), t("关闭以使用组件库默认字体。开启后将跟随系统字体，但可能出现排版错位、文字被裁剪等显示问题。更改后需重启软件生效。"),
             configItem=self.useSystemFontConfigItem, parent=self.themeGroup
         )
         self.useSystemFontCard.setChecked(self.config.get("use_system_font", False))
@@ -208,7 +239,7 @@ class SettingInterface(ScrollArea):
         self.sidebarIconSizeConfigItem.value = self.config.get("sidebar_icon_size", 20)
         
         self.sidebarIconSizeCard = SpinBoxRangeSettingCard(
-            self.sidebarIconSizeConfigItem, FIF.FOLDER, "列表模式下侧边栏图标大小", "设置左侧分类列表图标的尺寸",
+            self.sidebarIconSizeConfigItem, FIF.FOLDER, t("列表模式下侧边栏图标大小"), t("设置左侧分类列表图标的尺寸"),
             parent=self.themeGroup
         )
         if hasattr(self.sidebarIconSizeCard, 'setValue'):
@@ -222,12 +253,12 @@ class SettingInterface(ScrollArea):
         self.showSettingBtnConfigItem.value = self.config.get("show_setting_button", True)
         
         self.showSettingBtnCard = SwitchSettingCard(
-            FIF.SETTING, "显示设置入口", "在主面板右上角显示快速进入设置的按钮",
+            FIF.SETTING, t("显示设置入口"), t("在主面板右上角显示快速进入设置的按钮"),
             configItem=self.showSettingBtnConfigItem, parent=self.themeGroup
         )
         self.showSettingBtnCard.setChecked(self.config.get("show_setting_button", True))
         
-        self.advancedGroup = SettingCardGroup("高级设置", self.scrollWidget)
+        self.advancedGroup = SettingCardGroup(t("高级设置"), self.scrollWidget)
         
         self.previewDelayConfigItem = RangeConfigItem(
             "Advanced", "PreviewDelay", 500,
@@ -236,7 +267,7 @@ class SettingInterface(ScrollArea):
         self.previewDelayConfigItem.value = self.config.get("preview_delay", 500)
         
         self.previewDelayCard = SpinBoxRangeSettingCard(
-            self.previewDelayConfigItem, FIF.HISTORY, "悬停预览延迟", "设置鼠标悬停多久后弹出大图预览",
+            self.previewDelayConfigItem, FIF.HISTORY, t("悬停预览延迟"), t("设置鼠标悬停多久后弹出大图预览"),
             parent=self.advancedGroup
         )
         if hasattr(self.previewDelayCard, 'setValue'):
@@ -249,7 +280,7 @@ class SettingInterface(ScrollArea):
         self.batchSizeConfigItem.value = self.config.get("render_batch_size", 50)
         
         self.batchSizeCard = SpinBoxRangeSettingCard(
-            self.batchSizeConfigItem, FIF.SPEED_HIGH, "单次渲染上限", "设置每次加载图片的数量，数值越小越流畅但加载越久",
+            self.batchSizeConfigItem, FIF.SPEED_HIGH, t("单次渲染上限"), t("设置每次加载图片的数量，数值越小越流畅但加载越久"),
             parent=self.advancedGroup
         )
         if hasattr(self.batchSizeCard, 'setValue'):
@@ -262,7 +293,7 @@ class SettingInterface(ScrollArea):
         self.recentLimitConfigItem.value = self.config.get("recent_limit", 30)
         
         self.recentLimitCard = SpinBoxRangeSettingCard(
-            self.recentLimitConfigItem, FIF.HISTORY, "最近使用记录上限", "设置快速面板中显示的最近使用表情数量",
+            self.recentLimitConfigItem, FIF.HISTORY, t("最近使用记录上限"), t("设置快速面板中显示的最近使用表情数量"),
             parent=self.advancedGroup
         )
 
@@ -273,19 +304,19 @@ class SettingInterface(ScrollArea):
         self.sidebarTooltipConfigItem.value = self.config.get("show_sidebar_tooltip", True)
         
         self.sidebarTooltipCard = SwitchSettingCard(
-            FIF.INFO, "图标模式悬浮提示", "在侧边栏折叠为仅图标模式时，鼠标悬停显示分类名称",
+            FIF.INFO, t("图标模式悬浮提示"), t("在侧边栏折叠为仅图标模式时，鼠标悬停显示分类名称"),
             configItem=self.sidebarTooltipConfigItem, parent=self.advancedGroup
         )
         self.sidebarTooltipCard.setChecked(self.config.get("show_sidebar_tooltip", True))
         
         self.hotkeyCard = CustomHotkeySettingCard(
-            "唤醒快捷键", "设置全局唤醒和隐藏主面板的快捷键", FIF.COMMAND_PROMPT,
+            t("唤醒快捷键"), t("设置全局唤醒和隐藏主面板的快捷键"), FIF.COMMAND_PROMPT,
             self.config.get("global_hotkey", "ctrl+shift+e"),
             parent=self.advancedGroup
         )
         
         self.quickHotkeyCard = CustomHotkeySettingCard(
-            "快速面板快捷键", "设置全局唤醒快速表情调用面板的快捷键", FIF.COMMAND_PROMPT,
+            t("快速面板快捷键"), t("设置全局唤醒快速表情调用面板的快捷键"), FIF.COMMAND_PROMPT,
             self.config.get("quick_panel_hotkey", "alt+2"),
             parent=self.advancedGroup
         )
@@ -295,7 +326,9 @@ class SettingInterface(ScrollArea):
         self.windowGroup.addSettingCard(self.quickPanelWidthCard)
         self.windowGroup.addSettingCard(self.quickPanelHeightCard)
         
+        self.themeGroup.addSettingCard(self.languageCard)
         self.themeGroup.addSettingCard(self.themeCard)
+        self.themeGroup.addSettingCard(self.themeColorCard)
         self.themeGroup.addSettingCard(self.sidebarIconSizeCard)
         self.themeGroup.addSettingCard(self.showSettingBtnCard)
         self.themeGroup.addSettingCard(self.useSystemFontCard)
@@ -313,6 +346,58 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addWidget(self.windowGroup)
         self.expandLayout.addWidget(self.themeGroup)
         self.expandLayout.addWidget(self.advancedGroup)
+        
+        # 绑定语言切换信号
+        i18n_engine.language_changed.connect(self.update_texts)
+
+    def update_texts(self, lang):
+        """动态刷新界面文本"""
+        self.windowGroup.titleLabel.setText(t("窗口设置"))
+        self.alwaysTopCard.setTitle(t("主窗口始终置顶"))
+        self.alwaysTopCard.setContent(t("让表情包管理器始终显示在其他窗口之上"))
+        self.previewSizeCard.setTitle(t("预览浮窗大小"))
+        self.previewSizeCard.setContent(t("设置悬停时弹出的大图的像素尺寸"))
+        self.quickPanelWidthCard.setTitle(t("快速面板宽度"))
+        self.quickPanelWidthCard.setContent(t("设置快速表情调用面板的宽度（像素）"))
+        self.quickPanelHeightCard.setTitle(t("快速面板高度"))
+        self.quickPanelHeightCard.setContent(t("设置快速表情调用面板的高度（像素）"))
+        
+        self.themeGroup.titleLabel.setText(t("个性化"))
+        self.languageCard.setTitle(t("语言 (Language)"))
+        self.languageCard.setContent(t("更改软件的显示语言"))
+        self.themeCard.setTitle(t("外观模式"))
+        self.themeCard.setContent(t("更改软件的深浅色模式"))
+        # 更新 ComboBox 的选项文本
+        self.themeCard.comboBox.clear()
+        self.themeCard.comboBox.addItems([t("跟随系统"), t("浅色模式"), t("深色模式")])
+        self.themeCard.comboBox.setCurrentIndex(self.themeConfigItem.options.index(self.themeConfigItem.value))
+        
+        self.themeColorCard.setTitle(t("主题颜色"))
+        self.themeColorCard.setContent(t("为浅色和深色模式分别设置强调色和背景色"))
+        self.useSystemFontCard.setTitle(t("使用系统默认字体"))
+        self.useSystemFontCard.setContent(t("关闭以使用组件库默认字体。开启后将跟随系统字体，但可能出现排版错位、文字被裁剪等显示问题。更改后需重启软件生效。"))
+        self.sidebarIconSizeCard.setTitle(t("列表模式下侧边栏图标大小"))
+        self.sidebarIconSizeCard.setContent(t("设置左侧分类列表图标的尺寸"))
+        self.showSettingBtnCard.setTitle(t("显示设置入口"))
+        self.showSettingBtnCard.setContent(t("在主面板右上角显示快速进入设置的按钮"))
+        
+        self.advancedGroup.titleLabel.setText(t("高级设置"))
+        self.previewDelayCard.setTitle(t("悬停预览延迟"))
+        self.previewDelayCard.setContent(t("设置鼠标悬停多久后弹出大图预览"))
+        self.batchSizeCard.setTitle(t("单次渲染上限"))
+        self.batchSizeCard.setContent(t("设置每次加载图片的数量，数值越小越流畅但加载越久"))
+        self.recentLimitCard.setTitle(t("最近使用记录上限"))
+        self.recentLimitCard.setContent(t("设置快速面板中显示的最近使用表情数量"))
+        self.sidebarTooltipCard.setTitle(t("图标模式悬浮提示"))
+        self.sidebarTooltipCard.setContent(t("在侧边栏折叠为仅图标模式时，鼠标悬停显示分类名称"))
+        self.hotkeyCard.setTitle(t("唤醒快捷键"))
+        self.hotkeyCard.setContent(t("设置全局唤醒和隐藏主面板的快捷键"))
+        self.hotkeyCard.hotkey_input.setPlaceholderText(t("点击输入框并按下快捷键"))
+        self.hotkeyCard.btn_clear.setText(t("清除"))
+        self.quickHotkeyCard.setTitle(t("快速面板快捷键"))
+        self.quickHotkeyCard.setContent(t("设置全局唤醒快速表情调用面板的快捷键"))
+        self.quickHotkeyCard.hotkey_input.setPlaceholderText(t("点击输入框并按下快捷键"))
+        self.quickHotkeyCard.btn_clear.setText(t("清除"))
 
     def _connect_signals(self):
         self.alwaysTopCard.checkedChanged.connect(self._on_always_top_changed)
@@ -329,12 +414,25 @@ class SettingInterface(ScrollArea):
         self.hotkeyCard.hotkey_changed.connect(lambda v: self._on_hotkey_changed("global_hotkey", v, self.hotkeyCard))
         self.quickHotkeyCard.hotkey_changed.connect(lambda v: self._on_hotkey_changed("quick_panel_hotkey", v, self.quickHotkeyCard))
         
+        def on_language_changed(index):
+            if 0 <= index < len(SUPPORTED_LANGUAGES):
+                lang_code = SUPPORTED_LANGUAGES[index][0]
+                i18n_engine.set_language(lang_code)
+                
+        self.languageCard.comboBox.currentIndexChanged.connect(on_language_changed)
+        
         def on_theme_changed(index):
             theme_keys = ["system", "light", "dark"]
             if 0 <= index < len(theme_keys):
-                self._save_config("theme_mode", theme_keys[index], True)
+                self._save_config("appearance_mode", theme_keys[index], True)
                 
         self.themeCard.comboBox.currentIndexChanged.connect(on_theme_changed)
+        
+        def on_color_changed(mode, theme_key):
+            config_key = "dark_theme_key" if mode == "dark" else "light_theme_key"
+            self._save_config(config_key, theme_key, True)
+            
+        self.themeColorCard.color_changed.connect(on_color_changed)
         self.useSystemFontCard.checkedChanged.connect(lambda v: self._save_config("use_system_font", v, True))
 
     def _on_hotkey_changed(self, key, value, card):
@@ -344,8 +442,8 @@ class SettingInterface(ScrollArea):
         if value and value == other_value:
             from qfluentwidgets import InfoBar, InfoBarPosition
             InfoBar.error(
-                title="快捷键冲突",
-                content="该快捷键已被其他功能占用，请重新设置。",
+                title=t("快捷键冲突"),
+                content=t("该快捷键已被其他功能占用，请重新设置。"),
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,

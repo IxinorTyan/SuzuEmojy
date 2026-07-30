@@ -116,12 +116,14 @@ class EmojiCard(QLabel):
 
     def update_style(self):
         if self.is_selected:
-            self.setStyleSheet("""
-                QLabel#EmojiCard {
+            from qfluentwidgets import themeColor
+            color = themeColor().name()
+            self.setStyleSheet(f"""
+                QLabel#EmojiCard {{
                     border-radius: 8px;
-                    background-color: rgba(0, 120, 212, 0.15);
-                    border: 2px solid #0078D4;
-                }
+                    background-color: {color}26; /* 15% opacity */
+                    border: 2px solid {color};
+                }}
             """)
         else:
             self.setStyleSheet("""
@@ -142,11 +144,13 @@ class EmojiCard(QLabel):
         if self.is_selected:
             from PySide6.QtGui import QPainter, QColor, QPen
             from PySide6.QtCore import QRect, QPoint
+            from qfluentwidgets import themeColor
+            
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
             
-            # 画一个蓝色底色的圆
-            painter.setBrush(QColor("#0078D4"))
+            # 画一个主题色底色的圆
+            painter.setBrush(themeColor())
             painter.setPen(Qt.NoPen)
             radius = 12
             center = QPoint(self.width() - radius - 6, radius + 6)

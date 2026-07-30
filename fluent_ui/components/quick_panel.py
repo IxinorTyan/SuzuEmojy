@@ -87,36 +87,7 @@ class QuickPanel(QWidget):
         # 隐藏 qfluentwidgets 默认的聚焦底部粗边框 (由 paintEvent 绘制)
         self.search_box.setCustomFocusedBorderColor(Qt.transparent, Qt.transparent)
         
-        # 使用 setCustomStyleSheet 追加样式，保留原有的 padding、圆角和字体颜色
-        # 使用 ID 选择器提高优先级，确保覆盖默认的 LineEdit:focus[transparent=true] 样式
-        from qfluentwidgets import setCustomStyleSheet
-        light_qss = """
-            SearchLineEdit#quickPanelSearchBox {
-                border: 1px solid rgba(0, 0, 0, 0.08);
-                background-color: rgba(255, 255, 255, 0.7);
-            }
-            SearchLineEdit#quickPanelSearchBox:hover {
-                background-color: rgba(249, 249, 249, 0.5);
-            }
-            SearchLineEdit#quickPanelSearchBox:focus {
-                border: 1px solid rgba(0, 0, 0, 0.08);
-                background-color: rgba(255, 255, 255, 0.9);
-            }
-        """
-        dark_qss = """
-            SearchLineEdit#quickPanelSearchBox {
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                background-color: rgba(255, 255, 255, 0.05);
-            }
-            SearchLineEdit#quickPanelSearchBox:hover {
-                background-color: rgba(255, 255, 255, 0.08);
-            }
-            SearchLineEdit#quickPanelSearchBox:focus {
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                background-color: rgba(255, 255, 255, 0.05);
-            }
-        """
-        setCustomStyleSheet(self.search_box, light_qss, dark_qss)
+        # 样式在 update_theme 中动态设置，以支持主题色
         
         self.bg_layout.addWidget(self.search_box)
         
@@ -194,6 +165,9 @@ class QuickPanel(QWidget):
 
     def paintEvent(self, event):
         from PySide6.QtGui import QPainter, QColor, QPainterPath
+        from fluent_ui.theme import get_current_background_color
+        from qfluentwidgets import isDarkTheme
+        
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
@@ -201,16 +175,53 @@ class QuickPanel(QWidget):
         # 留出 1px 边距防止裁剪
         path.addRoundedRect(1, 1, self.width() - 2, self.height() - 2, 8, 8)
         
-        if isDarkTheme():
-            painter.fillPath(path, QColor(32, 32, 32, 240))
+        is_dark = isDarkTheme()
+        bg_color = get_current_background_color(self.config, is_dark)
+        # 保持半透明毛玻璃质感
+        bg_color.setAlpha(240)
+        
+        painter.fillPath(path, bg_color)
+        
+        if is_dark:
             painter.setPen(QColor(68, 68, 68))
         else:
-            painter.fillPath(path, QColor(249, 249, 249, 240))
             painter.setPen(QColor(204, 204, 204))
             
         painter.drawPath(path)
 
     def update_theme(self):
+        # 动态更新搜索框样式，使其聚焦边框跟随主题色
+        from qfluentwidgets import setCustomStyleSheet, themeColor
+        color = themeColor().name()
+        
+        light_qss = f"""
+            SearchLineEdit#quickPanelSearchBox {{
+                border: 1px solid rgba(0, 0, 0, 0.08);
+                background-color: rgba(255, 255, 255, 0.7);
+            }}
+            SearchLineEdit#quickPanelSearchBox:hover {{
+                background-color: rgba(249, 249, 249, 0.5);
+            }}
+            SearchLineEdit#quickPanelSearchBox:focus {{
+                border: 1px solid {color};
+                background-color: rgba(255, 255, 255, 0.9);
+            }}
+        """
+        dark_qss = f"""
+            SearchLineEdit#quickPanelSearchBox {{
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.05);
+            }}
+            SearchLineEdit#quickPanelSearchBox:hover {{
+                background-color: rgba(255, 255, 255, 0.08);
+            }}
+            SearchLineEdit#quickPanelSearchBox:focus {{
+                border: 1px solid {color};
+                background-color: rgba(255, 255, 255, 0.05);
+            }}
+        """
+        setCustomStyleSheet(self.search_box, light_qss, dark_qss)
+        
         # 背景绘制已移至 paintEvent，这里只需触发重绘
         self.update()
 

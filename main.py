@@ -30,6 +30,7 @@ def main():
     from qfluentwidgets import setTheme, Theme, RoundMenu, Action
     from services.storage import StorageService
     from services.clipboard import ClipboardService
+    from services.i18n import i18n_engine, t
     
     app.setQuitOnLastWindowClosed(False)
     
@@ -37,6 +38,9 @@ def main():
     
     storage_service = StorageService()
     clipboard_service = ClipboardService()
+    
+    # 初始化多语言引擎
+    i18n_engine.init(config_service)
     
     theme_mode = config_service.get("theme_mode", "system")
     if theme_mode == "dark":
@@ -64,19 +68,26 @@ def main():
     
     tray_menu = RoundMenu()
     
-    show_action = Action("显示主面板", triggered=window.show_gallery)
+    show_action = Action(t("显示主面板"), triggered=window.show_gallery)
     tray_menu.addAction(show_action)
     
     def open_settings():
         window.show_settings()
         
-    settings_action = Action("设置", triggered=open_settings)
+    settings_action = Action(t("设置"), triggered=open_settings)
     tray_menu.addAction(settings_action)
     
     tray_menu.addSeparator()
     
-    quit_action = Action("退出", triggered=app.quit)
+    quit_action = Action(t("退出"), triggered=app.quit)
     tray_menu.addAction(quit_action)
+    
+    # 动态刷新托盘菜单文案
+    def update_tray_texts(lang):
+        show_action.setText(t("显示主面板"))
+        settings_action.setText(t("设置"))
+        quit_action.setText(t("退出"))
+    i18n_engine.language_changed.connect(update_tray_texts)
     
     def on_tray_activated(reason):
         if reason == QSystemTrayIcon.Trigger or reason == QSystemTrayIcon.DoubleClick:

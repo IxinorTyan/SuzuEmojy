@@ -87,24 +87,44 @@ class MainWindow(FramelessWindow):
 
     def _update_background(self):
         """处理深色模式背景"""
-        from qfluentwidgets import isDarkTheme
+        from qfluentwidgets import isDarkTheme, setThemeColor
         from PySide6.QtGui import QPalette, QColor
+        from fluent_ui.theme import get_current_background_color, get_current_accent_color
         
         palette = self.palette()
         is_dark = isDarkTheme()
         
-        if is_dark:
-            self.setStyleSheet("MainWindow { background-color: #202020; }")
-            palette.setColor(QPalette.Window, QColor("#202020"))
-        else:
-            self.setStyleSheet("MainWindow { background-color: #F9F9F9; }")
-            palette.setColor(QPalette.Window, QColor("#F9F9F9"))
+        # 更新强调色
+        accent_color = get_current_accent_color(self.config, is_dark)
+        setThemeColor(accent_color)
+        
+        # 更新背景色
+        bg_color = get_current_background_color(self.config, is_dark)
+        self.setStyleSheet(f"MainWindow {{ background-color: {bg_color.name()}; }}")
+        palette.setColor(QPalette.Window, bg_color)
+        
+        icon_color = QColor(255, 255, 255) if is_dark else QColor(0, 0, 0)
             
         self.setPalette(palette)
         self.setAutoFillBackground(True)
         
         if hasattr(self, 'windowEffect'):
             self.windowEffect.setMicaEffect(self.winId(), isDarkMode=is_dark)
+
+        # 更新标题栏按钮颜色
+        if hasattr(self, 'titleBar'):
+            for btn in [self.titleBar.minBtn, self.titleBar.maxBtn]:
+                if btn:
+                    btn.setNormalColor(icon_color)
+                    btn.setHoverColor(icon_color)
+                    btn.setPressedColor(icon_color)
+                    btn.update()
+                    
+            if self.titleBar.closeBtn:
+                self.titleBar.closeBtn.setNormalColor(icon_color)
+                self.titleBar.closeBtn.setHoverColor(QColor(255, 255, 255))
+                self.titleBar.closeBtn.setPressedColor(QColor(255, 255, 255))
+                self.titleBar.closeBtn.update()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -288,17 +308,21 @@ class MainWindow(FramelessWindow):
         elif changed_key in ["global_hotkey", "quick_panel_hotkey"]:
             self.bind_global_hotkey()
             
-        elif changed_key == "theme_mode":
+        elif changed_key in ["appearance_mode", "light_theme_key", "dark_theme_key"]:
             from qfluentwidgets import setTheme, Theme
-            theme_mode = self.config.get("theme_mode", "system")
-            if theme_mode == "dark":
+            appearance_mode = self.config.get("appearance_mode", self.config.get("theme_mode", "system"))
+            if appearance_mode == "dark":
                 setTheme(Theme.DARK)
-            elif theme_mode == "light":
+            elif appearance_mode == "light":
                 setTheme(Theme.LIGHT)
             else:
                 setTheme(Theme.AUTO)
                 
             self._update_background()
+            
+            # 通知色块选择器更新颜色
+            if hasattr(self.setting_interface, 'themeColorCard'):
+                self.setting_interface.themeColorCard.update_colors()
             
             self.gallery_interface.refresh_gallery()
             self.gallery_interface.sidebar.update_theme()
@@ -332,7 +356,7 @@ class MainWindow(FramelessWindow):
         self.gallery_interface.handle_global_paste()
 
     def nativeEvent(self, eventType, message):
-        """监听 Windows 底层消息，处理睡眠唤醒后快捷键失效的问题"""
+        """监听 Windows 底层消息，处理睡眠唤醒后快捷键失效的问题，以及系统主题切换"""
         try:
             msg = message.contents
             # WM_POWERBROADCAST = 0x0218
@@ -342,6 +366,13 @@ class MainWindow(FramelessWindow):
                 if msg.wParam == 0x0012 or msg.wParam == 0x0007:
                     # 延迟重新绑定快捷键，确保系统钩子机制已完全恢复
                     QTimer.singleShot(2000, self.bind_global_hotkey)
+            # WM_SETTINGCHANGE = 0x001A
+            elif msg.message == 0x001A:
+                # 系统设置改变（包括深浅色模式切换）
+                appearance_mode = self.config.get("appearance_mode", self.config.get("theme_mode", "system"))
+                if appearance_mode == "system":
+                    # 延迟一点点执行，确保 qfluentwidgets 已经处理完系统主题切换
+                    QTimer.singleShot(100, lambda: self.on_settings_changed("appearance_mode"))
         except Exception:
             pass
         return super().nativeEvent(eventType, message)

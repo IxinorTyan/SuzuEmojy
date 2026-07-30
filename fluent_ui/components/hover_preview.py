@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, QSize, QByteArray, QBuffer
 from PySide6.QtGui import QPixmap, QMovie
 from qfluentwidgets import BodyLabel, CaptionLabel
 import darkdetect
+from services.i18n import t, i18n_engine
 
 class HoverPreviewPopup(QWidget):
     """
@@ -30,9 +31,9 @@ class HoverPreviewPopup(QWidget):
         self.meta_layout = QVBoxLayout()
         self.meta_layout.setSpacing(2)
         
-        self.category_label = CaptionLabel("🗂️ 无分类")
+        self.category_label = CaptionLabel(f"🗂️ {t('无分类')}")
         
-        self.keyword_label = CaptionLabel("🏷️ 无关键词")
+        self.keyword_label = CaptionLabel(f"🏷️ {t('无关键词')}")
         
         self.meta_layout.addWidget(self.category_label)
         self.meta_layout.addWidget(self.keyword_label)
@@ -41,29 +42,46 @@ class HoverPreviewPopup(QWidget):
         
         self.current_movie = None
         self.setObjectName("PreviewPopup")
+        
+        # 绑定语言切换信号
+        i18n_engine.language_changed.connect(self.update_texts)
+
+    def update_texts(self, lang):
+        """动态刷新界面文本"""
+        # 只有在没有实际数据时才刷新默认文本
+        if not hasattr(self, 'current_category_str') or not self.current_category_str:
+            self.category_label.setText(f"🗂️ {t('无分类')}")
+            self.keyword_label.setText(f"🏷️ {t('无关键词')}")
+        else:
+            # 如果有数据，重新翻译并显示
+            self.category_label.setText(f"🗂️ {t('分类')}: {self.current_category_str}")
+            self.keyword_label.setText(f"🏷️ {t('关键词')}: {self.current_keyword_str}")
 
     def update_theme(self):
         """动态同步当前 qfluentwidgets 的主题风格"""
         from qfluentwidgets import isDarkTheme
+        from qfluentwidgets import themeColor
+        color = themeColor().name()
+        
         if isDarkTheme():
             self.category_label.setStyleSheet("color: white;")
             self.keyword_label.setStyleSheet("color: white;")
-            self.setStyleSheet("""
-                QWidget#PreviewPopup {
+            self.setStyleSheet(f"""
+                QWidget#PreviewPopup {{
                     background-color: rgba(30, 30, 30, 0.95);
-                    border: 1px solid #444;
+                    border: 1px solid {color};
                     border-radius: 8px;
-                }
+                }}
             """)
         else:
             self.category_label.setStyleSheet("color: #222;")
             self.keyword_label.setStyleSheet("color: #222;")
-            self.setStyleSheet("""
-                QWidget#PreviewPopup {
+            self.setStyleSheet(f"""
+                QWidget#PreviewPopup {{
                     background-color: rgba(255, 255, 255, 0.95);
-                    border: 1px solid #ccc;
+                    border: 1px solid {color};
                     border-radius: 8px;
-                }
+                }}
             """)
 
     def show_preview(self, image_path, global_pos, size_config=320, category_str="无", keyword_str="无"):
@@ -75,8 +93,12 @@ class HoverPreviewPopup(QWidget):
 
         self.update_theme()
         
-        self.category_label.setText(f"🗂️ 分类: {category_str}")
-        self.keyword_label.setText(f"🏷️ 关键词: {keyword_str}")
+        # 保存当前状态以便语言切换时刷新
+        self.current_category_str = category_str
+        self.current_keyword_str = keyword_str
+        
+        self.category_label.setText(f"🗂️ {t('分类')}: {category_str}")
+        self.keyword_label.setText(f"🏷️ {t('关键词')}: {keyword_str}")
 
         # 1. 停止清理上一次的动图
         if self.current_movie:
