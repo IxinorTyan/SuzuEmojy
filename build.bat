@@ -76,6 +76,7 @@ if !BUILD_FAILED! equ 1 goto :fail
 
 call :copy_required_dir "fluent_ui" "dist\SuzuEmojy_Release\fluent_ui"
 call :copy_required_dir "services" "dist\SuzuEmojy_Release\services"
+call :copy_required_dir "translations" "dist\SuzuEmojy_Release\translations"
 
 if !BUILD_FAILED! equ 1 goto :fail
 

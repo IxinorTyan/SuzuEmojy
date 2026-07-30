@@ -106,6 +106,9 @@ def main():
         if os.path.exists("data"):
             shutil.copytree("data", os.path.join(bin_dir, "data"))
             
+        if os.path.exists("translations"):
+            shutil.copytree("translations", os.path.join(bin_dir, "translations"))
+            
         # 4. 创建一个极小的 VBS 启动脚本并转换为 EXE (或者直接提供一个启动脚本)
         # 为了不引入额外的 C++ 编译器依赖，我们写一个极小的 Python 脚本，用 PyInstaller 打包成单文件作为外壳
         launcher_code = """import os
