@@ -31,7 +31,7 @@ SuzuEmojy 希望把这些麻烦全部解决。
 按下快捷键即(默认ctrl+shift+e,可更改)可立即打开表情面板。
 选择图片后自动粘贴到原来的聊天窗口(没粘上的话可能是光标失焦,不过这个时候表情包依旧复制在剪切板了)。
 
-<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%BF%AB%E6%8D%B7%E6%A1%86.gif" width="80%" alt="快捷框">
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%BF%AB%E6%8D%B7%E7%AA%97%E5%8F%A3.gif" width="80%" alt="快捷框">
 
 快捷窗口.按下快捷键(默认ctrl+shift+d,可更改)快速唤出
 在快捷窗口可以搜索到(仅)自己打过关键词的表情包
