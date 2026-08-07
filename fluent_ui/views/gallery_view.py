@@ -158,6 +158,7 @@ class ImportThread(QThread):
             if saved_path:
                 if is_duplicate:
                     skipped_count += 1
+                    self.storage.move_image_to_front(saved_path, self.target_category)
                 else:
                     saved_count += 1
                     
@@ -875,8 +876,17 @@ class GalleryInterface(QWidget):
         self._anchor_from_selection_click = False
         self._shift_selected_paths = set()
         
+        # 绑定语言切换事件
+        from services.i18n import i18n_engine
+        i18n_engine.language_changed.connect(self._update_i18n_texts)
+
         # 首次强制刷新
         self.sidebar.refresh_list("全部表情")
+
+    def _update_i18n_texts(self, lang):
+        from services.i18n import t
+        if hasattr(self, 'search_box'):
+            self.search_box.setPlaceholderText(t("搜索表情关键词..."))
         
         # 滚动位置记录
         self._saved_scroll_position = 0
@@ -932,8 +942,9 @@ class GalleryInterface(QWidget):
         self.btn_multi_select.setToolTip("批量选择")
         self.btn_multi_select.clicked.connect(lambda: self.set_selection_mode(True))
         
+        from services.i18n import t
         self.search_box = SearchLineEdit(self.top_bar)
-        self.search_box.setPlaceholderText("搜索表情关键词...")
+        self.search_box.setPlaceholderText(t("搜索表情关键词..."))
         self.search_box.setFixedWidth(240)
         # 搜索防抖定时器
         self._search_timer = QTimer(self)
@@ -2384,11 +2395,13 @@ class GalleryInterface(QWidget):
         elif data_type == 'image':
             saved_path, is_duplicate = self.storage.save_image(data)
             if saved_path:
-                if self.current_category not in ("全部表情", "未分类"):
+                if is_duplicate:
+                    self.storage.move_image_to_front(saved_path, self.current_category)
+                elif self.current_category not in ("全部表情", "未分类"):
                     self.storage.add_image_to_category(saved_path, self.current_category)
                 self.on_images_changed()
                 if is_duplicate:
-                    self.show_success("导入完成", "该图片已存在，已跳过保存")
+                    self.show_success("导入完成", "该图片已存在，已排至最前")
                 else:
                     self.show_success("保存成功", "静态图片已保存")
         elif data_type == 'network_url':

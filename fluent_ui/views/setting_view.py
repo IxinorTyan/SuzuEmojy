@@ -1,9 +1,9 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, SwitchSettingCard, OptionsSettingCard, RangeSettingCard,
     ScrollArea, ExpandLayout, InfoBar, FluentIcon as FIF, LineEdit, Action, Theme, SpinBox,
-    ComboBoxSettingCard
+    ComboBoxSettingCard, TransparentToolButton, TitleLabel
 )
 from PySide6.QtGui import QKeySequence
 from services.i18n import t, i18n_engine, SUPPORTED_LANGUAGES
@@ -98,6 +98,7 @@ class SettingInterface(ScrollArea):
     """设置界面 (View)"""
     
     settings_changed = Signal(str)
+    back_requested = Signal()
 
     def __init__(self, config_service, parent=None):
         super().__init__(parent=parent)
@@ -115,6 +116,22 @@ class SettingInterface(ScrollArea):
         self._connect_signals()
 
     def _init_ui(self):
+        # 顶部返回工具栏
+        self.topBar = QWidget(self.scrollWidget)
+        self.topBarLayout = QHBoxLayout(self.topBar)
+        self.topBarLayout.setContentsMargins(0, 0, 0, 0)
+        self.topBarLayout.setSpacing(12)
+
+        self.btnBack = TransparentToolButton(FIF.LEFT_ARROW, self.topBar)
+        self.btnBack.setToolTip(t("返回主面板"))
+        self.btnBack.clicked.connect(self.back_requested.emit)
+
+        self.titleLabel = TitleLabel(t("设置"), self.topBar)
+
+        self.topBarLayout.addWidget(self.btnBack)
+        self.topBarLayout.addWidget(self.titleLabel)
+        self.topBarLayout.addStretch()
+
         self.windowGroup = SettingCardGroup(t("窗口设置"), self.scrollWidget)
         
         from qfluentwidgets import BoolValidator, qconfig, ConfigItem
@@ -343,6 +360,7 @@ class SettingInterface(ScrollArea):
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         
+        self.expandLayout.addWidget(self.topBar)
         self.expandLayout.addWidget(self.windowGroup)
         self.expandLayout.addWidget(self.themeGroup)
         self.expandLayout.addWidget(self.advancedGroup)
@@ -352,6 +370,8 @@ class SettingInterface(ScrollArea):
 
     def update_texts(self, lang):
         """动态刷新界面文本"""
+        self.titleLabel.setText(t("设置"))
+        self.btnBack.setToolTip(t("返回主面板"))
         self.windowGroup.titleLabel.setText(t("窗口设置"))
         self.alwaysTopCard.setTitle(t("主窗口始终置顶"))
         self.alwaysTopCard.setContent(t("让表情包管理器始终显示在其他窗口之上"))

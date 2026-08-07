@@ -4,7 +4,9 @@ import shutil
 import json
 import hashlib
 import io
+import sqlite3
 from PIL import Image
+
 
 class StorageService:
     SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.webm')
@@ -17,24 +19,35 @@ class StorageService:
             self.base_dir = os.path.dirname(sys.executable)
         else:
             self.base_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-        self.images_dir = os.path.join(self.base_dir, "data", "images")
-        self.inbox_dir = os.path.join(self.base_dir, "data", "inbox")
-        self.inbox_failed_dir = os.path.join(self.inbox_dir, "failed")
-        self.order_file = os.path.join(self.base_dir, "data", "order.json")
-        self.categories_file = os.path.join(self.base_dir, "data", "categories.json")
-        self.metadata_file = os.path.join(self.base_dir, "data", "metadata.json")
-        self.icons_file = os.path.join(self.base_dir, "data", "category_icons.json")
-        self.hashes_file = os.path.join(self.base_dir, "data", "hashes.json")
-        self.recent_file = os.path.join(self.base_dir, "data", "recent.json")
         
-        # 如果目录不存在，自动创建
-        if not os.path.exists(self.images_dir):
-            os.makedirs(self.images_dir)
-        if not os.path.exists(self.inbox_dir):
-            os.makedirs(self.inbox_dir)
-        if not os.path.exists(self.inbox_failed_dir):
-            os.makedirs(self.inbox_failed_dir)
-            
+        self.data_dir = os.path.join(self.base_dir, "data")
+        self.images_dir = os.path.join(self.data_dir, "images")
+        self.inbox_dir = os.path.join(self.data_dir, "inbox")
+        self.inbox_failed_dir = os.path.join(self.inbox_dir, "failed")
+        
+        # JSON 路径 (用于 JSON 备份/双写双读)
+        self.order_file = os.path.join(self.data_dir, "order.json")
+        self.categories_file = os.path.join(self.data_dir, "categories.json")
+        self.metadata_file = os.path.join(self.data_dir, "metadata.json")
+        self.icons_file = os.path.join(self.data_dir, "category_icons.json")
+        self.hashes_file = os.path.join(self.data_dir, "hashes.json")
+        self.recent_file = os.path.join(self.data_dir, "recent.json")
+
+        # SQLite DB 数据库文件路径 (独立模块化 DB)
+        self.features_db_path = os.path.join(self.data_dir, "features.db")
+        self.metadata_db_path = os.path.join(self.data_dir, "metadata.db")
+        self.categories_db_path = os.path.join(self.data_dir, "categories.db")
+        self.order_db_path = os.path.join(self.data_dir, "order.db")
+        self.recent_db_path = os.path.join(self.data_dir, "recent.db")
+        
+        # 自动创建必要目录
+        for d in [self.data_dir, self.images_dir, self.inbox_dir, self.inbox_failed_dir]:
+            if not os.path.exists(d):
+                os.makedirs(d)
+
+        # 初始化与确保 DB 表结构存在
+        self._ensure_db_tables()
+
         self._hashes_cache = self._load_hashes()
         
         # 内存缓存与脏标记
@@ -50,26 +63,141 @@ class StorageService:
         
         self._recent_cache = None
 
-    def _load_hashes(self):
-        if not os.path.exists(self.hashes_file):
-            return {}
+    def _ensure_db_tables(self):
+        """确保各模块 SQLite 数据库表结构健全"""
         try:
-            with open(self.hashes_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            return {}
+            # 1. features.db
+            with sqlite3.connect(self.features_db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS image_features (
+                        image_path TEXT PRIMARY KEY,
+                        md5 TEXT,
+                        dhash TEXT,
+                        phash TEXT,
+                        quality_score REAL DEFAULT 0.0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+
+            # 2. metadata.db
+            with sqlite3.connect(self.metadata_db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS image_metadata (
+                        image_path TEXT PRIMARY KEY,
+                        tags TEXT,
+                        keywords TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+
+            # 3. categories.db
+            with sqlite3.connect(self.categories_db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL,
+                        icon_path TEXT,
+                        sort_order INTEGER DEFAULT 0
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS category_images (
+                        category_name TEXT,
+                        image_path TEXT,
+                        PRIMARY KEY (category_name, image_path)
+                    )
+                """)
+                conn.commit()
+
+            # 4. order.db
+            with sqlite3.connect(self.order_db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS item_orders (
+                        image_path TEXT PRIMARY KEY,
+                        sort_order INTEGER NOT NULL
+                    )
+                """)
+                conn.commit()
+
+            # 5. recent.db
+            with sqlite3.connect(self.recent_db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS recent_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        image_path TEXT NOT NULL,
+                        used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+        except Exception as e:
+            print(f"[ERROR] 初始化 DB 表结构失败: {e}")
+
+    # ==========================
+    # 哈希缓存 (Hashes) - DB 与 JSON 双写双读
+    # ==========================
+
+    def _load_hashes(self):
+        hashes = {}
+        # 1. 先从 DB (features.db) 读取
+        if os.path.exists(self.features_db_path):
+            try:
+                with sqlite3.connect(self.features_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT image_path, md5 FROM image_features WHERE md5 IS NOT NULL")
+                    for row in cursor.fetchall():
+                        img_path, md5_val = row[0], row[1]
+                        if md5_val:
+                            hashes[md5_val] = img_path
+            except Exception as e:
+                print(f"[WARNING] 从 features.db 读取哈希失败: {e}")
+
+        # 2. 从 JSON (hashes.json) 读取补充
+        if os.path.exists(self.hashes_file):
+            try:
+                with open(self.hashes_file, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+                    if isinstance(json_data, dict):
+                        for k, v in json_data.items():
+                            if isinstance(v, str):
+                                if len(k) == 32 and all(c in '0123456789abcdefABCDEF' for c in k):
+                                    hashes[k] = v
+                                else:
+                                    hashes[v] = k
+            except Exception as e:
+                print(f"[WARNING] 从 hashes.json 读取哈希失败: {e}")
+
+        return hashes
 
     def _save_hashes(self):
+        # 1. 保存到 JSON
         try:
             with open(self.hashes_file, 'w', encoding='utf-8') as f:
                 json.dump(self._hashes_cache, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"[ERROR] 保存哈希缓存失败: {e}")
+            print(f"[ERROR] 保存 hashes.json 失败: {e}")
+
+        # 2. 保存到 SQLite (features.db)
+        try:
+            records = []
+            for h_val, filename in self._hashes_cache.items():
+                records.append((os.path.basename(filename), h_val))
+            if records:
+                with sqlite3.connect(self.features_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.executemany("""
+                        INSERT INTO image_features (image_path, md5)
+                        VALUES (?, ?)
+                        ON CONFLICT(image_path) DO UPDATE SET md5 = excluded.md5
+                    """, records)
+                    conn.commit()
+        except Exception as e:
+            print(f"[ERROR] 保存到 features.db 失败: {e}")
 
     def _calculate_pixel_hash(self, img):
         """计算图片纯像素数据的 MD5 哈希值，用于精准去重"""
         try:
-            # 统一转换为 RGBA 模式以保证像素数据结构一致
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
             return hashlib.md5(img.tobytes()).hexdigest()
@@ -78,51 +206,22 @@ class StorageService:
             return None
 
     def _calculate_bytes_hash(self, data_bytes):
-        """计算二进制数据的 MD5 哈希值（用于动图等无法提取单帧像素的场景）"""
+        """计算二进制数据的 MD5 哈希值"""
         return hashlib.md5(data_bytes).hexdigest()
 
-    def _migrate_hashes_if_needed(self):
-        """静默迁移：将旧的基于文件二进制的哈希转换为基于像素的哈希"""
-        if not os.path.exists(self.images_dir):
-            return
-            
-        migrated = False
-        actual_filenames = os.listdir(self.images_dir)
-        
-        # 检查是否需要迁移（如果缓存为空，但有图片，说明是第一次运行新逻辑）
-        if not self._hashes_cache and actual_filenames:
-            print("[INFO] 开始静默迁移图片哈希数据...")
-            for filename in actual_filenames:
-                filepath = os.path.join(self.images_dir, filename)
-                try:
-                    with Image.open(filepath) as img:
-                        # 动图保持二进制哈希，静态图使用像素哈希
-                        if getattr(img, "is_animated", False):
-                            with open(filepath, "rb") as f:
-                                file_hash = self._calculate_bytes_hash(f.read())
-                        else:
-                            file_hash = self._calculate_pixel_hash(img)
-                            
-                        if file_hash:
-                            self._hashes_cache[file_hash] = filename
-                            migrated = True
-                except Exception as e:
-                    print(f"[WARNING] 迁移图片 {filename} 失败: {e}")
-                    
-            if migrated:
-                self._save_hashes()
-                print("[INFO] 哈希数据迁移完成。")
-
     def _to_filename(self, filepath):
-        """将绝对路径转换为单纯的文件名，便于在 JSON 中持久化存储"""
+        """将绝对路径转换为单纯的文件名"""
         return os.path.basename(filepath)
 
     def _to_abspath(self, filename):
-        """将 JSON 中读取的文件名转换为当前环境的绝对路径"""
-        # 如果历史数据里存了绝对路径，兼容处理一下
+        """将文件名转换为绝对路径"""
         if os.path.isabs(filename):
             return os.path.normcase(os.path.abspath(filename))
         return os.path.normcase(os.path.abspath(os.path.join(self.images_dir, filename)))
+
+    # ==========================
+    # 所有图片与排序 (Order) - DB 与 JSON 双写双读
+    # ==========================
 
     def get_all_images(self):
         """扫描并返回所有保存的图片绝对路径列表（支持自定义排序）"""
@@ -139,51 +238,103 @@ class StorageService:
             if filename.lower().endswith(self.SUPPORTED_FORMATS):
                 actual_filenames.append(filename)
         
-        # 默认按文件名倒序（最新的在前）
         actual_filenames.sort(reverse=True)
         
-        # 尝试读取排序配置
-        if os.path.exists(self.order_file):
+        saved_filenames = []
+
+        # 1. 尝试从 DB (order.db) 读取排序
+        if os.path.exists(self.order_db_path):
+            try:
+                with sqlite3.connect(self.order_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT image_path FROM item_orders ORDER BY sort_order ASC")
+                    rows = cursor.fetchall()
+                    if rows:
+                        saved_filenames = [self._to_filename(r[0]) for r in rows]
+            except Exception as e:
+                print(f"[WARNING] 从 order.db 读取失败: {e}")
+
+        # 2. 如果 DB 为空，尝试从 order.json 读取
+        if not saved_filenames and os.path.exists(self.order_file):
             try:
                 with open(self.order_file, 'r', encoding='utf-8') as f:
                     saved_order = json.load(f)
-                
-                # 兼容旧版本：如果里面是绝对路径，全部提取为纯文件名
-                saved_filenames = [self._to_filename(p) for p in saved_order]
-                
-                # 算法优化：使用 set 进行 O(1) 查找
-                actual_set = set(actual_filenames)
-                saved_set = set(saved_filenames)
-                
-                # 1. 过滤掉 JSON 中有但实际硬盘上已经不存在的文件名
-                valid_saved_filenames = [f for f in saved_filenames if f in actual_set]
-                
-                # 2. 找出实际硬盘上有，但 JSON 里没记录的新文件（这些排在最前面）
-                new_filenames = [f for f in actual_filenames if f not in saved_set]
-                
-                ordered_filenames = new_filenames + valid_saved_filenames
-                self._images_cache = [self._to_abspath(f) for f in ordered_filenames]
-                self._images_dirty = False
-                return self._images_cache
+                    saved_filenames = [self._to_filename(p) for p in saved_order]
             except Exception as e:
-                print(f"读取排序配置失败: {e}")
+                print(f"[WARNING] 从 order.json 读取失败: {e}")
+
+        if saved_filenames:
+            actual_set = set(actual_filenames)
+            saved_set = set(saved_filenames)
+            
+            valid_saved_filenames = [f for f in saved_filenames if f in actual_set]
+            new_filenames = [f for f in actual_filenames if f not in saved_set]
+            
+            ordered_filenames = new_filenames + valid_saved_filenames
+            self._images_cache = [self._to_abspath(f) for f in ordered_filenames]
+            self._images_dirty = False
+            return self._images_cache
                 
         self._images_cache = [self._to_abspath(f) for f in actual_filenames]
         self._images_dirty = False
         return self._images_cache
 
+    def move_image_to_front(self, filepath, target_category=None):
+        """将指定图片在主排序（全部表情）及所有其存在的分类夹（以及目标分类）中提升到最前面"""
+        abs_path = self._to_abspath(filepath)
+
+        # 1. 提升在主排序（全部表情）中的位置
+        all_images = list(self.get_all_images())
+        if abs_path in all_images:
+            all_images.remove(abs_path)
+            all_images.insert(0, abs_path)
+            self.save_order(all_images)
+
+        # 2. 若指定了目标分类，确保包含该图片
+        if target_category and target_category not in ("全部表情", "未分类"):
+            self.add_image_to_category(abs_path, target_category)
+
+        # 3. 提升在其关联的所有分类夹中的位置
+        categories = self.get_all_categories()
+        changed = False
+        for cat_name, paths in categories.items():
+            if abs_path in paths:
+                if abs_path in paths:
+                    paths.remove(abs_path)
+                paths.insert(0, abs_path)
+                changed = True
+        if changed:
+            self.save_categories(categories)
+
     def save_order(self, filepaths):
-        """保存用户自定义的表情包排序顺序（只保存文件名）"""
+        """保存用户自定义的表情包排序顺序（只保存文件名）- DB 与 JSON 双写"""
         filenames = [self._to_filename(p) for p in filepaths]
+        
+        # 1. 写 JSON
         try:
             with open(self.order_file, 'w', encoding='utf-8') as f:
                 json.dump(filenames, f, indent=4, ensure_ascii=False)
             self._images_dirty = True
         except Exception as e:
-            print(f"保存排序失败: {e}")
+            print(f"[ERROR] 保存 order.json 失败: {e}")
+
+        # 2. 写 order.db
+        try:
+            records = [(fname, idx) for idx, fname in enumerate(filenames)]
+            with sqlite3.connect(self.order_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM item_orders")
+                cursor.executemany("""
+                    INSERT INTO item_orders (image_path, sort_order)
+                    VALUES (?, ?)
+                """, records)
+                conn.commit()
+            self._images_dirty = True
+        except Exception as e:
+            print(f"[ERROR] 保存 order.db 失败: {e}")
 
     # ==========================
-    # 分类 (虚拟文件夹) 相关逻辑
+    # 分类 (Categories) - DB 与 JSON 双写双读
     # ==========================
     
     def get_all_categories(self):
@@ -191,57 +342,95 @@ class StorageService:
         if not self._categories_dirty:
             return self._categories_cache
             
-        if not os.path.exists(self.categories_file):
-            self._categories_cache = {}
-            self._image_to_categories_cache = {}
+        data = {}
+
+        # 1. 尝试从 categories.db 读取
+        if os.path.exists(self.categories_db_path):
+            try:
+                with sqlite3.connect(self.categories_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name FROM categories ORDER BY sort_order ASC, id ASC")
+                    cat_rows = cursor.fetchall()
+
+                    for r in cat_rows:
+                        cat_name = r[0]
+                        cursor.execute("SELECT image_path FROM category_images WHERE category_name = ?", (cat_name,))
+                        img_rows = cursor.fetchall()
+                        data[cat_name] = [img_r[0] for img_r in img_rows]
+            except Exception as e:
+                print(f"[WARNING] 从 categories.db 读取失败: {e}")
+
+        # 2. 如果 DB 无数据且 JSON 存在，补充合并 categories.json
+        if not data and os.path.exists(self.categories_file):
+            try:
+                with open(self.categories_file, 'r', encoding='utf-8') as f:
+                    json_cat = json.load(f)
+                    if isinstance(json_cat, dict):
+                        data.update(json_cat)
+            except Exception as e:
+                print(f"[WARNING] 从 categories.json 读取失败: {e}")
+
+        try:
+            all_real_images = set(self.get_all_images())
+            cleaned_data = {}
+            reverse_map = {}
+            
+            for category, paths in data.items():
+                abs_paths = [self._to_abspath(p) for p in paths]
+                valid_paths = [p for p in abs_paths if p in all_real_images]
+                cleaned_data[category] = valid_paths
+                
+                for p in valid_paths:
+                    if p not in reverse_map:
+                        reverse_map[p] = []
+                    reverse_map[p].append(category)
+                    
+            self._categories_cache = cleaned_data
+            self._image_to_categories_cache = reverse_map
             self._categories_dirty = False
             return self._categories_cache
-            
-        try:
-            with open(self.categories_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                # 数据迁移和清理：兼容旧版绝对路径，只向外暴露存在的绝对路径
-                all_real_images = set(self.get_all_images()) # get_all_images 现在返回规范的绝对路径
-                cleaned_data = {}
-                reverse_map = {}
-                
-                for category, paths in data.items():
-                    # 把存着的文件名（或旧绝对路径）全部转为当前的绝对路径
-                    abs_paths = [self._to_abspath(p) for p in paths]
-                    valid_paths = [p for p in abs_paths if p in all_real_images]
-                    cleaned_data[category] = valid_paths
-                    
-                    # 构建反向映射缓存，用于 O(1) 查找图片所属分类
-                    for p in valid_paths:
-                        if p not in reverse_map:
-                            reverse_map[p] = []
-                        reverse_map[p].append(category)
-                        
-                self._categories_cache = cleaned_data
-                self._image_to_categories_cache = reverse_map
-                self._categories_dirty = False
-                return self._categories_cache
         except Exception as e:
-            print(f"[ERROR] StorageService.get_all_categories: 读取分类失败 {e}")
+            print(f"[ERROR] StorageService.get_all_categories 失败: {e}")
             self._categories_cache = {}
             self._image_to_categories_cache = {}
             self._categories_dirty = False
             return self._categories_cache
 
     def save_categories(self, categories_data):
-        """保存分类数据，内部将绝对路径全部转换为文件名以确保可移植性"""
-        # categories_data 传入的是 {category: [abs_path1, abs_path2...]}
+        """保存分类数据 - DB 与 JSON 双写"""
         portable_data = {}
         for category, paths in categories_data.items():
             portable_data[category] = [self._to_filename(p) for p in paths]
             
+        # 1. 写 categories.json
         try:
             with open(self.categories_file, 'w', encoding='utf-8') as f:
                 json.dump(portable_data, f, indent=4, ensure_ascii=False)
             self._categories_dirty = True
         except Exception as e:
-            print(f"[ERROR] StorageService.save_categories: 保存分类失败 {e}")
+            print(f"[ERROR] StorageService.save_categories JSON 失败: {e}")
+
+        # 2. 写 categories.db
+        try:
+            with sqlite3.connect(self.categories_db_path) as conn:
+                cursor = conn.cursor()
+                for idx, (cat_name, filenames) in enumerate(portable_data.items()):
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO categories (name, sort_order)
+                        VALUES (?, ?)
+                    """, (cat_name, idx))
+
+                    cursor.execute("DELETE FROM category_images WHERE category_name = ?", (cat_name,))
+                    if filenames:
+                        rel_records = [(cat_name, fname) for fname in filenames]
+                        cursor.executemany("""
+                            INSERT OR IGNORE INTO category_images (category_name, image_path)
+                            VALUES (?, ?)
+                        """, rel_records)
+                conn.commit()
+            self._categories_dirty = True
+        except Exception as e:
+            print(f"[ERROR] StorageService.save_categories DB 失败: {e}")
 
     def add_category(self, category_name):
         """新建一个分类"""
@@ -259,12 +448,21 @@ class StorageService:
             del categories[category_name]
             self.save_categories(categories)
             
-            # 同步删除对应的自定义图标记录
             icons = self.get_all_category_icons()
             if category_name in icons:
                 del icons[category_name]
                 self.save_category_icons(icons)
-                
+
+            # 同步删 categories.db 中的记录
+            try:
+                with sqlite3.connect(self.categories_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM categories WHERE name = ?", (category_name,))
+                    cursor.execute("DELETE FROM category_images WHERE category_name = ?", (category_name,))
+                    conn.commit()
+            except Exception:
+                pass
+
             return True
         return False
 
@@ -274,7 +472,6 @@ class StorageService:
         if category_name not in categories:
             categories[category_name] = []
             
-        # 统一转换为绝对路径进行比较，避免路径格式不一致导致重复添加
         abs_filepath = self._to_abspath(filepath)
         if abs_filepath not in categories[category_name]:
             categories[category_name].append(abs_filepath)
@@ -303,24 +500,19 @@ class StorageService:
             return all_ordered
             
         categories = self.get_all_categories()
-            
         paths = categories.get(category_name, [])
-        # 算法优化：使用 set 进行 O(1) 查找
         paths_set = set(paths)
-        # 为了保证显示顺序跟 "全部" 中一致，我们基于所有图片的顺序来进行过滤
         result = [p for p in all_ordered if p in paths_set]
         return result
 
     def get_categories_by_image(self, filepath):
         """反向查询：获取指定图片所属的所有分类名称列表"""
-        # 确保缓存已加载
         self.get_all_categories()
-        # 算法优化：直接从反向映射缓存中 O(1) 获取
         return self._image_to_categories_cache.get(filepath, [])
 
     def get_image_to_categories_map(self):
         """获取图片到分类的反向映射字典"""
-        self.get_all_categories() # 确保缓存已加载
+        self.get_all_categories()
         return self._image_to_categories_cache
 
     def is_animated(self, filepath):
@@ -329,7 +521,7 @@ class StorageService:
         return ext in ['.gif', '.webp']
 
     # ==========================
-    # 最近使用 (Recent) 相关逻辑
+    # 最近使用 (Recent) - DB 与 JSON 双写双读
     # ==========================
     
     def get_recent_images(self):
@@ -337,31 +529,39 @@ class StorageService:
         if self._recent_cache is not None:
             return self._recent_cache
             
-        if not os.path.exists(self.recent_file):
-            self._recent_cache = []
-            return self._recent_cache
+        recent_filenames = []
+
+        # 1. 尝试从 recent.db 读取
+        if os.path.exists(self.recent_db_path):
+            try:
+                with sqlite3.connect(self.recent_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT image_path FROM recent_history ORDER BY id DESC LIMIT 50")
+                    rows = cursor.fetchall()
+                    recent_filenames = [r[0] for r in rows]
+            except Exception as e:
+                print(f"[WARNING] 从 recent.db 读取失败: {e}")
+
+        # 2. 如果 DB 无数据且 recent.json 存在，从 JSON 补充
+        if not recent_filenames and os.path.exists(self.recent_file):
+            try:
+                with open(self.recent_file, 'r', encoding='utf-8') as f:
+                    recent_filenames = json.load(f)
+            except Exception as e:
+                print(f"[ERROR] 读取 recent.json 失败: {e}")
             
-        try:
-            with open(self.recent_file, 'r', encoding='utf-8') as f:
-                filenames = json.load(f)
+        all_images = set(self.get_all_images())
+        valid_paths = []
+        for fname in recent_filenames:
+            abs_path = self._to_abspath(fname)
+            if abs_path in all_images and abs_path not in valid_paths:
+                valid_paths.append(abs_path)
                 
-            # 转换为绝对路径并过滤掉已删除的文件
-            all_images = set(self.get_all_images())
-            valid_paths = []
-            for fname in filenames:
-                abs_path = self._to_abspath(fname)
-                if abs_path in all_images:
-                    valid_paths.append(abs_path)
-                    
-            self._recent_cache = valid_paths
-            return self._recent_cache
-        except Exception as e:
-            print(f"[ERROR] 读取最近使用记录失败: {e}")
-            self._recent_cache = []
-            return self._recent_cache
+        self._recent_cache = valid_paths
+        return self._recent_cache
             
     def add_recent_image(self, filepath, limit=30):
-        """添加一条最近使用记录（LRU机制）"""
+        """添加一条最近使用记录（LRU机制）- DB 与 JSON 双写"""
         recent_paths = self.get_recent_images()
         abs_path = self._to_abspath(filepath)
         
@@ -369,50 +569,97 @@ class StorageService:
             recent_paths.remove(abs_path)
             
         recent_paths.insert(0, abs_path)
-        
         if len(recent_paths) > limit:
             recent_paths = recent_paths[:limit]
             
         self._recent_cache = recent_paths
-        
-        # 保存到文件（只存文件名）
+        rel_filename = self._to_filename(filepath)
+
+        # 1. 保存 JSON
         try:
             filenames = [self._to_filename(p) for p in recent_paths]
             with open(self.recent_file, 'w', encoding='utf-8') as f:
                 json.dump(filenames, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"[ERROR] 保存最近使用记录失败: {e}")
+            print(f"[ERROR] 保存 recent.json 失败: {e}")
+
+        # 2. 保存 DB
+        try:
+            with sqlite3.connect(self.recent_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO recent_history (image_path) VALUES (?)", (rel_filename,))
+                conn.commit()
+        except Exception as e:
+            print(f"[ERROR] 保存 recent.db 失败: {e}")
 
     # ==========================
-    # 分类图标 (Category Icons) 相关逻辑
+    # 分类图标 (Category Icons) - DB 与 JSON 双写双读
     # ==========================
     
     def get_all_category_icons(self):
-        if not os.path.exists(self.icons_file):
-            return {}
-        try:
-            with open(self.icons_file, 'r', encoding='utf-8') as f:
-                icons = json.load(f)
-                for cat, val in icons.items():
-                    if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
-                        icons[cat] = self._to_abspath(val)
-                return icons
-        except Exception:
-            return {}
+        icons = {}
+
+        # 1. 尝试从 categories.db 读取 icon_path
+        if os.path.exists(self.categories_db_path):
+            try:
+                with sqlite3.connect(self.categories_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name, icon_path FROM categories WHERE icon_path IS NOT NULL AND icon_path != ''")
+                    for row in cursor.fetchall():
+                        cat_name, icon_p = row[0], row[1]
+                        if any(icon_p.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
+                            icons[cat_name] = self._to_abspath(icon_p)
+                        else:
+                            icons[cat_name] = icon_p
+            except Exception as e:
+                print(f"[WARNING] 从 categories.db 读取图标失败: {e}")
+
+        # 2. 从 category_icons.json 补充
+        if os.path.exists(self.icons_file):
+            try:
+                with open(self.icons_file, 'r', encoding='utf-8') as f:
+                    json_icons = json.load(f)
+                    for cat, val in json_icons.items():
+                        if cat not in icons:
+                            if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
+                                icons[cat] = self._to_abspath(val)
+                            else:
+                                icons[cat] = val
+            except Exception:
+                pass
+
+        return icons
             
     def save_category_icons(self, icons_data):
+        """保存分类图标数据 - DB 与 JSON 双写"""
         portable_data = {}
         for cat, val in icons_data.items():
             if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
                 portable_data[cat] = self._to_filename(val)
             else:
                 portable_data[cat] = val
+
+        # 1. 写 JSON
         try:
             with open(self.icons_file, 'w', encoding='utf-8') as f:
                 json.dump(portable_data, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            print(f"[ERROR] StorageService.save_category_icons: 保存分类图标失败 {e}")
-            
+            print(f"[ERROR] StorageService.save_category_icons JSON 失败: {e}")
+
+        # 2. 写 categories.db
+        try:
+            with sqlite3.connect(self.categories_db_path) as conn:
+                cursor = conn.cursor()
+                for cat_name, icon_p in portable_data.items():
+                    cursor.execute("""
+                        INSERT INTO categories (name, icon_path)
+                        VALUES (?, ?)
+                        ON CONFLICT(name) DO UPDATE SET icon_path = excluded.icon_path
+                    """, (cat_name, icon_p))
+                conn.commit()
+        except Exception as e:
+            print(f"[ERROR] StorageService.save_category_icons DB 失败: {e}")
+
     def set_category_icon(self, category_name, filepath):
         icons = self.get_all_category_icons()
         icons[category_name] = filepath
@@ -423,12 +670,11 @@ class StorageService:
         return icons.get(category_name, None)
 
     # ==========================
-    # 关键词 (Metadata) 相关逻辑
+    # 关键词元数据 (Metadata) - DB 与 JSON 双写双读
     # ==========================
     
     @staticmethod
     def parse_tags(tags_str):
-        """将空格分隔的字符串解析为去重且保序的标签列表"""
         if not tags_str: return []
         tags = []
         for t in tags_str.split(' '):
@@ -438,78 +684,95 @@ class StorageService:
 
     @staticmethod
     def serialize_tags(tags_list):
-        """将标签列表序列化为空格分隔的字符串"""
         return " ".join(tags_list)
 
     @staticmethod
     def merge_tags(existing_tags_str, new_tags_str):
-        """合并标签：追加新标签并去重，保持原有顺序"""
         existing_list = StorageService.parse_tags(existing_tags_str)
         new_list = StorageService.parse_tags(new_tags_str)
-        
         for tag in new_list:
             if tag not in existing_list:
                 existing_list.append(tag)
-                
         return StorageService.serialize_tags(existing_list)
 
     @staticmethod
     def remove_tags(existing_tags_str, remove_tags_str):
-        """删除标签：从现有标签中移除指定的标签，不存在则忽略"""
         existing_list = StorageService.parse_tags(existing_tags_str)
         remove_list = StorageService.parse_tags(remove_tags_str)
-        
-        # 列表推导式过滤掉需要删除的标签，天然支持"不存在即忽略"且保序
         final_list = [tag for tag in existing_list if tag not in remove_list]
-        
         return StorageService.serialize_tags(final_list)
 
     def get_all_metadata(self):
-        """获取所有图片的关键词元数据，并映射回绝对路径"""
+        """获取所有图片的关键词元数据，并映射回绝对路径 - DB 与 JSON 混合读取"""
         if not self._metadata_dirty:
             return self._metadata_cache
             
-        if not os.path.exists(self.metadata_file):
-            self._metadata_cache = {}
-            self._metadata_dirty = False
-            return self._metadata_cache
-            
-        try:
-            with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # 将存入的文件名转回绝对路径
-                self._metadata_cache = {self._to_abspath(k): v for k, v in data.items()}
-                self._metadata_dirty = False
-                return self._metadata_cache
-        except Exception as e:
-            print(f"[ERROR] StorageService.get_all_metadata: 读取元数据失败 {e}")
-            self._metadata_cache = {}
-            self._metadata_dirty = False
-            return self._metadata_cache
+        data = {}
+
+        # 1. 尝试从 metadata.db 读取
+        if os.path.exists(self.metadata_db_path):
+            try:
+                with sqlite3.connect(self.metadata_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT image_path, keywords FROM image_metadata")
+                    for row in cursor.fetchall():
+                        data[row[0]] = row[1] or ""
+            except Exception as e:
+                print(f"[WARNING] 从 metadata.db 读取失败: {e}")
+
+        # 2. 从 metadata.json 补充
+        if os.path.exists(self.metadata_file):
+            try:
+                with open(self.metadata_file, 'r', encoding='utf-8') as f:
+                    json_meta = json.load(f)
+                    if isinstance(json_meta, dict):
+                        for k, v in json_meta.items():
+                            if k not in data:
+                                data[k] = v if isinstance(v, str) else str(v)
+            except Exception as e:
+                print(f"[WARNING] 从 metadata.json 读取失败: {e}")
+
+        self._metadata_cache = {self._to_abspath(k): v for k, v in data.items()}
+        self._metadata_dirty = False
+        return self._metadata_cache
 
     def save_metadata(self, metadata):
-        """保存关键词元数据，内部将绝对路径转换为文件名"""
-        portable_data = {self._to_filename(k): v for k, v in metadata.items()}
+        """保存关键词元数据 - DB 与 JSON 双写"""
+        portable_data = {self._to_filename(k): str(v) for k, v in metadata.items()}
+
+        # 1. 写 JSON
         try:
             with open(self.metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(portable_data, f, indent=4, ensure_ascii=False)
             self._metadata_dirty = True
         except Exception as e:
-            print(f"[ERROR] StorageService.save_metadata: 保存元数据失败 {e}")
+            print(f"[ERROR] StorageService.save_metadata JSON 失败: {e}")
+
+        # 2. 写 metadata.db
+        try:
+            records = [(fname, kw) for fname, kw in portable_data.items()]
+            with sqlite3.connect(self.metadata_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.executemany("""
+                    INSERT INTO image_metadata (image_path, keywords)
+                    VALUES (?, ?)
+                    ON CONFLICT(image_path) DO UPDATE SET keywords = excluded.keywords
+                """, records)
+                conn.commit()
+            self._metadata_dirty = True
+        except Exception as e:
+            print(f"[ERROR] StorageService.save_metadata DB 失败: {e}")
 
     def get_image_keywords(self, filepath):
-        """获取指定图片的关键词"""
         metadata = self.get_all_metadata()
         return metadata.get(self._to_abspath(filepath), "")
 
     def set_image_keywords(self, filepath, keywords_str):
-        """设置指定图片的关键词"""
         metadata = self.get_all_metadata()
         metadata[self._to_abspath(filepath)] = keywords_str
         self.save_metadata(metadata)
 
     def search_images(self, keyword, category_name="全部表情"):
-        """根据关键词搜索特定分类（或全部）下的图片"""
         images = self.get_images_by_category(category_name)
         if not keyword or not keyword.strip():
             return images
@@ -518,62 +781,47 @@ class StorageService:
         metadata = self.get_all_metadata()
         result = []
         for img in images:
-            # 获取该图片的关键词，转小写进行匹配
             img_kw = metadata.get(img, "").lower()
             if keyword in img_kw:
                 result.append(img)
         return result
 
     def generate_new_filename(self, extension=".png"):
-        """生成基于时间戳的新文件名"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
         return f"{timestamp}{extension}"
 
     def _standardize_and_save(self, data_bytes, original_ext):
-        """
-        核心逻辑：使用 Pillow 对图片进行标准化处理，查重并保存。
-        :param data_bytes: 原始图片的二进制数据
-        :param original_ext: 原始扩展名（用于动图回退）
-        :return: (保存后的绝对路径, 是否是已存在的重复图片)
-        """
         try:
             img = Image.open(io.BytesIO(data_bytes))
             is_animated = getattr(img, "is_animated", False)
             
             if is_animated:
-                # 动图不进行重编码，直接使用二进制哈希查重并保存原始数据
-                # 此时进来的动图只可能是 .gif 了（因为外层已经把 webm 和动态 webp 转成了 gif）
                 file_hash = self._calculate_bytes_hash(data_bytes)
                 final_bytes = data_bytes
                 final_ext = '.gif'
             else:
-                # 静态图：强制转换为 RGBA 模式
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
                     
-                # 计算像素哈希查重
                 file_hash = self._calculate_pixel_hash(img)
                 
-                # 创建一个全新的纯净画布，剥离所有 ICC profile 和 EXIF 等元数据
                 clean_img = Image.new('RGBA', img.size)
                 clean_img.paste(img, (0, 0))
                 
                 output_io = io.BytesIO()
-                # 使用 optimize=True 进行无损压缩优化
                 clean_img.save(output_io, format="PNG", optimize=True)
                 final_bytes = output_io.getvalue()
                 final_ext = '.png'
                 
-            # 查重逻辑
             if file_hash and file_hash in self._hashes_cache:
                 existing_filename = self._hashes_cache[file_hash]
                 existing_path = self._to_abspath(existing_filename)
                 if os.path.exists(existing_path):
+                    self.move_image_to_front(existing_path)
                     return existing_path, True
                 else:
                     del self._hashes_cache[file_hash]
                     
-            # 保存新文件
             filename = self.generate_new_filename(final_ext)
             filepath = os.path.join(self.images_dir, filename)
             
@@ -592,29 +840,17 @@ class StorageService:
             return None, False
 
     def save_image(self, qimage):
-        """
-        保存 QImage 到本地
-        :param qimage: PySide6.QtGui.QImage 对象
-        :return: (保存后的绝对路径, 是否是已存在的重复图片)
-        """
         from PySide6.QtCore import QByteArray, QBuffer, QIODevice
         
-        # 先将 QImage 转换为字节流
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
         qimage.save(buffer, "PNG")
         image_bytes = byte_array.data()
         
-        # 统一走标准化流程
         return self._standardize_and_save(image_bytes, ".png")
 
     def save_file(self, source_path):
-        """
-        读取本地文件并进行标准化保存
-        :param source_path: 原始文件路径
-        :return: (保存后的绝对路径, 是否是已存在的重复图片)
-        """
         if not os.path.exists(source_path):
             return None, False
             
@@ -627,18 +863,13 @@ class StorageService:
             if not ext:
                 ext = ".png"
                 
-            # 统一走标准化流程
             return self._standardize_and_save(data_bytes, ext)
         except Exception as e:
             print(f"[ERROR] 读取文件失败: {e}")
             return None, False
 
     def delete_image(self, filepath):
-        """
-        从本地删除指定的图片文件，并从所有虚拟分类中移除记录
-        :param filepath: 文件的绝对路径
-        :return: bool 是否成功删除
-        """
+        """从本地删除指定的图片文件，并同步清理分类、元数据、哈希、最近使用（DB+JSON双写双删）"""
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
@@ -672,6 +903,7 @@ class StorageService:
                             json.dump(filenames, f, indent=4, ensure_ascii=False)
                     except Exception:
                         pass
+                
                 for h, f in self._hashes_cache.items():
                     if f == filename:
                         hash_to_remove = h
@@ -679,7 +911,22 @@ class StorageService:
                 if hash_to_remove:
                     del self._hashes_cache[hash_to_remove]
                     self._save_hashes()
-                    
+
+                # 从各 DB 中安全彻底清理该文件记录
+                try:
+                    with sqlite3.connect(self.features_db_path) as conn:
+                        conn.execute("DELETE FROM image_features WHERE image_path = ?", (filename,))
+                    with sqlite3.connect(self.metadata_db_path) as conn:
+                        conn.execute("DELETE FROM image_metadata WHERE image_path = ?", (filename,))
+                    with sqlite3.connect(self.categories_db_path) as conn:
+                        conn.execute("DELETE FROM category_images WHERE image_path = ?", (filename,))
+                    with sqlite3.connect(self.order_db_path) as conn:
+                        conn.execute("DELETE FROM item_orders WHERE image_path = ?", (filename,))
+                    with sqlite3.connect(self.recent_db_path) as conn:
+                        conn.execute("DELETE FROM recent_history WHERE image_path = ?", (filename,))
+                except Exception as e:
+                    print(f"[WARNING] 数据库删除图记录提示: {e}")
+
                 self._images_dirty = True
                 return True
         except Exception as e:

@@ -79,9 +79,10 @@ class QuickPanel(QWidget):
         self.layout.addWidget(self.bg_widget)
         
         # 搜索框
+        from services.i18n import t, i18n_engine
         self.search_box = SearchLineEdit(self.bg_widget)
         self.search_box.setObjectName("quickPanelSearchBox")
-        self.search_box.setPlaceholderText("搜索关键词...")
+        self.search_box.setPlaceholderText(t("搜索关键词..."))
         self.search_box.textChanged.connect(self._on_search_text_changed)
         
         # 隐藏 qfluentwidgets 默认的聚焦底部粗边框 (由 paintEvent 绘制)
@@ -107,10 +108,13 @@ class QuickPanel(QWidget):
         self.bg_layout.addWidget(self.scroll_area)
         
         # 空状态提示
-        self.empty_label = BodyLabel("暂无最近使用记录", self.grid_container)
+        self.empty_label = BodyLabel(t("暂无最近使用记录"), self.grid_container)
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet("color: gray;")
         self.empty_label.hide()
+
+        # 监听多语言切换
+        i18n_engine.language_changed.connect(self._update_i18n_texts)
         
         # 安装事件过滤器以支持滚轮缩放
         self.scroll_area.viewport().installEventFilter(self)
@@ -228,7 +232,16 @@ class QuickPanel(QWidget):
     def _on_search_text_changed(self, text):
         self.search_timer.start(150)
 
+    def _update_i18n_texts(self, lang):
+        from services.i18n import t
+        if hasattr(self, 'search_box'):
+            self.search_box.setPlaceholderText(t("搜索关键词..."))
+        keyword = self.search_box.text().strip() if hasattr(self, 'search_box') else ""
+        if hasattr(self, 'empty_label'):
+            self.empty_label.setText(t("没有找到匹配的表情") if keyword else t("暂无最近使用记录"))
+
     def _perform_search(self):
+        from services.i18n import t
         keyword = self.search_box.text().strip()
         limit = self.config.get("recent_limit", 30)
         
@@ -253,7 +266,7 @@ class QuickPanel(QWidget):
         self._all_card_widgets.clear()
                 
         if not results:
-            self.empty_label.setText("没有找到匹配的表情" if keyword else "暂无最近使用记录")
+            self.empty_label.setText(t("没有找到匹配的表情") if keyword else t("暂无最近使用记录"))
             self.empty_label.show()
             self.grid_layout.addWidget(self.empty_label, 0, 0)
             return
@@ -437,6 +450,7 @@ class QuickPanel(QWidget):
         if self.width() != w or self.height() != h:
             self.resize(w, h)
             
+        self._update_i18n_texts(None)
         self.update_theme()
         self.search_box.clear()
         self._perform_search()

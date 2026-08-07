@@ -34,8 +34,37 @@ def main():
     
     app.setQuitOnLastWindowClosed(False)
     
+    from PySide6.QtWidgets import QProgressDialog
+    from services.migration_manager import MigrationManager
+    from services.deduplication_pipeline import DeduplicationPipeline
     from fluent_ui.main_window import MainWindow
-    
+
+    # ----------------------------------------------------
+    # 1. 启动阶段：检查并执行老数据迁移至 SQLite 数据库
+    # ----------------------------------------------------
+    migration_mgr = MigrationManager()
+    if migration_mgr.needs_migration():
+        progress_dialog = QProgressDialog("正在升级数据引擎到 SQLite...", None, 0, 100)
+        progress_dialog.setWindowModality(Qt.ApplicationModal)
+        progress_dialog.setCancelButton(None)  # 禁止中途取消
+        progress_dialog.setWindowTitle("数据升级中")
+        progress_dialog.show()
+        app.processEvents()  # 刷新界面显示
+
+        def update_progress(msg, percent):
+            progress_dialog.setLabelText(f"正在升级数据: {msg}")
+            progress_dialog.setValue(int(percent))
+            app.processEvents()  # 确保 UI 实时更新不假死
+
+        migration_mgr.run_migration(progress_callback=update_progress)
+        progress_dialog.close()
+
+    # ----------------------------------------------------
+    # 2. 检查并建立全库表情包特征索引
+    # ----------------------------------------------------
+    dedup_pipeline = DeduplicationPipeline()
+    dedup_pipeline.run_full_deduplication()
+
     storage_service = StorageService()
     clipboard_service = ClipboardService()
     

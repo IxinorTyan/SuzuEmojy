@@ -163,6 +163,7 @@ class MainWindow(FramelessWindow):
         
         self.setting_interface = SettingInterface(self.config, self)
         self.setting_interface.settings_changed.connect(self.on_settings_changed)
+        self.setting_interface.back_requested.connect(self.show_gallery)
         self.stacked_widget.addWidget(self.setting_interface)
         
         self.gallery_interface.setting_requested.connect(self.show_settings)
