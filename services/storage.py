@@ -123,13 +123,31 @@ class StorageService:
 
             # 5. recent.db
             with sqlite3.connect(self.recent_db_path) as conn:
-                conn.execute("""
+                cursor = conn.cursor()
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS recent_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        image_path TEXT NOT NULL,
-                        used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        image_path TEXT UNIQUE NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # 检查旧表结构，若无 updated_at 字段则在线无缝升级
+                cursor.execute("PRAGMA table_info(recent_history)")
+                columns = [row[1] for row in cursor.fetchall()]
+                if "updated_at" not in columns:
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS recent_history_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            image_path TEXT UNIQUE NOT NULL,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO recent_history_new (image_path, updated_at)
+                        SELECT image_path, MAX(used_at) FROM recent_history GROUP BY image_path
+                    """)
+                    cursor.execute("DROP TABLE recent_history")
+                    cursor.execute("ALTER TABLE recent_history_new RENAME TO recent_history")
                 conn.commit()
         except Exception as e:
             print(f"[ERROR] 初始化 DB 表结构失败: {e}")
@@ -525,19 +543,34 @@ class StorageService:
     # 最近使用 (Recent) - DB 与 JSON 双写双读
     # ==========================
     
-    def get_recent_images(self):
-        """获取最近使用的表情列表（绝对路径）"""
+    def _get_recent_limit(self):
+        """动态读取用户配置中的最近使用记录数量限制（完全无硬编码）"""
+        try:
+            from services.config import ConfigService
+            cfg = ConfigService()
+            val = cfg.get("recent_limit")
+            if val is not None:
+                return int(val)
+        except Exception:
+            pass
+        return 30
+
+    def get_recent_images(self, limit=None):
+        """获取最近使用的表情列表（绝对路径），完全动态绑定配置中的 limit 数量"""
+        if limit is None:
+            limit = self._get_recent_limit()
+
         if self._recent_cache is not None:
-            return self._recent_cache
-            
+            return self._recent_cache[:limit]
+
         recent_filenames = []
 
-        # 1. 尝试从 recent.db 读取
+        # 1. 尝试从 recent.db 读取（按最新使用时间降序获取 limit 条记录）
         if os.path.exists(self.recent_db_path):
             try:
                 with sqlite3.connect(self.recent_db_path) as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT image_path FROM recent_history ORDER BY id DESC LIMIT 50")
+                    cursor.execute("SELECT image_path FROM recent_history ORDER BY updated_at DESC, id DESC LIMIT ?", (limit,))
                     rows = cursor.fetchall()
                     recent_filenames = [r[0] for r in rows]
             except Exception as e:
@@ -550,29 +583,32 @@ class StorageService:
                     recent_filenames = json.load(f)
             except Exception as e:
                 print(f"[ERROR] 读取 recent.json 失败: {e}")
-            
+
         all_images = set(self.get_all_images())
         valid_paths = []
         for fname in recent_filenames:
             abs_path = self._to_abspath(fname)
             if abs_path in all_images and abs_path not in valid_paths:
                 valid_paths.append(abs_path)
-                
+
         self._recent_cache = valid_paths
-        return self._recent_cache
-            
-    def add_recent_image(self, filepath, limit=30):
-        """添加一条最近使用记录（LRU机制）- DB 与 JSON 双写"""
-        recent_paths = self.get_recent_images()
+        return self._recent_cache[:limit]
+
+    def add_recent_image(self, filepath, limit=None):
+        """添加一条最近使用记录（LRU机制）- DB 与 JSON 双写，完全动态绑定 limit 配置"""
+        if limit is None:
+            limit = self._get_recent_limit()
+
+        recent_paths = self.get_recent_images(limit=limit)
         abs_path = self._to_abspath(filepath)
-        
+
         if abs_path in recent_paths:
             recent_paths.remove(abs_path)
-            
+
         recent_paths.insert(0, abs_path)
         if len(recent_paths) > limit:
             recent_paths = recent_paths[:limit]
-            
+
         self._recent_cache = recent_paths
         rel_filename = self._to_filename(filepath)
 
@@ -584,11 +620,21 @@ class StorageService:
         except Exception as e:
             print(f"[ERROR] 保存 recent.json 失败: {e}")
 
-        # 2. 保存 DB
+        # 2. 保存 DB (UPSERT 刷新时间戳 + 动态限制超限数据清理)
         try:
             with sqlite3.connect(self.recent_db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO recent_history (image_path) VALUES (?)", (rel_filename,))
+                cursor.execute("""
+                    INSERT INTO recent_history (image_path, updated_at)
+                    VALUES (?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(image_path) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+                """, (rel_filename,))
+                cursor.execute("""
+                    DELETE FROM recent_history
+                    WHERE image_path NOT IN (
+                        SELECT image_path FROM recent_history ORDER BY updated_at DESC LIMIT ?
+                    )
+                """, (limit,))
                 conn.commit()
         except Exception as e:
             print(f"[ERROR] 保存 recent.db 失败: {e}")
