@@ -221,11 +221,15 @@ class MigrationManager:
                     )
                 """)
 
-                all_cats = set()
+                all_cats = []
                 if isinstance(cat_data, dict):
-                    all_cats.update(cat_data.keys())
+                    for k in cat_data.keys():
+                        if k not in all_cats:
+                            all_cats.append(k)
                 if isinstance(icon_data, dict):
-                    all_cats.update(icon_data.keys())
+                    for k in icon_data.keys():
+                        if k not in all_cats:
+                            all_cats.append(k)
 
                 for idx, cat_name in enumerate(all_cats):
                     icon_p = ""

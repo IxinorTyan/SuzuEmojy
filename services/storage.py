@@ -416,8 +416,9 @@ class StorageService:
                 cursor = conn.cursor()
                 for idx, (cat_name, filenames) in enumerate(portable_data.items()):
                     cursor.execute("""
-                        INSERT OR IGNORE INTO categories (name, sort_order)
+                        INSERT INTO categories (name, sort_order)
                         VALUES (?, ?)
+                        ON CONFLICT(name) DO UPDATE SET sort_order = excluded.sort_order
                     """, (cat_name, idx))
 
                     cursor.execute("DELETE FROM category_images WHERE category_name = ?", (cat_name,))
