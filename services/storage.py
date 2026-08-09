@@ -460,6 +460,55 @@ class StorageService:
             return True
         return False
 
+    def rename_category(self, old_name, new_name):
+        """重命名分类 (同步更新 categories.json、category_icons.json 及 SQLite 数据库事务)"""
+        categories = self.get_all_categories()
+        if old_name not in categories or new_name in categories:
+            return False
+
+        # 1. 更新 categories.json (如果项目使用 JSON 文件)
+        if os.path.exists(self.categories_file):
+            try:
+                with open(self.categories_file, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+                if isinstance(json_data, dict) and old_name in json_data:
+                    new_json_data = {}
+                    for k, v in json_data.items():
+                        if k == old_name:
+                            new_json_data[new_name] = v
+                        else:
+                            new_json_data[k] = v
+                    with open(self.categories_file, 'w', encoding='utf-8') as f:
+                        json.dump(new_json_data, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                print(f"[ERROR] 重命名更新 categories.json 失败: {e}")
+
+        # 2. 更新 category_icons.json (如果项目使用 JSON 文件)
+        if os.path.exists(self.icons_file):
+            try:
+                with open(self.icons_file, 'r', encoding='utf-8') as f:
+                    icons_data = json.load(f)
+                if isinstance(icons_data, dict) and old_name in icons_data:
+                    icons_data[new_name] = icons_data.pop(old_name)
+                    with open(self.icons_file, 'w', encoding='utf-8') as f:
+                        json.dump(icons_data, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                print(f"[ERROR] 重命名更新 category_icons.json 失败: {e}")
+
+        # 3. 在事务中更新 SQLite categories.db
+        try:
+            with sqlite3.connect(self.categories_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE categories SET name = ? WHERE name = ?", (new_name, old_name))
+                cursor.execute("UPDATE category_images SET category_name = ? WHERE category_name = ?", (new_name, old_name))
+                conn.commit()
+        except Exception as e:
+            print(f"[ERROR] 重命名分类更新 DB 事务失败: {e}")
+            return False
+
+        self._categories_dirty = True
+        return True
+
     def remove_category(self, category_name):
         """删除一个分类"""
         categories = self.get_all_categories()

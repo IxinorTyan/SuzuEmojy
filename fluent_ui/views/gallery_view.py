@@ -662,7 +662,7 @@ class CategorySidebar(QWidget):
         
         menu.addSeparator()
         
-        action_del = Action("删除文件夹", parent=menu)
+        action_del = Action("删除分类", parent=menu)
         action_del.triggered.connect(lambda: QTimer.singleShot(50, lambda: self._delete_category_with_confirm(cat_name)))
         menu.addAction(action_del)
         
@@ -720,23 +720,13 @@ class CategorySidebar(QWidget):
                 w.exec()
                 return
                 
-            # 更新 categories
-            new_categories = {}
-            for k, v in categories.items():
-                if k == old_name:
-                    new_categories[new_name] = v
-                else:
-                    new_categories[k] = v
-            self.storage.save_categories(new_categories)
-            
-            # 同步更新图标配置
-            icons = self.storage.get_all_category_icons()
-            if old_name in icons:
-                icons[new_name] = icons.pop(old_name)
-                self.storage.save_category_icons(icons)
-                
-            self.refresh_list(new_name)
-            if self.gallery_view: self.gallery_view.show_success("重命名成功")
+            if self.storage.rename_category(old_name, new_name):
+                self.refresh_list(new_name)
+                if self.gallery_view: self.gallery_view.show_success("重命名成功")
+            else:
+                from qfluentwidgets import MessageBox
+                w = MessageBox("错误", "重命名失败", self.window())
+                w.exec()
 
     def _custom_emoji_icon(self, cat_name):
         emoji, ok = QInputDialog.getText(self, "自定义图标", "请输入一个 Emoji 表情：", QLineEdit.Normal, "")

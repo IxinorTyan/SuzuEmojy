@@ -116,26 +116,42 @@ class EmojiCard(QLabel):
 
     def update_style(self):
         if self.is_selected:
-            from qfluentwidgets import themeColor
-            color = themeColor().name()
+            from qfluentwidgets import themeColor, isDarkTheme
+            color = themeColor()
+            r, g, b = color.red(), color.green(), color.blue()
+            hex_color = color.name()
+            
+            if isDarkTheme():
+                bg_color = f"rgba({r}, {g}, {b}, 0.28)"
+            else:
+                bg_color = f"rgba({r}, {g}, {b}, 0.12)"
+                
             self.setStyleSheet(f"""
                 QLabel#EmojiCard {{
                     border-radius: 8px;
-                    background-color: {color}26; /* 15% opacity */
-                    border: 2px solid {color};
+                    background-color: {bg_color};
+                    border: 2px solid {hex_color};
                 }}
             """)
         else:
-            self.setStyleSheet("""
-                QLabel#EmojiCard {
+            from qfluentwidgets import isDarkTheme
+            if isDarkTheme():
+                hover_bg = "rgba(255, 255, 255, 0.08)"
+                hover_border = "rgba(255, 255, 255, 0.15)"
+            else:
+                hover_bg = "rgba(0, 0, 0, 0.05)"
+                hover_border = "rgba(0, 0, 0, 0.12)"
+                
+            self.setStyleSheet(f"""
+                QLabel#EmojiCard {{
                     border-radius: 8px;
                     background-color: transparent;
                     border: 1px solid transparent;
-                }
-                QLabel#EmojiCard:hover {
-                    background-color: rgba(200, 200, 200, 0.1);
-                    border: 1px solid rgba(200, 200, 200, 0.2);
-                }
+                }}
+                QLabel#EmojiCard:hover {{
+                    background-color: {hover_bg};
+                    border: 1px solid {hover_border};
+                }}
             """)
 
     def paintEvent(self, event):
