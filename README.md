@@ -1,4 +1,12 @@
-🥟 SuzuEmojy
+# 🥟 SuzuEmojy
+
+[简体中文](#-suzuemojy-cn) | [English](#-suzuemojy-en)
+
+---
+
+<span id="-suzuemojy-cn"></span>
+
+## 🥟 SuzuEmojy (简体中文)
 
 一个专注于 Windows 的本地表情包管理工具。
 
@@ -205,4 +213,215 @@ SuzuEmojy/
 
 本项目基于 [MIT License](LICENSE) 开源，请随意使用和修改。
 
+---
 
+<span id="-suzuemojy-en"></span>
+
+## 🥟 SuzuEmojy (English)
+
+[Back to Chinese version (返回中文版)](#-suzuemojy-cn)
+
+A local meme and emoji sticker manager focused on Windows.
+
+Fast search, categorized organization, and one-click sending—making your meme collection of years truly useful.
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%A4%9C%E9%97%B4ui.png" width="50%" alt="Day UI">
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%97%A5%E9%97%B4ui.png" width="50%" alt="Night UI">
+
+Why SuzuEmojy?
+
+(First of all, because the developer uses multiple accounts all year round, but stickers cannot be shared across accounts, which is very inconvenient. As a result, a large number of meme pictures are often saved on the PC.)
+Stickers in chat applications are increasing.
+Hundreds or thousands of pictures are scattered across various folders.
+Every time you want to find a picture, you have to spend a long time searching.
+Images on browsers are difficult to save directly.
+Downloaded images often cannot be sent as stickers directly.
+So this software was created.
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/QQ%E6%8B%96%E6%8B%BD.gif" width="80%" alt="Quick Add">
+
+SuzuEmojy aims to solve all these troubles.
+
+Features
+
+\\Global Hotkey Callout\\
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%BF%AB%E6%8D%B7%E9%94%AE.gif" width="80%" alt="Hotkey">
+
+No matter what software you are currently using.
+Press the hotkey (default: Ctrl+Shift+E, customizable) to immediately open the emoji panel.
+After selecting an image, it is automatically pasted into your previous chat window (if it fails to paste, it may be due to losing focus, but the sticker is still copied to your clipboard).
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%BF%AB%E6%8D%B7%E7%AA%97%E5%8F%A3.gif" width="80%" alt="Quick Box">
+
+Quick Panel: quickly summon with a hotkey (default: Alt+2 / customizable).
+In the quick window, you can search for emojis that you have added keywords to (only).
+Arranges recently used emojis in order (default: 30, customizable: 1-999).
+
+\\Fast Import\\
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%AF%BC%E5%85%A5.gif" width="80%" alt="Import">
+
+Even when importing thousands of images, the interface remains smooth without waiting for all images to finish loading.
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%A4%B9.gif" width="80%" alt="Folder">
+
+Supports directly importing categorized folders, automatically creating category folders with the same names.
+
+\\Search is Much Faster Than Browsing Folders\\
+
+(Although tags need to be set in advance)
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%90%9C%E7%B4%A2.gif" width="80%" alt="Search">
+
+Supports custom keywords and real-time filtering.
+
+Truly find whatever you want right away.
+
+\\Free Organization\\
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%8B%96%E5%8A%A8%E6%95%B4%E7%90%86.gif" width="80%" alt="Drag & Drop Organization">
+
+Supports:
+
+Drag-and-drop reordering
+
+Cross-category moving
+
+Batch operations
+
+\\One-Click Image Capture / Import\\
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%89%92%E5%9B%BE.gif" width="80%" alt="Image Scraper">
+
+Import via copy & paste (Note: animated images in Bilibili comments only load when clicked, so they must be expanded before saving).
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E5%A4%8D%E5%88%B6url.gif" width="80%" alt="URL">
+
+Try downloading images by copying the URL (note: not all URLs support direct download).
+
+<img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/telegram.gif" width="80%" alt="Telegram">
+
+Save directly to the `(\bin)\data\inbox` folder to convert WebM / import (all "Save As" can be used this way).
+
+Many web images (WebP, WebM) will turn into files if dragged directly into chat apps.
+
+SuzuEmojy can automatically re-encode them so they are properly saved as stickers/images.
+
+\\More Details\\
+
+Supports:
+
+Fluent Design UI
+
+Ctrl + Mouse Wheel Zoom
+
+HD Hover Preview
+
+Grid / List Dual Layout
+
+SQLite + JSON Data Storage
+
+Data Migration
+
+\\Download\\
+
+Go to [Releases](https://github.com/IxinorTyan/SuzuEmojy/releases) to download the latest version.
+
+Extract and run.
+
+Running the software will automatically detect and install dependencies (if installation fails, you can run the helper script in the folder).
+
+All data is stored in the application directory.
+
+When switching PCs, simply copy the `data` folder.
+
+\\Common Shortcuts:\\
+
+Ctrl + Shift + E (customizable) ----- Summon main window
+
+Ctrl + Wheel ----- Zoom thumbnails
+
+Double click "All Emojis" ----- Switch between "List Mode" and "Grid Mode" in the sidebar
+
+And more.
+
+\\About Default Emoji Pack\\
+
+The software comes with a built-in set of Suzu emojis by default.
+
+Just so you can experience it right away the first time you open the app.
+
+If you prefer your own emoji collection,
+
+you can delete them completely (do you really want to QAQ).
+
+Hope that one day, you will like her too.
+
+------------------------------------------------------
+
+💻 Developer Guide
+
+If you want to run from source code or do secondary development:
+
+### Requirements
+- Python 3.9+
+- Windows 10/11 (Windows 11 recommended for the best Mica effect experience)
+
+### Install Dependencies
+```bash
+git clone https://github.com/IxinorTyan/SuzuEmojy.git
+cd SuzuEmojy
+pip install -r requirements.txt
+```
+
+### Run Application
+```bash
+python main.py
+```
+
+### Build as EXE
+This project provides two packaging methods:
+
+**Method 1: Lightweight Launcher (Recommended)**
+Double-click and run `build.bat`. This uses PyInstaller to package `launcher.py` into a tiny single-file EXE (~10MB).
+When users launch this EXE for the first time, it automatically detects the system environment and downloads the required Python runtime and GUI libraries (such as PySide6).
+
+**Method 2: Fully Standalone Packaging**
+If you want to package a complete offline standalone bundle with all dependencies (larger file size), run:
+```bash
+python build_nuitka.py
+```
+This uses Nuitka to compile the entire program into standalone binary files under the `dist/main.dist` directory.
+
+---
+
+## 📁 Project Structure
+
+```text
+SuzuEmojy/
+├── launcher.py            # Lightweight environment initialization launcher
+├── main.py                # Main application entry point
+├── build.bat              # Launcher build script (PyInstaller)
+├── build_nuitka.py        # Full standalone build script (Nuitka)
+├── requirements.txt       # Dependencies list
+├── hi.ico                 # Application icon
+├── fluent_ui/             # Modern UI core code
+│   ├── main_window.py     # Main window container
+│   ├── components/        # UI components (emoji cards, hover preview, etc.)
+│   └── views/             # Main views (gallery view, settings view)
+└── services/              # Core business logic
+    ├── clipboard.py       # Clipboard listener and OS APIs
+    ├── config.py          # Configuration storage
+    └── storage.py         # Image storage and metadata management
+```
+
+---
+
+## 🤝 Contribution & Feedback
+
+Pull Requests and Issues reporting bugs or requesting new features are very welcome!
+
+## 📄 License
+
+This project is open-sourced under the [MIT License](LICENSE). Feel free to use and modify it.
