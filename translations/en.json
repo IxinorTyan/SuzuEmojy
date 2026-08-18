@@ -34,6 +34,8 @@
     "设置每次加载图片的数量，数值越小越流畅但加载越久": "Set the number of images loaded each time. Smaller values are smoother but take longer to load",
     "最近使用记录上限": "Recent Usage Record Limit",
     "设置快速面板中显示的最近使用表情数量": "Set the number of recently used emojis displayed in the quick panel",
+    "发送时将静态图转为GIF": "Convert Static Images to GIF on Send",
+    "复制或发送 PNG/JPG/WEBP 等静态图时自动转为 1 帧 GIF 格式，避免在 QQ 等聊天软件中显示为超大原图": "Automatically convert static images (PNG/JPG/WEBP) to 1-frame GIF when copying or sending, preventing oversized image display in chat apps like QQ",
     "图标模式悬浮提示": "Icon Mode Hover Tooltip",
     "在侧边栏折叠为仅图标模式时，鼠标悬停显示分类名称": "Show category name on hover when the sidebar is collapsed to icon-only mode",
     "唤醒快捷键": "Wake-up Hotkey",

@@ -66,7 +66,7 @@ def main():
     dedup_pipeline.run_full_deduplication()
 
     storage_service = StorageService()
-    clipboard_service = ClipboardService()
+    clipboard_service = ClipboardService(config_service)
     
     # 初始化多语言引擎
     i18n_engine.init(config_service)

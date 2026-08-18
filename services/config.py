@@ -14,7 +14,8 @@ class ConfigService:
             "always_on_top": True,   # 默认置顶
             "preview_delay": 500,    # 悬停预览延迟 (ms)
             "preview_size": 320,     # 悬停预览浮窗大小 (px)
-            "use_system_font": False # 是否使用系统默认字体
+            "use_system_font": False, # 是否使用系统默认字体
+            "convert_static_to_gif": True # 发送时将静态图转为1帧GIF以适配聊天软件表情尺寸
         }
         self.config = self._load_config()
 

@@ -3,6 +3,7 @@
     "preview_delay": 500,
     "preview_size": 320,
     "use_system_font": false,
+    "convert_static_to_gif": true,
     "thumbnail_size": 60,
     "theme_mode": "light",
     "splitter_sizes": [

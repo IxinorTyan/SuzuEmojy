@@ -132,6 +132,7 @@ class SettingInterface(ScrollArea):
         self.topBarLayout.addWidget(self.titleLabel)
         self.topBarLayout.addStretch()
 
+        # =================== 1. 窗口设置 ===================
         self.windowGroup = SettingCardGroup(t("窗口设置"), self.scrollWidget)
         
         from qfluentwidgets import BoolValidator, qconfig, ConfigItem
@@ -147,9 +148,7 @@ class SettingInterface(ScrollArea):
         )
         self.alwaysTopCard.setChecked(self.config.get("always_on_top", True))
         
-        from qfluentwidgets import ConfigItem, OptionsConfigItem, OptionsValidator, Theme
-        
-        from qfluentwidgets import RangeConfigItem, RangeValidator, RangeSettingCard
+        from qfluentwidgets import RangeConfigItem, RangeValidator
         
         self.previewSizeConfigItem = RangeConfigItem(
             "Advanced", "PreviewSize", 320,
@@ -190,6 +189,7 @@ class SettingInterface(ScrollArea):
         if hasattr(self.quickPanelHeightCard, 'setValue'):
             self.quickPanelHeightCard.setValue(self.config.get("quick_panel_height", 480))
 
+        # =================== 2. 个性化 ===================
         self.themeGroup = SettingCardGroup(t("个性化"), self.scrollWidget)
         
         from qfluentwidgets import OptionsValidator, OptionsConfigItem
@@ -236,7 +236,6 @@ class SettingInterface(ScrollArea):
             parent=self.themeGroup
         )
         
-        from qfluentwidgets import BoolValidator, ConfigItem
         self.useSystemFontConfigItem = ConfigItem(
             "Theme", "UseSystemFont", False,
             BoolValidator()
@@ -262,7 +261,6 @@ class SettingInterface(ScrollArea):
         if hasattr(self.sidebarIconSizeCard, 'setValue'):
             self.sidebarIconSizeCard.setValue(self.config.get("sidebar_icon_size", 20))
             
-        # 沿用现有的 ConfigItem 机制，因为 qfluentwidgets 的 SwitchSettingCard 必须传入 configItem
         self.showSettingBtnConfigItem = ConfigItem(
             "Theme", "ShowSettingButton", True,
             BoolValidator()
@@ -275,8 +273,23 @@ class SettingInterface(ScrollArea):
         )
         self.showSettingBtnCard.setChecked(self.config.get("show_setting_button", True))
         
+        # =================== 3. 高级设置 ===================
         self.advancedGroup = SettingCardGroup(t("高级设置"), self.scrollWidget)
         
+        # 3.1 发送时静态图转 GIF 开关
+        self.sendAsGifConfigItem = ConfigItem(
+            "Advanced", "ConvertStaticToGif", True,
+            BoolValidator()
+        )
+        self.sendAsGifConfigItem.value = self.config.get("convert_static_to_gif", True)
+        
+        self.sendAsGifCard = SwitchSettingCard(
+            FIF.SEND, t("发送时将静态图转为GIF"), t("复制或发送 PNG/JPG/WEBP 等静态图时自动转为 1 帧 GIF 格式，避免在 QQ 等聊天软件中显示为超大原图"),
+            configItem=self.sendAsGifConfigItem, parent=self.advancedGroup
+        )
+        self.sendAsGifCard.setChecked(self.config.get("convert_static_to_gif", True))
+
+        # 3.2 悬停预览延迟
         self.previewDelayConfigItem = RangeConfigItem(
             "Advanced", "PreviewDelay", 500,
             RangeValidator(100, 3000)
@@ -290,6 +303,7 @@ class SettingInterface(ScrollArea):
         if hasattr(self.previewDelayCard, 'setValue'):
             self.previewDelayCard.setValue(self.config.get("preview_delay", 500))
         
+        # 3.3 单次渲染上限
         self.batchSizeConfigItem = RangeConfigItem(
             "Advanced", "BatchSize", 50,
             RangeValidator(10, 200)
@@ -303,6 +317,7 @@ class SettingInterface(ScrollArea):
         if hasattr(self.batchSizeCard, 'setValue'):
             self.batchSizeCard.setValue(self.config.get("render_batch_size", 50))
 
+        # 3.4 最近使用记录上限
         self.recentLimitConfigItem = RangeConfigItem(
             "Advanced", "RecentLimit", 30,
             RangeValidator(1, 999)
@@ -314,6 +329,7 @@ class SettingInterface(ScrollArea):
             parent=self.advancedGroup
         )
 
+        # 3.5 侧边栏悬浮提示
         self.sidebarTooltipConfigItem = ConfigItem(
             "Advanced", "SidebarTooltip", True,
             BoolValidator()
@@ -326,23 +342,27 @@ class SettingInterface(ScrollArea):
         )
         self.sidebarTooltipCard.setChecked(self.config.get("show_sidebar_tooltip", True))
         
+        # 3.6 主唤醒快捷键
         self.hotkeyCard = CustomHotkeySettingCard(
             t("唤醒快捷键"), t("设置全局唤醒和隐藏主面板的快捷键"), FIF.COMMAND_PROMPT,
             self.config.get("global_hotkey", "ctrl+shift+e"),
             parent=self.advancedGroup
         )
         
+        # 3.7 快速面板快捷键
         self.quickHotkeyCard = CustomHotkeySettingCard(
             t("快速面板快捷键"), t("设置全局唤醒快速表情调用面板的快捷键"), FIF.COMMAND_PROMPT,
             self.config.get("quick_panel_hotkey", "alt+2"),
             parent=self.advancedGroup
         )
 
+        # 将卡片加入窗口设置组
         self.windowGroup.addSettingCard(self.alwaysTopCard)
         self.windowGroup.addSettingCard(self.previewSizeCard)
         self.windowGroup.addSettingCard(self.quickPanelWidthCard)
         self.windowGroup.addSettingCard(self.quickPanelHeightCard)
         
+        # 将卡片加入个性化组
         self.themeGroup.addSettingCard(self.languageCard)
         self.themeGroup.addSettingCard(self.themeCard)
         self.themeGroup.addSettingCard(self.themeColorCard)
@@ -350,6 +370,8 @@ class SettingInterface(ScrollArea):
         self.themeGroup.addSettingCard(self.showSettingBtnCard)
         self.themeGroup.addSettingCard(self.useSystemFontCard)
         
+        # 将卡片加入高级设置组
+        self.advancedGroup.addSettingCard(self.sendAsGifCard)
         self.advancedGroup.addSettingCard(self.previewDelayCard)
         self.advancedGroup.addSettingCard(self.batchSizeCard)
         self.advancedGroup.addSettingCard(self.recentLimitCard)
@@ -406,6 +428,8 @@ class SettingInterface(ScrollArea):
         self.showSettingBtnCard.setContent(t("在主面板右上角显示快速进入设置的按钮"))
         
         self.advancedGroup.titleLabel.setText(t("高级设置"))
+        self.sendAsGifCard.setTitle(t("发送时将静态图转为GIF"))
+        self.sendAsGifCard.setContent(t("复制或发送 PNG/JPG/WEBP 等静态图时自动转为 1 帧 GIF 格式，避免在 QQ 等聊天软件中显示为超大原图"))
         self.previewDelayCard.setTitle(t("悬停预览延迟"))
         self.previewDelayCard.setContent(t("设置鼠标悬停多久后弹出大图预览"))
         self.batchSizeCard.setTitle(t("单次渲染上限"))
@@ -430,6 +454,7 @@ class SettingInterface(ScrollArea):
         self.previewSizeCard.valueChanged.connect(lambda v: self._save_config("preview_size", v))
         self.sidebarIconSizeCard.valueChanged.connect(lambda v: self._save_config("sidebar_icon_size", v, True))
         self.showSettingBtnCard.checkedChanged.connect(lambda v: self._save_config("show_setting_button", v, True))
+        self.sendAsGifCard.checkedChanged.connect(lambda v: self._save_config("convert_static_to_gif", v, True))
         self.sidebarTooltipCard.checkedChanged.connect(lambda v: self._save_config("show_sidebar_tooltip", v, True))
         self.batchSizeCard.valueChanged.connect(lambda v: self._save_config("render_batch_size", v))
         self.recentLimitCard.valueChanged.connect(lambda v: self._save_config("recent_limit", v))
