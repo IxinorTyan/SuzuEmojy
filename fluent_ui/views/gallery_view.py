@@ -180,6 +180,61 @@ class ImportThread(QThread):
             
         self.finished.emit(saved_count, skipped_count, failed_count)
 
+
+class ExchangeImportThread(QThread):
+    """后台导入资源包的线程，支持进度回调"""
+    progress = Signal(int, int, str)  # current, total, text
+    finished = Signal(int, int, str)  # imported_count, skipped_count, error_msg
+
+    def __init__(self, zip_path, base_dir=None, parent=None):
+        super().__init__(parent)
+        self.zip_path = zip_path
+        self.base_dir = base_dir
+
+    def run(self):
+        from services.exchange_import import import_resources
+        try:
+            imported, skipped = import_resources(
+                self.zip_path,
+                base_dir=self.base_dir,
+                progress_callback=self._on_progress
+            )
+            self.finished.emit(imported, skipped, "")
+        except Exception as e:
+            self.finished.emit(0, 0, str(e))
+
+    def _on_progress(self, current, total, text):
+        self.progress.emit(current, total, text)
+
+
+class ExchangeExportThread(QThread):
+    """后台导出资源包的线程，支持进度回调"""
+    progress = Signal(int, int, str)  # current, total, text
+    finished = Signal(dict, str)      # manifest_dict, error_msg
+
+    def __init__(self, zip_path, selected_categories=None, base_dir=None, parent=None):
+        super().__init__(parent)
+        self.zip_path = zip_path
+        self.selected_categories = selected_categories
+        self.base_dir = base_dir
+
+    def run(self):
+        from services.exchange_export import export_resources
+        try:
+            manifest = export_resources(
+                self.zip_path,
+                selected_categories=self.selected_categories,
+                base_dir=self.base_dir,
+                progress_callback=self._on_progress
+            )
+            self.finished.emit(manifest, "")
+        except Exception as e:
+            self.finished.emit({}, str(e))
+
+    def _on_progress(self, current, total, text):
+        self.progress.emit(current, total, text)
+
+
 class CategoryListWidget(QListWidget):
     """支持拖拽排序的分类列表，依赖原生 InternalMove 机制防止数据丢失"""
     def __init__(self, parent=None):
@@ -832,6 +887,8 @@ class GalleryInterface(QWidget):
         
         self.download_threads = []
         self.import_thread = None
+        self.exchange_import_thread = None
+        self.exchange_export_thread = None
         self.setAcceptDrops(True)
         
         # 拖拽自动滚动定时器
@@ -2433,7 +2490,9 @@ class GalleryInterface(QWidget):
         menu.exec(pos)
 
     def _import_exchange_package(self):
-        from services.exchange_import import import_resources
+        if self.exchange_import_thread and self.exchange_import_thread.isRunning():
+            self.show_error("导入中", "当前有资源包导入任务正在进行，请稍候...")
+            return
 
         zip_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -2444,8 +2503,34 @@ class GalleryInterface(QWidget):
         if not zip_path:
             return
 
-        try:
-            imported, skipped = import_resources(zip_path)
+        self._exchange_import_info_bar = InfoBar.info(
+            title="正在导入资源包",
+            content="正在解析 ZIP 归档文件...",
+            orient=Qt.Horizontal,
+            isClosable=False,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,
+            parent=self
+        )
+
+        self.exchange_import_thread = ExchangeImportThread(zip_path, base_dir=self.storage.base_dir, parent=self)
+        self.exchange_import_thread.progress.connect(self._on_exchange_import_progress)
+        self.exchange_import_thread.finished.connect(self._on_exchange_import_finished)
+        self.exchange_import_thread.start()
+
+    def _on_exchange_import_progress(self, current, total, text):
+        if hasattr(self, '_exchange_import_info_bar') and self._exchange_import_info_bar:
+            if hasattr(self._exchange_import_info_bar, 'contentLabel'):
+                self._exchange_import_info_bar.contentLabel.setText(f"{text} ({current} / {total})")
+
+    def _on_exchange_import_finished(self, imported, skipped, error_msg):
+        if hasattr(self, '_exchange_import_info_bar') and self._exchange_import_info_bar:
+            self._exchange_import_info_bar.close()
+            self._exchange_import_info_bar = None
+
+        if error_msg:
+            self.show_error("导入失败", error_msg)
+        else:
             msg = f"已导入 {imported} 个新资源"
             if skipped > 0:
                 msg += f"，跳过 {skipped} 个重复资源"
@@ -2453,8 +2538,6 @@ class GalleryInterface(QWidget):
             self.show_success("导入成功", msg)
             self.on_images_changed()
             self.sidebar.refresh_list(self.current_category)
-        except Exception as e:
-            self.show_error("导入失败", str(e))
 
     def _export_all_exchange_package(self):
         self._run_exchange_export(None)
@@ -2476,13 +2559,59 @@ class GalleryInterface(QWidget):
                 self.titleLabel = SubtitleLabel("选择要导出的收藏夹")
                 self.viewLayout.addWidget(self.titleLabel)
 
+                # 添加全选/全不选快捷栏
+                self.btn_layout = QHBoxLayout()
+                self.btn_layout.setContentsMargins(0, 5, 0, 5)
+                self.btn_select_all = PushButton("全选", self)
+                self.btn_deselect_all = PushButton("全不选", self)
+                self.btn_select_all.setFixedHeight(28)
+                self.btn_deselect_all.setFixedHeight(28)
+                self.btn_layout.addWidget(self.btn_select_all)
+                self.btn_layout.addWidget(self.btn_deselect_all)
+                self.btn_layout.addStretch()
+                self.viewLayout.addLayout(self.btn_layout)
+
+                # 滚动区域防止收藏夹过多时界面溢出
+                self.scrollArea = ScrollArea(self)
+                self.scrollArea.setWidgetResizable(True)
+                self.scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                self.scrollArea.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+                
+                self.scrollContainer = QWidget()
+                self.scrollContainer.setStyleSheet("QWidget { background: transparent; }")
+                self.scrollLayout = QVBoxLayout(self.scrollContainer)
+                self.scrollLayout.setContentsMargins(0, 0, 10, 0)
+                self.scrollLayout.setSpacing(8)
+
                 self.checkboxes = []
                 for name in category_names:
                     checkbox = CheckBox(name)
                     self.checkboxes.append(checkbox)
-                    self.viewLayout.addWidget(checkbox)
+                    self.scrollLayout.addWidget(checkbox)
+                
+                self.scrollLayout.addStretch()
+                self.scrollArea.setWidget(self.scrollContainer)
+                
+                # 根据条目数动态调整滚动区域高度，限制最大高度为 240px
+                item_count = len(category_names)
+                estimated_height = item_count * 34 + 10
+                scroll_height = min(240, max(100, estimated_height))
+                self.scrollArea.setFixedHeight(scroll_height)
 
-                self.widget.setMinimumWidth(320)
+                self.viewLayout.addWidget(self.scrollArea)
+                self.widget.setMinimumWidth(360)
+
+                # 信号连接
+                self.btn_select_all.clicked.connect(self._select_all)
+                self.btn_deselect_all.clicked.connect(self._deselect_all)
+
+            def _select_all(self):
+                for cb in self.checkboxes:
+                    cb.setChecked(True)
+
+            def _deselect_all(self):
+                for cb in self.checkboxes:
+                    cb.setChecked(False)
 
             def get_selected_categories(self):
                 return [cb.text() for cb in self.checkboxes if cb.isChecked()]
@@ -2499,7 +2628,9 @@ class GalleryInterface(QWidget):
         self._run_exchange_export(selected_categories)
 
     def _run_exchange_export(self, selected_categories=None):
-        from services.exchange_export import export_resources
+        if self.exchange_export_thread and self.exchange_export_thread.isRunning():
+            self.show_error("导出中", "当前有资源包导出任务正在进行，请稍候...")
+            return
 
         if selected_categories:
             default_name = "suzu_exchange_selected_export.zip"
@@ -2520,8 +2651,39 @@ class GalleryInterface(QWidget):
         if not zip_path.lower().endswith(".zip"):
             zip_path += ".zip"
 
-        try:
-            manifest = export_resources(zip_path, selected_categories=selected_categories)
+        self._exchange_export_info_bar = InfoBar.info(
+            title="正在导出资源包",
+            content="正在初始化导出 data...",
+            orient=Qt.Horizontal,
+            isClosable=False,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,
+            parent=self
+        )
+
+        self.exchange_export_thread = ExchangeExportThread(
+            zip_path,
+            selected_categories=selected_categories,
+            base_dir=self.storage.base_dir,
+            parent=self
+        )
+        self.exchange_export_thread.progress.connect(self._on_exchange_export_progress)
+        self.exchange_export_thread.finished.connect(lambda manifest, error_msg: self._on_exchange_export_finished(manifest, error_msg, zip_path))
+        self.exchange_export_thread.start()
+
+    def _on_exchange_export_progress(self, current, total, text):
+        if hasattr(self, '_exchange_export_info_bar') and self._exchange_export_info_bar:
+            if hasattr(self._exchange_export_info_bar, 'contentLabel'):
+                self._exchange_export_info_bar.contentLabel.setText(f"{text} ({current} / {total})")
+
+    def _on_exchange_export_finished(self, manifest, error_msg, zip_path):
+        if hasattr(self, '_exchange_export_info_bar') and self._exchange_export_info_bar:
+            self._exchange_export_info_bar.close()
+            self._exchange_export_info_bar = None
+
+        if error_msg:
+            self.show_error("导出失败", error_msg)
+        else:
             count = int(manifest.get("counts", {}).get("resources", 0))
             skipped = len(manifest.get("skipped", []))
             category_count = int(manifest.get("counts", {}).get("categories", 0))
@@ -2529,8 +2691,6 @@ class GalleryInterface(QWidget):
                 "导出成功",
                 f"已导出 {count} 个资源、{category_count} 个收藏夹到\n{zip_path}\n跳过 {skipped} 项"
             )
-        except Exception as e:
-            self.show_error("导出失败", str(e))
 
     def _on_download_finished(self, success, temp_filepath, error_msg, url):
         for t in self.download_threads[:]:

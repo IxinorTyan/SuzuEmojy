@@ -9,7 +9,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional, Callable
 
 from PIL import Image
 from io import BytesIO
@@ -50,7 +50,11 @@ class ExchangeImportService:
         self.data_dir = root / "data"
         self.images_dir = self.data_dir / "images"
 
-    def import_zip(self, zip_path: str | os.PathLike[str]) -> tuple[int, int]:
+    def import_zip(
+        self,
+        zip_path: str | os.PathLike[str],
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> tuple[int, int]:
         archive = Path(zip_path)
         if not archive.is_file():
             raise ExchangeImportError(f"ZIP 文件不存在: {archive}")
@@ -59,7 +63,8 @@ class ExchangeImportService:
         connections: list[sqlite3.Connection] = []
         created_files: list[Path] = []
         try:
-            self._extract_zip(archive, staging)
+            total_zip_files = self._extract_zip(archive, staging, progress_callback)
+            total_zip_files = max(total_zip_files, 1)
             manifest = self._load_json(staging / "manifest.json")
             catalog = self._load_json(staging / "catalog.json")
             resources, categories = self._parse_catalog(manifest, catalog, staging)
@@ -103,7 +108,11 @@ class ExchangeImportService:
             imported = 0
             skipped = 0
 
-            for resource in resources:
+            total_resources = len(resources)
+            for idx, resource in enumerate(resources):
+                if progress_callback:
+                    current_step = total_zip_files + int((idx / total_resources) * 3 * total_zip_files) if total_resources > 0 else total_zip_files
+                    progress_callback(current_step, total_zip_files * 4, f"正在导入表情: {resource.display_name}")
                 existing_path = existing.get(resource.sync_key)
                 if existing_path is not None:
                     self._add_category_relations(
@@ -144,6 +153,8 @@ class ExchangeImportService:
 
             for connection in connections:
                 connection.commit()
+            if progress_callback:
+                progress_callback(total_zip_files * 4, total_zip_files * 4, "导入完成")
             return imported, skipped
         except Exception as exc:
             for connection in connections:
@@ -164,11 +175,20 @@ class ExchangeImportService:
                 connection.close()
             shutil.rmtree(staging, ignore_errors=True)
 
-    def _extract_zip(self, archive: Path, staging: Path) -> None:
+    def _extract_zip(
+        self,
+        archive: Path,
+        staging: Path,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> int:
         root = staging.resolve()
         with zipfile.ZipFile(archive) as zip_file:
             names: set[str] = set()
-            for info in zip_file.infolist():
+            infolist = zip_file.infolist()
+            total = len(infolist)
+            for idx, info in enumerate(infolist):
+                if progress_callback:
+                    progress_callback(idx, total * 4, f"正在解压资源: {info.filename}")
                 name = info.filename.replace("\\", "/")
                 if not name or name.endswith("/"):
                     continue
@@ -184,6 +204,7 @@ class ExchangeImportService:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with zip_file.open(info) as source, destination.open("wb") as target:
                     shutil.copyfileobj(source, target)
+            return len(names)
 
     @staticmethod
     def _load_json(path: Path) -> Mapping[str, Any]:
@@ -416,6 +437,8 @@ class ExchangeImportService:
 
 
 def import_resources(
-    zip_path: str | os.PathLike[str], base_dir: str | os.PathLike[str] | None = None
+    zip_path: str | os.PathLike[str],
+    base_dir: str | os.PathLike[str] | None = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> tuple[int, int]:
-    return ExchangeImportService(base_dir=base_dir).import_zip(zip_path)
+    return ExchangeImportService(base_dir=base_dir).import_zip(zip_path, progress_callback=progress_callback)

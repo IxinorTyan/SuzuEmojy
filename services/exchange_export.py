@@ -10,7 +10,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Callable
 
 from PIL import Image
 
@@ -62,7 +62,12 @@ class ExchangeExportService:
         self.categories_file = os.path.join(self.data_dir, "categories.json")
         self.app_version = self._read_app_version()
 
-    def export_zip(self, zip_path: str, selected_categories: Optional[List[str]] = None) -> Dict[str, Any]:
+    def export_zip(
+        self,
+        zip_path: str,
+        selected_categories: Optional[List[str]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> Dict[str, Any]:
         os.makedirs(os.path.dirname(os.path.abspath(zip_path)), exist_ok=True)
 
         categories, warnings = self._load_categories_readonly()
@@ -85,7 +90,10 @@ class ExchangeExportService:
                 if os.path.isfile(os.path.join(self.images_dir, name))
             )
 
-        for name in source_files:
+        total_files = max(len(source_files), 1)
+        for idx, name in enumerate(source_files):
+            if progress_callback:
+                progress_callback(idx, total_files * 2, f"正在解析表情: {name}")
             source_path = os.path.join(self.images_dir, name)
             result = self._inspect_and_pack_asset(source_path)
             if isinstance(result, ExportSkip):
@@ -93,6 +101,9 @@ class ExchangeExportService:
                 continue
 
             refs = filename_to_category_refs.get(result.display_name, ())
+            if selected_categories is not None and not refs:
+                continue
+
             meta_keywords = metadata.get(result.display_name, "")
             meta_quality = quality_map.get(result.display_name, 0.0)
 
@@ -128,7 +139,7 @@ class ExchangeExportService:
         for item in resource_map.values():
             category_refs = sorted(item["category_refs"])
             total_asset_bytes += int(item["asset_size"])
-            resources.append({
+            raw_dict = {
                 "sync_key": item["sync_key"],
                 "asset_path": item["asset_path"],
                 "asset_size": int(item["asset_size"]),
@@ -144,7 +155,9 @@ class ExchangeExportService:
                 "created_at": int(item["created_at"]),
                 "display_name": item["display_name"],
                 "category_refs": category_refs,
-            })
+            }
+            filtered_dict = {k: v for k, v in raw_dict.items() if v is not None}
+            resources.append(filtered_dict)
 
         resources.sort(key=lambda x: (x["created_at"], x["display_name"], x["sync_key"]))
 
@@ -185,8 +198,14 @@ class ExchangeExportService:
         ) as zf:
             zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
             zf.writestr("catalog.json", json.dumps(catalog, ensure_ascii=False, indent=2))
-            for item in resources:
+            total_resources = len(resources)
+            for idx, item in enumerate(resources):
+                if progress_callback:
+                    current_step = total_files + int((idx / total_resources) * total_files) if total_resources > 0 else total_files
+                    progress_callback(current_step, total_files * 2, f"正在打包表情: {item['display_name']}")
                 zf.writestr(item["asset_path"], resource_map[item["sync_key"]]["_payload"])
+            if progress_callback:
+                progress_callback(total_files * 2, total_files * 2, "打包完成")
 
         return manifest
 
@@ -488,8 +507,10 @@ def export_resources(
     zip_path: str,
     base_dir: Optional[str] = None,
     selected_categories: Optional[List[str]] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     return ExchangeExportService(base_dir=base_dir).export_zip(
         zip_path,
         selected_categories=selected_categories,
+        progress_callback=progress_callback,
     )
