@@ -147,6 +147,54 @@ def extract_all_hashes(image_path: str) -> Optional[Dict[str, str]]:
         return None
 
 
+def compute_file_md5(path: str | os.PathLike[str]) -> str:
+    """计算完整文件字节的 MD5 哈希值"""
+    h = hashlib.md5()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compute_pixel_md5(path: str | os.PathLike[str]) -> Optional[str]:
+    """
+    PNG 魔数识别 → PIL 打开 → convert("RGBA") → MD5(tobytes())
+    非静态图（如 GIF 或损坏的文件、非静态 PNG/APNG）返回 None
+    """
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(8)
+        if header.startswith(b"\x89PNG\r\n\x1a\n"):
+            with Image.open(path) as img:
+                if getattr(img, "is_animated", False) or getattr(img, "n_frames", 1) > 1:
+                    return None
+                rgba = img.convert("RGBA")
+                return hashlib.md5(rgba.tobytes()).hexdigest()
+    except Exception:
+        pass
+    return None
+
+
+def compute_sync_key(path: str | os.PathLike[str]) -> Optional[str]:
+    """
+    PNG → "p:"+pixel_md5
+    GIF87a/GIF89a → "f:"+file_md5
+    其他/损坏 → None
+    """
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(8)
+        if header.startswith(b"\x89PNG\r\n\x1a\n"):
+            px_md5 = compute_pixel_md5(path)
+            if px_md5:
+                return f"p:{px_md5}"
+        elif header[:6] in (b"GIF87a", b"GIF89a"):
+            return f"f:{compute_file_md5(path)}"
+    except Exception:
+        pass
+    return None
+
+
 if __name__ == '__main__':
     import sys
 

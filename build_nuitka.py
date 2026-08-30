@@ -13,8 +13,8 @@ def main():
         "--standalone",
         "--windows-disable-console",
         "--enable-plugin=pyside6",
-        "--windows-icon-from-ico=hi.ico",
-        "--include-data-file=hi.ico=hi.ico",
+        "--windows-icon-from-ico=ico.ico",
+        "--include-data-file=ico.ico=ico.ico",
         "--output-dir=dist",
         "--output-filename=SuzuEmojy.exe",
         "--assume-yes-for-downloads",
@@ -139,7 +139,7 @@ if __name__ == "__main__":
         subprocess.run([
             sys.executable, "-m", "PyInstaller", 
             "--noconsole", "--onefile", 
-            "--icon=hi.ico", 
+            "--icon=ico.ico", 
             "--name=SuzuEmojy", 
             "mini_launcher.py"
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -2,13 +2,14 @@ import os
 import ctypes
 from PySide6.QtWidgets import (
     QWidget, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout, 
-    QListWidget, QListWidgetItem, QInputDialog, QLineEdit
+    QListWidget, QListWidgetItem, QInputDialog, QLineEdit, QFileDialog
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal
 from PySide6.QtGui import QCursor, QIcon
 from qfluentwidgets import (
     ScrollArea, InfoBar, InfoBarPosition, RoundMenu, Action, 
-    PushButton, FluentIcon as FIF, TransparentToolButton, setFont, BodyLabel
+    PushButton, FluentIcon as FIF, TransparentToolButton, setFont, BodyLabel,
+    MessageBoxBase, SubtitleLabel, CheckBox
 )
 
 from fluent_ui.components.emoji_card import EmojiCard
@@ -948,6 +949,11 @@ class GalleryInterface(QWidget):
         self.btn_filter.setToolTip("筛选")
         self.btn_filter.clicked.connect(self._show_filter_menu)
         
+        # 资源包按钮
+        self.btn_export = TransparentToolButton(FIF.SAVE, self.top_bar)
+        self.btn_export.setToolTip("资源包")
+        self.btn_export.clicked.connect(self._show_exchange_menu)
+        
         # 设置按钮
         self.btn_setting = TransparentToolButton(FIF.SETTING, self.top_bar)
         self.btn_setting.setToolTip("设置")
@@ -957,6 +963,7 @@ class GalleryInterface(QWidget):
         self.top_bar_layout.addStretch() # 把搜索框推到右边
         self.top_bar_layout.addWidget(self.btn_multi_select)
         self.top_bar_layout.addWidget(self.btn_filter)
+        self.top_bar_layout.addWidget(self.btn_export)
         self.top_bar_layout.addWidget(self.btn_setting)
         self.top_bar_layout.addWidget(self.search_box)
         
@@ -2401,6 +2408,129 @@ class GalleryInterface(QWidget):
             self.download_threads.append(thread)
             thread.finished.connect(self._on_download_finished)
             thread.start()
+
+    def _show_exchange_menu(self):
+        menu = RoundMenu(parent=self)
+
+        action_import = Action("导入资源包...", parent=menu)
+        action_import.triggered.connect(lambda: QTimer.singleShot(50, self._import_exchange_package))
+        menu.addAction(action_import)
+
+        menu.addSeparator()
+
+        action_export_all = Action("导出全部资源包", parent=menu)
+        action_export_all.triggered.connect(lambda: QTimer.singleShot(50, self._export_all_exchange_package))
+        menu.addAction(action_export_all)
+
+        action_export_selected = Action("导出选中的收藏夹资源包", parent=menu)
+        action_export_selected.triggered.connect(
+            lambda: QTimer.singleShot(50, self._export_selected_categories_exchange_package)
+        )
+        menu.addAction(action_export_selected)
+
+        from PySide6.QtCore import QPoint
+        pos = self.btn_export.mapToGlobal(QPoint(0, self.btn_export.height()))
+        menu.exec(pos)
+
+    def _import_exchange_package(self):
+        from services.exchange_import import import_resources
+
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入资源包",
+            "",
+            "ZIP Files (*.zip)"
+        )
+        if not zip_path:
+            return
+
+        try:
+            imported, skipped = import_resources(zip_path)
+            msg = f"已导入 {imported} 个新资源"
+            if skipped > 0:
+                msg += f"，跳过 {skipped} 个重复资源"
+            self.storage.force_reload()
+            self.show_success("导入成功", msg)
+            self.on_images_changed()
+            self.sidebar.refresh_list(self.current_category)
+        except Exception as e:
+            self.show_error("导入失败", str(e))
+
+    def _export_all_exchange_package(self):
+        self._run_exchange_export(None)
+
+    def _export_selected_categories_exchange_package(self):
+        categories = self.storage.get_exportable_categories()
+        categories = [
+            cat for cat in categories
+            if cat not in ("全部表情", "未分类", "新建分类")
+        ]
+
+        if not categories:
+            self.show_error("无法导出", "当前没有可供选择的收藏夹")
+            return
+
+        class CategoryExportDialog(MessageBoxBase):
+            def __init__(self, category_names, parent=None):
+                super().__init__(parent)
+                self.titleLabel = SubtitleLabel("选择要导出的收藏夹")
+                self.viewLayout.addWidget(self.titleLabel)
+
+                self.checkboxes = []
+                for name in category_names:
+                    checkbox = CheckBox(name)
+                    self.checkboxes.append(checkbox)
+                    self.viewLayout.addWidget(checkbox)
+
+                self.widget.setMinimumWidth(320)
+
+            def get_selected_categories(self):
+                return [cb.text() for cb in self.checkboxes if cb.isChecked()]
+
+        dialog = CategoryExportDialog(categories, self.window())
+        if not dialog.exec():
+            return
+
+        selected_categories = dialog.get_selected_categories()
+        if not selected_categories:
+            self.show_error("未选择收藏夹", "请至少选择一个收藏夹后再导出")
+            return
+
+        self._run_exchange_export(selected_categories)
+
+    def _run_exchange_export(self, selected_categories=None):
+        from services.exchange_export import export_resources
+
+        if selected_categories:
+            default_name = "suzu_exchange_selected_export.zip"
+            dialog_title = "导出选中的收藏夹资源包"
+        else:
+            default_name = "suzu_exchange_export.zip"
+            dialog_title = "导出全部资源包"
+
+        zip_path, _ = QFileDialog.getSaveFileName(
+            self,
+            dialog_title,
+            default_name,
+            "ZIP Files (*.zip)"
+        )
+        if not zip_path:
+            return
+
+        if not zip_path.lower().endswith(".zip"):
+            zip_path += ".zip"
+
+        try:
+            manifest = export_resources(zip_path, selected_categories=selected_categories)
+            count = int(manifest.get("counts", {}).get("resources", 0))
+            skipped = len(manifest.get("skipped", []))
+            category_count = int(manifest.get("counts", {}).get("categories", 0))
+            self.show_success(
+                "导出成功",
+                f"已导出 {count} 个资源、{category_count} 个收藏夹到\n{zip_path}\n跳过 {skipped} 项"
+            )
+        except Exception as e:
+            self.show_error("导出失败", str(e))
 
     def _on_download_finished(self, success, temp_filepath, error_msg, url):
         for t in self.download_threads[:]:

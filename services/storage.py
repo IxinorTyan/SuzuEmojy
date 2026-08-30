@@ -62,6 +62,23 @@ class StorageService:
         self._metadata_dirty = True
         
         self._recent_cache = None
+        self._sync_key_index = None
+
+    def _get_sync_key_index(self):
+        if self._sync_key_index is not None:
+            return self._sync_key_index
+        
+        self._sync_key_index = {}
+        if os.path.exists(self.images_dir):
+            from services.hasher import compute_sync_key
+            filenames = sorted(os.listdir(self.images_dir))
+            for filename in filenames:
+                if filename.lower().endswith(self.SUPPORTED_FORMATS):
+                    abspath = self._to_abspath(filename)
+                    skey = compute_sync_key(abspath)
+                    if skey:
+                        self._sync_key_index.setdefault(skey, filename)
+        return self._sync_key_index
 
     def _ensure_db_tables(self):
         """确保各模块 SQLite 数据库表结构健全"""
@@ -450,6 +467,11 @@ class StorageService:
             self._categories_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_categories DB 失败: {e}")
+
+    def get_exportable_categories(self):
+        """获取可导出的用户分类名称列表，保持当前分类排序"""
+        categories = self.get_all_categories()
+        return list(categories.keys())
 
     def add_category(self, category_name):
         """新建一个分类"""
@@ -898,8 +920,6 @@ class StorageService:
             else:
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
-                    
-                file_hash = self._calculate_pixel_hash(img)
                 
                 clean_img = Image.new('RGBA', img.size)
                 clean_img.paste(img, (0, 0))
@@ -909,6 +929,10 @@ class StorageService:
                 final_bytes = output_io.getvalue()
                 final_ext = '.png'
                 
+                # 语义钉死：写入 image_features.md5 的值一律是 file_md5
+                file_hash = self._calculate_bytes_hash(final_bytes)
+                
+            # L1 快路径：用最终入库文件的 file_md5 在 _hashes_cache 中查找
             if file_hash and file_hash in self._hashes_cache:
                 existing_filename = self._hashes_cache[file_hash]
                 existing_path = self._to_abspath(existing_filename)
@@ -917,7 +941,22 @@ class StorageService:
                     return existing_path, True
                 else:
                     del self._hashes_cache[file_hash]
-                    
+            
+            # L2 像素路径：快路径未命中且为静态图时，与本地 images 目录的 sync_key 索引比对
+            if not is_animated:
+                pixel_hash = self._calculate_pixel_hash(img)
+                if pixel_hash:
+                    skey = f"p:{pixel_hash}"
+                    sync_index = self._get_sync_key_index()
+                    if skey in sync_index:
+                        existing_filename = sync_index[skey]
+                        existing_path = self._to_abspath(existing_filename)
+                        if os.path.exists(existing_path):
+                            self._hashes_cache[file_hash] = existing_filename
+                            self._save_hashes()
+                            self.move_image_to_front(existing_path)
+                            return existing_path, True
+                            
             filename = self.generate_new_filename(final_ext)
             filepath = os.path.join(self.images_dir, filename)
             
@@ -927,6 +966,16 @@ class StorageService:
             if file_hash:
                 self._hashes_cache[file_hash] = filename
                 self._save_hashes()
+                
+            # 同步维护内存中的 sync_key 索引
+            if not is_animated:
+                pixel_hash = self._calculate_pixel_hash(img)
+                if pixel_hash:
+                    skey = f"p:{pixel_hash}"
+                    self._get_sync_key_index().setdefault(skey, filename)
+            else:
+                skey = f"f:{file_hash}"
+                self._get_sync_key_index().setdefault(skey, filename)
                 
             self._images_dirty = True
             return self._to_abspath(filename), False
@@ -963,6 +1012,84 @@ class StorageService:
         except Exception as e:
             print(f"[ERROR] 读取文件失败: {e}")
             return None, False
+
+    def force_reload(self):
+        """强制清空内存缓存，从 SQLite DB 重新加载并同步保存到 JSON 备份文件"""
+        self._images_dirty = True
+        self._categories_dirty = True
+        self._metadata_dirty = True
+        self._recent_cache = None
+        self._hashes_cache = self._load_hashes()
+        
+        # 从数据库加载最新数据
+        all_images = self.get_all_images()
+        categories = self.get_all_categories()
+        metadata = self.get_all_metadata()
+        category_icons = self.get_all_category_icons()
+
+        # 仅将获取到的最新数据写回 JSON 文件，避免再次写入 DB
+        # 1. 写 order.json
+        try:
+            filenames = [self._to_filename(p) for p in all_images]
+            with open(self.order_file, 'w', encoding='utf-8') as f:
+                json.dump(filenames, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] force_reload 保存 order.json 失败: {e}")
+
+        # 2. 写 categories.json
+        try:
+            portable_categories = {}
+            for category, paths in categories.items():
+                portable_categories[category] = [self._to_filename(p) for p in paths]
+            with open(self.categories_file, 'w', encoding='utf-8') as f:
+                json.dump(portable_categories, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] force_reload 保存 categories.json 失败: {e}")
+
+        # 3. 写 metadata.json
+        try:
+            portable_meta = {self._to_filename(k): str(v) for k, v in metadata.items()}
+            with open(self.metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(portable_meta, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] force_reload 保存 metadata.json 失败: {e}")
+
+        # 4. 写 category_icons.json
+        try:
+            portable_icons = {}
+            for cat, val in category_icons.items():
+                if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
+                    portable_icons[cat] = self._to_filename(val)
+                else:
+                    portable_icons[cat] = val
+            with open(self.icons_file, 'w', encoding='utf-8') as f:
+                json.dump(portable_icons, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] force_reload 保存 category_icons.json 失败: {e}")
+
+        # 5. 写 hashes.json
+        try:
+            with open(self.hashes_file, 'w', encoding='utf-8') as f:
+                json.dump(self._hashes_cache, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"[ERROR] force_reload 保存 hashes.json 失败: {e}")
+
+        # 重置脏标记为 False
+        self._images_cache = all_images
+        self._images_dirty = False
+        
+        self._categories_cache = categories
+        reverse_map = {}
+        for category, abs_paths in categories.items():
+            for p in abs_paths:
+                if p not in reverse_map:
+                    reverse_map[p] = []
+                reverse_map[p].append(category)
+        self._image_to_categories_cache = reverse_map
+        self._categories_dirty = False
+        
+        self._metadata_cache = metadata
+        self._metadata_dirty = False
 
     def delete_image(self, filepath):
         """从本地删除指定的图片文件，并同步清理分类、元数据、哈希、最近使用（DB+JSON双写双删）"""
@@ -1007,6 +1134,21 @@ class StorageService:
                 if hash_to_remove:
                     del self._hashes_cache[hash_to_remove]
                     self._save_hashes()
+
+                # 从 sync_key_index 中同步移除
+                if hasattr(self, '_sync_key_index') and self._sync_key_index is not None:
+                    keys_to_del = [k for k, v in self._sync_key_index.items() if v == filename]
+                    for k in keys_to_del:
+                        del self._sync_key_index[k]
+                        # 重新寻找备用文件
+                        from services.hasher import compute_sync_key
+                        for other_name in sorted(os.listdir(self.images_dir)):
+                            if other_name != filename and other_name.lower().endswith(self.SUPPORTED_FORMATS):
+                                other_path = self._to_abspath(other_name)
+                                other_skey = compute_sync_key(other_path)
+                                if other_skey == k:
+                                    self._sync_key_index[k] = other_name
+                                    break
 
                 # 从各 DB 中安全彻底清理该文件记录
                 try:

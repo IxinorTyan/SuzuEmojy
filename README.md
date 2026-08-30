@@ -192,7 +192,7 @@ SuzuEmojy/
 ├── build.bat              # 启动器打包脚本 (PyInstaller)
 ├── build_nuitka.py        # 完整程序编译脚本 (Nuitka)
 ├── requirements.txt       # 依赖列表
-├── hi.ico                 # 程序图标
+├── ico.ico                # 程序图标
 ├── fluent_ui/             # 现代化界面核心代码
 │   ├── main_window.py     # 主窗口容器
 │   ├── components/        # UI 组件 (表情卡片、悬停预览等)
@@ -405,7 +405,7 @@ SuzuEmojy/
 ├── build.bat              # Launcher build script (PyInstaller)
 ├── build_nuitka.py        # Full standalone build script (Nuitka)
 ├── requirements.txt       # Dependencies list
-├── hi.ico                 # Application icon
+├── ico.ico                # Application icon
 ├── fluent_ui/             # Modern UI core code
 │   ├── main_window.py     # Main window container
 │   ├── components/        # UI components (emoji cards, hover preview, etc.)

@@ -5,11 +5,8 @@ from PySide6.QtCore import Qt, QObject, Signal, QSize, QEvent, QTimer
 from PySide6.QtGui import QIcon, QShortcut, QKeySequence
 from PySide6.QtWidgets import QApplication
 
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import (
-    MSFluentWindow, NavigationItemPosition, FluentIcon as FIF,
-    SearchLineEdit, MessageBox, TransparentToolButton, SplitTitleBar
-)
+from PySide6.QtWidgets import QVBoxLayout
+from qfluentwidgets import MessageBox
 from qframelesswindow import FramelessWindow, StandardTitleBar
 
 from fluent_ui.views.gallery_view import GalleryInterface
@@ -43,7 +40,7 @@ class MainWindow(FramelessWindow):
 
     def _init_window(self):
         self.setWindowTitle("SuzuEmojy")
-        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "hi.ico")
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ico.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
             

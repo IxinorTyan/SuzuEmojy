@@ -31,7 +31,7 @@ if exist "SuzuEmojy.spec" del /q "SuzuEmojy.spec"
 echo.
 echo Starting PyInstaller for Launcher...
 :: 使用 --onefile 打包成单文件，彻底解决 DLL 丢失问题
-python -m PyInstaller --noconsole --onefile --icon=hi.ico --add-data "hi.ico;." --name "SuzuEmojy" launcher.py
+python -m PyInstaller --noconsole --onefile --icon=ico.ico --add-data "ico.ico;." --name "SuzuEmojy" launcher.py
 if errorlevel 1 (
     echo.
     echo ====================================
@@ -67,7 +67,7 @@ echo Copying source code and assets to release folder...
 
 call :copy_required_file "main.py" "dist\SuzuEmojy_Release\"
 call :copy_required_file "requirements.txt" "dist\SuzuEmojy_Release\"
-call :copy_required_file "hi.ico" "dist\SuzuEmojy_Release\"
+call :copy_required_file "ico.ico" "dist\SuzuEmojy_Release\"
 call :copy_required_file "README.md" "dist\SuzuEmojy_Release\"
 call :copy_required_file "说明书.md" "dist\SuzuEmojy_Release\"
 call :copy_required_file "依赖装不上,没招了你就试试点这个吧,记得附上报错日志.bat" "dist\SuzuEmojy_Release\"

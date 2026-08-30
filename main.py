@@ -86,7 +86,7 @@ def main():
         icon_dir = sys._MEIPASS
     else:
         icon_dir = os.path.dirname(__file__)
-    icon_path = os.path.join(icon_dir, "hi.ico")
+    icon_path = os.path.join(icon_dir, "ico.ico")
     if os.path.exists(icon_path):
         tray_icon.setIcon(QIcon(icon_path))
         window.setWindowIcon(QIcon(icon_path))

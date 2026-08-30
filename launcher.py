@@ -101,7 +101,7 @@ class LauncherApp:
         self.root.geometry('{}x{}+{}+{}'.format(width, height, x, y))
 
         # 设置图标
-        icon_path = os.path.join(BASE_DIR, "hi.ico")
+        icon_path = os.path.join(BASE_DIR, "ico.ico")
         if os.path.exists(icon_path):
             try:
                 self.root.iconbitmap(icon_path)
