@@ -11,6 +11,8 @@ from qframelesswindow import FramelessWindow, StandardTitleBar
 
 from fluent_ui.views.gallery_view import GalleryInterface
 from fluent_ui.views.setting_view import SettingInterface
+from fluent_ui.views.exchange_view import ExchangeInterface
+from fluent_ui.views.qq_scan_view import QQScanInterface
 
 user32 = ctypes.windll.user32
 
@@ -162,8 +164,23 @@ class MainWindow(FramelessWindow):
         self.setting_interface.settings_changed.connect(self.on_settings_changed)
         self.setting_interface.back_requested.connect(self.show_gallery)
         self.stacked_widget.addWidget(self.setting_interface)
+
+        # 导出导入页面
+        self.exchange_interface = ExchangeInterface(self)
+        self.exchange_interface.back_requested.connect(self.show_gallery)
+        self.exchange_interface.import_requested.connect(self.gallery_interface._import_exchange_package)
+        self.exchange_interface.export_all_requested.connect(self.gallery_interface._export_all_exchange_package)
+        self.exchange_interface.export_selected_requested.connect(self.gallery_interface._export_selected_categories_exchange_package)
+        self.exchange_interface.qq_scan_requested.connect(self.show_qq_scan)
+        self.stacked_widget.addWidget(self.exchange_interface)
+
+        # QQ扫描页面
+        self.qq_scan_interface = QQScanInterface(self)
+        self.qq_scan_interface.back_requested.connect(self.show_exchange)
+        self.stacked_widget.addWidget(self.qq_scan_interface)
         
         self.gallery_interface.setting_requested.connect(self.show_settings)
+        self.gallery_interface.exchange_requested.connect(self.show_exchange)
         
         self.main_layout.addWidget(self.stacked_widget)
         
@@ -178,7 +195,25 @@ class MainWindow(FramelessWindow):
         
     def show_gallery(self):
         """暴露给外部托盘图标调用的接口，用于切回主面板"""
+        if hasattr(self, 'gallery_interface'):
+            # 刷新侧边栏分类列表，并保持当前选择的分类
+            self.gallery_interface.sidebar.refresh_list(self.gallery_interface.current_category)
+            # 重新过滤图片并刷新网格中的表情缩略图
+            self.gallery_interface.on_images_changed()
+            
         self.stacked_widget.setCurrentWidget(self.gallery_interface)
+        self.showNormal()
+        self.activateWindow()
+
+    def show_exchange(self):
+        """切换到导出导入界面"""
+        self.stacked_widget.setCurrentWidget(self.exchange_interface)
+        self.showNormal()
+        self.activateWindow()
+
+    def show_qq_scan(self):
+        """切换到QQ扫描界面"""
+        self.stacked_widget.setCurrentWidget(self.qq_scan_interface)
         self.showNormal()
         self.activateWindow()
 

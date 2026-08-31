@@ -66,6 +66,10 @@ def main():
     dedup_pipeline.run_full_deduplication()
 
     storage_service = StorageService()
+    try:
+        storage_service.cleanup_dead_links()
+    except Exception as e:
+        print(f"[ERROR] 启动时执行死链自愈失败: {e}")
     clipboard_service = ClipboardService(config_service)
     
     # 初始化多语言引擎

@@ -13,6 +13,8 @@ class StorageService:
 
     def __init__(self):
         import sys
+        import threading
+        self.lock = threading.RLock()
         # 确保数据目录在项目根目录下的 data/images
         if getattr(sys, 'frozen', False):
             # 打包后，数据目录直接放在 exe 所在目录（即 bin 目录）下
@@ -79,6 +81,25 @@ class StorageService:
                     if skey:
                         self._sync_key_index.setdefault(skey, filename)
         return self._sync_key_index
+
+    def _atomic_write_json(self, file_path, data, indent=4):
+        """原子写入 JSON，防止文件写入损坏"""
+        dir_name = os.path.dirname(file_path)
+        base_name = os.path.basename(file_path)
+        temp_file_path = os.path.join(dir_name, f".{base_name}.tmp")
+        try:
+            with open(temp_file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=indent, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file_path, file_path)
+        except Exception as e:
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception:
+                    pass
+            raise e
 
     def _ensure_db_tables(self):
         """确保各模块 SQLite 数据库表结构健全"""
@@ -208,8 +229,7 @@ class StorageService:
     def _save_hashes(self):
         # 1. 保存到 JSON
         try:
-            with open(self.hashes_file, 'w', encoding='utf-8') as f:
-                json.dump(self._hashes_cache, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.hashes_file, self._hashes_cache)
         except Exception as e:
             print(f"[ERROR] 保存 hashes.json 失败: {e}")
 
@@ -347,8 +367,7 @@ class StorageService:
         
         # 1. 写 JSON
         try:
-            with open(self.order_file, 'w', encoding='utf-8') as f:
-                json.dump(filenames, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.order_file, filenames)
             self._images_dirty = True
         except Exception as e:
             print(f"[ERROR] 保存 order.json 失败: {e}")
@@ -439,8 +458,7 @@ class StorageService:
             
         # 1. 写 categories.json
         try:
-            with open(self.categories_file, 'w', encoding='utf-8') as f:
-                json.dump(portable_data, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.categories_file, portable_data)
             self._categories_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_categories JSON 失败: {e}")
@@ -500,8 +518,7 @@ class StorageService:
                             new_json_data[new_name] = v
                         else:
                             new_json_data[k] = v
-                    with open(self.categories_file, 'w', encoding='utf-8') as f:
-                        json.dump(new_json_data, f, indent=4, ensure_ascii=False)
+                    self._atomic_write_json(self.categories_file, new_json_data)
             except Exception as e:
                 print(f"[ERROR] 重命名更新 categories.json 失败: {e}")
 
@@ -512,8 +529,7 @@ class StorageService:
                     icons_data = json.load(f)
                 if isinstance(icons_data, dict) and old_name in icons_data:
                     icons_data[new_name] = icons_data.pop(old_name)
-                    with open(self.icons_file, 'w', encoding='utf-8') as f:
-                        json.dump(icons_data, f, indent=4, ensure_ascii=False)
+                    self._atomic_write_json(self.icons_file, icons_data)
             except Exception as e:
                 print(f"[ERROR] 重命名更新 category_icons.json 失败: {e}")
 
@@ -686,8 +702,7 @@ class StorageService:
         # 1. 保存 JSON
         try:
             filenames = [self._to_filename(p) for p in recent_paths]
-            with open(self.recent_file, 'w', encoding='utf-8') as f:
-                json.dump(filenames, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.recent_file, filenames)
         except Exception as e:
             print(f"[ERROR] 保存 recent.json 失败: {e}")
 
@@ -759,8 +774,7 @@ class StorageService:
 
         # 1. 写 JSON
         try:
-            with open(self.icons_file, 'w', encoding='utf-8') as f:
-                json.dump(portable_data, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.icons_file, portable_data)
         except Exception as e:
             print(f"[ERROR] StorageService.save_category_icons JSON 失败: {e}")
 
@@ -860,8 +874,7 @@ class StorageService:
 
         # 1. 写 JSON
         try:
-            with open(self.metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(portable_data, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.metadata_file, portable_data)
             self._metadata_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_metadata JSON 失败: {e}")
@@ -1031,8 +1044,7 @@ class StorageService:
         # 1. 写 order.json
         try:
             filenames = [self._to_filename(p) for p in all_images]
-            with open(self.order_file, 'w', encoding='utf-8') as f:
-                json.dump(filenames, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.order_file, filenames)
         except Exception as e:
             print(f"[ERROR] force_reload 保存 order.json 失败: {e}")
 
@@ -1041,16 +1053,14 @@ class StorageService:
             portable_categories = {}
             for category, paths in categories.items():
                 portable_categories[category] = [self._to_filename(p) for p in paths]
-            with open(self.categories_file, 'w', encoding='utf-8') as f:
-                json.dump(portable_categories, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.categories_file, portable_categories)
         except Exception as e:
             print(f"[ERROR] force_reload 保存 categories.json 失败: {e}")
 
         # 3. 写 metadata.json
         try:
             portable_meta = {self._to_filename(k): str(v) for k, v in metadata.items()}
-            with open(self.metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(portable_meta, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.metadata_file, portable_meta)
         except Exception as e:
             print(f"[ERROR] force_reload 保存 metadata.json 失败: {e}")
 
@@ -1062,15 +1072,13 @@ class StorageService:
                     portable_icons[cat] = self._to_filename(val)
                 else:
                     portable_icons[cat] = val
-            with open(self.icons_file, 'w', encoding='utf-8') as f:
-                json.dump(portable_icons, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.icons_file, portable_icons)
         except Exception as e:
             print(f"[ERROR] force_reload 保存 category_icons.json 失败: {e}")
 
         # 5. 写 hashes.json
         try:
-            with open(self.hashes_file, 'w', encoding='utf-8') as f:
-                json.dump(self._hashes_cache, f, indent=4, ensure_ascii=False)
+            self._atomic_write_json(self.hashes_file, self._hashes_cache)
         except Exception as e:
             print(f"[ERROR] force_reload 保存 hashes.json 失败: {e}")
 
@@ -1091,82 +1099,291 @@ class StorageService:
         self._metadata_cache = metadata
         self._metadata_dirty = False
 
-    def delete_image(self, filepath):
-        """从本地删除指定的图片文件，并同步清理分类、元数据、哈希、最近使用（DB+JSON双写双删）"""
-        try:
-            if os.path.exists(filepath):
-                os.remove(filepath)
+    def cleanup_dead_links(self):
+        """清除不存在的文件在排序、分类、元数据、哈希、最近记录及数据库中的残留记录(死链自愈)"""
+        with self.lock:
+            # A. 扫描实际存在的文件
+            if not os.path.exists(self.images_dir):
+                return
+            actual_filenames = set(f for f in os.listdir(self.images_dir) if f.lower().endswith(self.SUPPORTED_FORMATS))
+            actual_paths = set(self._to_abspath(f) for f in actual_filenames)
+            
+            # B. 自愈 order
+            all_images = self.get_all_images()
+            cleaned_images = [p for p in all_images if p in actual_paths]
+            if len(cleaned_images) != len(all_images):
+                self.save_order(cleaned_images)
                 
-                # 清理分类中的残留记录
-                categories = self.get_all_categories()
-                changed = False
-                for cat_name, paths in categories.items():
-                    if filepath in paths:
-                        paths.remove(filepath)
-                        changed = True
-                if changed:
-                    self.save_categories(categories)
+            # C. 自愈 categories
+            categories = self.get_all_categories()
+            changed_cats = False
+            for cat, paths in categories.items():
+                cleaned_paths = [p for p in paths if p in actual_paths]
+                if len(cleaned_paths) != len(paths):
+                    categories[cat] = cleaned_paths
+                    changed_cats = True
+            if changed_cats:
+                self.save_categories(categories)
+                
+            # D. 自愈 metadata
+            metadata = self.get_all_metadata()
+            changed_meta = False
+            keys_to_del = [p for p in metadata if p not in actual_paths]
+            for k in keys_to_del:
+                del metadata[k]
+                changed_meta = True
+            if changed_meta:
+                self.save_metadata(metadata)
+                
+            # E. 自愈 recent
+            recent = self.get_recent_images()
+            cleaned_recent = [p for p in recent if p in actual_paths]
+            if len(cleaned_recent) != len(recent):
+                self._recent_cache = cleaned_recent
+                try:
+                    filenames = [self._to_filename(p) for p in self._recent_cache]
+                    self._atomic_write_json(self.recent_file, filenames)
+                except Exception:
+                    pass
                     
-                # 清理关键词残留记录
-                metadata = self.get_all_metadata()
-                if filepath in metadata:
-                    del metadata[filepath]
-                    self.save_metadata(metadata)
-                    
-                # 清理哈希缓存
-                filename = self._to_filename(filepath)
-                hash_to_remove = None
+            # F. 自愈 hashes
+            changed_hashes = False
+            hash_keys_to_remove = []
+            for h, f in self._hashes_cache.items():
+                if f not in actual_filenames:
+                    hash_keys_to_remove.append(h)
+            for h in hash_keys_to_remove:
+                del self._hashes_cache[h]
+                changed_hashes = True
+            if changed_hashes:
+                self._save_hashes()
                 
-                # 清理最近使用记录
-                if self._recent_cache is not None and filepath in self._recent_cache:
-                    self._recent_cache.remove(filepath)
-                    try:
-                        filenames = [self._to_filename(p) for p in self._recent_cache]
-                        with open(self.recent_file, 'w', encoding='utf-8') as f:
-                            json.dump(filenames, f, indent=4, ensure_ascii=False)
-                    except Exception:
-                        pass
+            # G. 自愈数据库中的记录
+            try:
+                db_paths = {
+                    'features': self.features_db_path,
+                    'metadata': self.metadata_db_path,
+                    'categories': self.categories_db_path,
+                    'order': self.order_db_path,
+                    'recent': self.recent_db_path
+                }
+                for db_name, db_path in db_paths.items():
+                    if os.path.exists(db_path):
+                        with sqlite3.connect(db_path) as conn:
+                            cursor = conn.cursor()
+                            table_name = {
+                                'features': 'image_features',
+                                'metadata': 'image_metadata',
+                                'categories': 'category_images',
+                                'order': 'item_orders',
+                                'recent': 'recent_history'
+                            }[db_name]
+                            
+                            cursor.execute(f"SELECT DISTINCT image_path FROM {table_name}")
+                            rows = cursor.fetchall()
+                            dead_in_db = []
+                            for r in rows:
+                                fname = self._to_filename(r[0])
+                                if fname not in actual_filenames:
+                                    dead_in_db.append((r[0],))
+                                    
+                            if dead_in_db:
+                                cursor.executemany(f"DELETE FROM {table_name} WHERE image_path = ?", dead_in_db)
+                                conn.commit()
+            except Exception as e:
+                print(f"[WARNING] 数据库死链清理提示: {e}")
+
+    def delete_images_batch(self, filepaths, progress_callback=None, cancel_check=None):
+        """批量删除指定的图片文件，并同步清理分类、元数据、哈希、最近使用（DB+JSON双写双删）"""
+        result = {
+            'requested': len(filepaths),
+            'deleted': 0,
+            'missing_cleaned': 0,
+            'failed': 0,
+            'cancelled': 0,
+            'unprocessed': 0,
+            'failure_details': {}
+        }
+        
+        if not filepaths:
+            return result
+            
+        norm_paths = []
+        seen = set()
+        for p in filepaths:
+            if not p:
+                continue
+            abs_p = self._to_abspath(p)
+            if abs_p not in seen:
+                seen.add(abs_p)
+                norm_paths.append(abs_p)
                 
-                for h, f in self._hashes_cache.items():
-                    if f == filename:
-                        hash_to_remove = h
+        result['requested'] = len(norm_paths)
+        
+        valid_paths = []
+        for p in norm_paths:
+            real_p = os.path.normcase(os.path.abspath(os.path.realpath(p)))
+            real_images_dir = os.path.normcase(os.path.abspath(os.path.realpath(self.images_dir)))
+            if not real_p.startswith(real_images_dir + os.sep) and real_p != real_images_dir:
+                result['failed'] += 1
+                result['failure_details'][p] = "拒绝删除：路径越出资源库边界"
+            else:
+                valid_paths.append(p)
+                
+        if not valid_paths:
+            return result
+
+        CHUNK_SIZE = 50
+        total_valid = len(valid_paths)
+        
+        db_paths = {
+            'features': self.features_db_path,
+            'metadata': self.metadata_db_path,
+            'categories': self.categories_db_path,
+            'order': self.order_db_path,
+            'recent': self.recent_db_path
+        }
+        
+        all_items_to_clean = []
+
+        with self.lock:
+            for chunk_idx in range(0, total_valid, CHUNK_SIZE):
+                if cancel_check and cancel_check():
+                    result['cancelled'] += len(valid_paths) - chunk_idx
+                    result['unprocessed'] = len(valid_paths) - chunk_idx
+                    break
+
+                chunk = valid_paths[chunk_idx:chunk_idx + CHUNK_SIZE]
+
+                deleted_in_chunk = []
+                missing_in_chunk = []
+                failed_in_chunk = []
+
+                for p in chunk:
+                    if cancel_check and cancel_check():
                         break
-                if hash_to_remove:
-                    del self._hashes_cache[hash_to_remove]
+
+                    if not os.path.exists(p):
+                        missing_in_chunk.append(p)
+                    else:
+                        try:
+                            os.remove(p)
+                            deleted_in_chunk.append(p)
+                        except Exception as e:
+                            failed_in_chunk.append(p)
+                            result['failure_details'][p] = f"物理删除失败: {str(e)}"
+
+                items_to_clean = deleted_in_chunk + missing_in_chunk
+                if items_to_clean:
+                    all_items_to_clean.extend(items_to_clean)
+
+                result['deleted'] += len(deleted_in_chunk)
+                result['missing_cleaned'] += len(missing_in_chunk)
+                result['failed'] += len(failed_in_chunk)
+
+                if progress_callback:
+                    progress_callback(result['deleted'] + result['missing_cleaned'] + result['failed'], total_valid)
+
+            # 循环全部结束后，一次性写入 JSON 文件并清空数据库记录，极大地提高大批量删除效率
+            if all_items_to_clean:
+                filenames_to_clean = [self._to_filename(p) for p in all_items_to_clean]
+                filenames_set = set(filenames_to_clean)
+                filepaths_set = set(all_items_to_clean)
+
+                # 1. 批量清理并保存分类 JSON
+                categories = self.get_all_categories()
+                changed_cats = False
+                for cat_name, paths in categories.items():
+                    new_paths = [path for path in paths if path not in filepaths_set]
+                    if len(new_paths) != len(paths):
+                        categories[cat_name] = new_paths
+                        changed_cats = True
+                if changed_cats:
+                    self.save_categories(categories)
+
+                # 2. 批量清理并保存元数据 JSON
+                metadata = self.get_all_metadata()
+                changed_meta = False
+                for p in all_items_to_clean:
+                    if p in metadata:
+                        del metadata[p]
+                        changed_meta = True
+                if changed_meta:
+                    self.save_metadata(metadata)
+
+                # 3. 批量清理并保存最近缓存/JSON
+                if self._recent_cache is not None:
+                    new_recent = [p for p in self._recent_cache if p not in filepaths_set]
+                    if len(new_recent) != len(self._recent_cache):
+                        self._recent_cache = new_recent
+                        try:
+                            filenames = [self._to_filename(p) for p in self._recent_cache]
+                            self._atomic_write_json(self.recent_file, filenames)
+                        except Exception:
+                            pass
+
+                # 4. 批量清理并保存哈希缓存/JSON
+                changed_hashes = False
+                hash_keys_to_remove = []
+                for h, f in self._hashes_cache.items():
+                    if f in filenames_set:
+                        hash_keys_to_remove.append(h)
+                for h in hash_keys_to_remove:
+                    del self._hashes_cache[h]
+                    changed_hashes = True
+                if changed_hashes:
                     self._save_hashes()
 
-                # 从 sync_key_index 中同步移除
-                if hasattr(self, '_sync_key_index') and self._sync_key_index is not None:
-                    keys_to_del = [k for k, v in self._sync_key_index.items() if v == filename]
+                # 5. 批量清理并重建同步键索引缓存
+                if self._sync_key_index is not None:
+                    keys_to_del = [k for k, v in self._sync_key_index.items() if v in filenames_set]
                     for k in keys_to_del:
                         del self._sync_key_index[k]
-                        # 重新寻找备用文件
+
+                    if keys_to_del:
                         from services.hasher import compute_sync_key
-                        for other_name in sorted(os.listdir(self.images_dir)):
-                            if other_name != filename and other_name.lower().endswith(self.SUPPORTED_FORMATS):
+                        all_images_remaining = []
+                        if os.path.exists(self.images_dir):
+                            all_images_remaining = sorted(os.listdir(self.images_dir))
+                        for other_name in all_images_remaining:
+                            if other_name not in filenames_set and other_name.lower().endswith(self.SUPPORTED_FORMATS):
                                 other_path = self._to_abspath(other_name)
                                 other_skey = compute_sync_key(other_path)
-                                if other_skey == k:
-                                    self._sync_key_index[k] = other_name
-                                    break
+                                if other_skey in keys_to_del:
+                                    self._sync_key_index[other_skey] = other_name
 
-                # 从各 DB 中安全彻底清理该文件记录
+                # 6. 批量清理并保存全局列表顺序 JSON
+                all_images = self.get_all_images()
+                new_all_images = [p for p in all_images if p not in filepaths_set]
+                if len(new_all_images) != len(all_images):
+                    self.save_order(new_all_images)
+
+                # 7. 批量提交 SQLite 数据库删除事务
                 try:
-                    with sqlite3.connect(self.features_db_path) as conn:
-                        conn.execute("DELETE FROM image_features WHERE image_path = ?", (filename,))
-                    with sqlite3.connect(self.metadata_db_path) as conn:
-                        conn.execute("DELETE FROM image_metadata WHERE image_path = ?", (filename,))
-                    with sqlite3.connect(self.categories_db_path) as conn:
-                        conn.execute("DELETE FROM category_images WHERE image_path = ?", (filename,))
-                    with sqlite3.connect(self.order_db_path) as conn:
-                        conn.execute("DELETE FROM item_orders WHERE image_path = ?", (filename,))
-                    with sqlite3.connect(self.recent_db_path) as conn:
-                        conn.execute("DELETE FROM recent_history WHERE image_path = ?", (filename,))
+                    for db_name, db_path in db_paths.items():
+                        if os.path.exists(db_path):
+                            with sqlite3.connect(db_path) as conn:
+                                if db_name == 'features':
+                                    conn.executemany("DELETE FROM image_features WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                                elif db_name == 'metadata':
+                                    conn.executemany("DELETE FROM image_metadata WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                                elif db_name == 'categories':
+                                    conn.executemany("DELETE FROM category_images WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                                elif db_name == 'order':
+                                    conn.executemany("DELETE FROM item_orders WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                                elif db_name == 'recent':
+                                    conn.executemany("DELETE FROM recent_history WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                                conn.commit()
                 except Exception as e:
-                    print(f"[WARNING] 数据库删除图记录提示: {e}")
+                    print(f"[FATAL] 数据库批量删除事务失败: {e}")
+                    raise e
 
-                self._images_dirty = True
-                return True
-        except Exception as e:
-            print(f"删除图片失败: {e}")
-        return False
+        self._images_dirty = True
+        self._categories_dirty = True
+        self._metadata_dirty = True
+        return result
+
+    def delete_image(self, filepath):
+        """从本地删除指定的图片文件，并同步清理分类、元数据、哈希、最近使用（DB+JSON双写双删）"""
+        result = self.delete_images_batch([filepath])
+        return result.get('deleted', 0) > 0 or result.get('missing_cleaned', 0) > 0

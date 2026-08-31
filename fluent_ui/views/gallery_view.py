@@ -2,7 +2,8 @@ import os
 import ctypes
 from PySide6.QtWidgets import (
     QWidget, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout, 
-    QListWidget, QListWidgetItem, QInputDialog, QLineEdit, QFileDialog
+    QListWidget, QListWidgetItem, QInputDialog, QLineEdit, QFileDialog,
+    QProgressDialog
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal
 from PySide6.QtGui import QCursor, QIcon
@@ -67,6 +68,35 @@ class DownloadThread(QThread):
                 self.finished.emit(True, temp_path, "", self.url)
         except Exception as e:
             self.finished.emit(False, "", str(e), self.url)
+
+class DeleteThread(QThread):
+    """后台批量删除文件的线程，防止批量删除时主线程卡死"""
+    progress = Signal(int, int) # current, total
+    finished = Signal(dict) # result dict
+
+    def __init__(self, filepaths, storage, parent=None):
+        super().__init__(parent)
+        self.filepaths = filepaths
+        self.storage = storage
+        self._is_cancelled = False
+
+    def run(self):
+        def progress_cb(current, total):
+            self.progress.emit(current, total)
+
+        def cancel_cb():
+            return self._is_cancelled
+
+        result = self.storage.delete_images_batch(
+            self.filepaths,
+            progress_callback=progress_cb,
+            cancel_check=cancel_cb
+        )
+        self.finished.emit(result)
+
+    def cancel(self):
+        self._is_cancelled = True
+
 
 class ImportThread(QThread):
     """后台异步导入文件的线程，防止批量导入时主线程卡死"""
@@ -826,17 +856,32 @@ class CategorySidebar(QWidget):
             if delete_files:
                 images_to_delete = self.storage.get_images_by_category(cat_name)
                 self.storage.remove_category(cat_name)
+                to_delete_paths = []
                 for img in images_to_delete:
                     other_cats = self.storage.get_categories_by_image(img)
                     if not other_cats: 
-                        self.storage.delete_image(img)
+                        to_delete_paths.append(img)
+                
+                self.refresh_list("全部表情")
+                
+                if to_delete_paths:
+                    msg = "分类已删除(哭哭)" if is_suzu else "分类已删除"
+                    if self.gallery_view:
+                        self.gallery_view._start_async_delete(
+                            to_delete_paths,
+                            success_message=msg,
+                            on_finished_callback=lambda: self.refresh_list("全部表情")
+                        )
+                else:
+                    if self.gallery_view:
+                        msg = "分类已删除(哭哭)" if is_suzu else "分类已删除"
+                        self.gallery_view.show_success(msg)
             else:
                 self.storage.remove_category(cat_name)
-                
-            self.refresh_list("全部表情")
-            if self.gallery_view: 
-                msg = "分类已删除(哭哭)" if is_suzu else "分类已删除"
-                self.gallery_view.show_success(msg)
+                self.refresh_list("全部表情")
+                if self.gallery_view: 
+                    msg = "分类已删除(哭哭)" if is_suzu else "分类已删除"
+                    self.gallery_view.show_success(msg)
 
 class FilterState:
     """统一的图片过滤状态"""
@@ -854,6 +899,7 @@ class GalleryInterface(QWidget):
     重构后的 Gallery 视图，包含左侧分类栏和右侧表情网格
     """
     setting_requested = Signal()
+    exchange_requested = Signal()
 
     def __init__(self, storage_service, clipboard_service, config_service, parent=None):
         super().__init__(parent=parent)
@@ -887,6 +933,7 @@ class GalleryInterface(QWidget):
         
         self.download_threads = []
         self.import_thread = None
+        self.delete_thread = None
         self.exchange_import_thread = None
         self.exchange_export_thread = None
         self.setAcceptDrops(True)
@@ -1008,8 +1055,8 @@ class GalleryInterface(QWidget):
         
         # 资源包按钮
         self.btn_export = TransparentToolButton(FIF.SAVE, self.top_bar)
-        self.btn_export.setToolTip("资源包")
-        self.btn_export.clicked.connect(self._show_exchange_menu)
+        self.btn_export.setToolTip("导出导入")
+        self.btn_export.clicked.connect(self.exchange_requested.emit)
         
         # 设置按钮
         self.btn_setting = TransparentToolButton(FIF.SETTING, self.top_bar)
@@ -1448,28 +1495,67 @@ class GalleryInterface(QWidget):
             if getattr(widget, 'image_path', None) == image_path:
                 widget_to_remove = widget
                 break
-                
+
         if widget_to_remove:
             self.grid_container.setUpdatesEnabled(False)
-            
+
             self.gallery_layout.removeWidget(widget_to_remove)
             widget_to_remove.hide()
             widget_to_remove.setParent(None)
             widget_to_remove.deleteLater()
-            
+
             self._all_card_widgets.remove(widget_to_remove)
-            
+
             if image_path in self._all_current_images:
                 self._all_current_images.remove(image_path)
                 self._loaded_count -= 1
-                
+
             if image_path in self.selected_paths:
                 self.selected_paths.remove(image_path)
                 self.update_selection_count()
-                
+
             columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
             self._rearrange_gallery(columns)
-            
+
+            self.grid_container.setUpdatesEnabled(True)
+            self.grid_container.update()
+
+    def remove_cards_by_paths(self, image_paths):
+        """批量局部移除卡片并一次性重排，避免频繁重绘卡顿"""
+        if not image_paths:
+            return
+
+        paths_set = set(image_paths)
+        widgets_to_remove = []
+        for widget in getattr(self, '_all_card_widgets', []):
+            if getattr(widget, 'image_path', None) in paths_set:
+                widgets_to_remove.append(widget)
+
+        if widgets_to_remove:
+            self.grid_container.setUpdatesEnabled(False)
+
+            for widget_to_remove in widgets_to_remove:
+                path = widget_to_remove.image_path
+                self.gallery_layout.removeWidget(widget_to_remove)
+                widget_to_remove.hide()
+                widget_to_remove.setParent(None)
+                widget_to_remove.deleteLater()
+
+                if widget_to_remove in self._all_card_widgets:
+                    self._all_card_widgets.remove(widget_to_remove)
+
+                if path in self._all_current_images:
+                    self._all_current_images.remove(path)
+                    self._loaded_count -= 1
+
+                if path in self.selected_paths:
+                    self.selected_paths.remove(path)
+
+            self.update_selection_count()
+
+            columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
+            self._rearrange_gallery(columns)
+
             self.grid_container.setUpdatesEnabled(True)
             self.grid_container.update()
 
@@ -1709,11 +1795,11 @@ class GalleryInterface(QWidget):
         from qfluentwidgets import MessageBox
         dialog = MessageBox("批量删除确认", f"确定要彻底删除选中的 {len(paths)} 个表情包吗？", self.window())
         if dialog.exec():
-            for p in paths:
-                self.storage.delete_image(p)
-            self.on_images_changed()
-            self.show_success("批量删除成功")
-            self.set_selection_mode(False)
+            for widget in getattr(self, '_all_card_widgets', []):
+                if widget.image_path in paths:
+                    widget.clear_resources()
+            QApplication.processEvents()
+            self._start_async_delete(paths, "批量删除成功", on_finished_callback=lambda: self.set_selection_mode(False))
 
     def _execute_batch_add(self, paths, cat_name):
         if not paths: return
@@ -2127,10 +2213,7 @@ class GalleryInterface(QWidget):
             if hasattr(widget, 'clear_resources'):
                 widget.clear_resources()
             QApplication.processEvents()
-            
-            if self.storage.delete_image(image_path):
-                self.refresh_gallery()
-                self.show_success("已删除")
+            self._start_async_delete([image_path], "已删除")
 
     def show_context_menu(self, widget, position):
         if self.is_selection_mode and widget.is_selected:
@@ -2376,6 +2459,60 @@ class GalleryInterface(QWidget):
             self.on_images_changed()
             self.show_success("批量删除标签成功", f"已从 {count} 个表情中移除了标签")
             self.set_selection_mode(False)
+
+    def _start_async_delete(self, filepaths, success_message="删除成功", on_finished_callback=None):
+        if not filepaths:
+            return
+
+        if self.delete_thread and self.delete_thread.isRunning():
+            self.show_error("删除中", "当前有删除任务正在进行，请稍候...")
+            return
+
+        from services.i18n import t
+
+        # 1. 立即在 UI 上批量隐藏并销毁对应的卡片，并重新布局，防止并发交互崩溃
+        self.remove_cards_by_paths(filepaths)
+
+        # 2. 弹出带有取消功能的进度对话框
+        progress_dialog = QProgressDialog(t("正在删除表情包..."), t("取消"), 0, len(filepaths), self.window())
+        progress_dialog.setWindowTitle(t("删除中"))
+        progress_dialog.setWindowModality(Qt.ApplicationModal)
+        progress_dialog.setMinimumDuration(0) # 立即显示
+
+        # 3. 启动后台线程
+        self.delete_thread = DeleteThread(filepaths, self.storage, self)
+
+        # 4. 关联信号与槽
+        self.delete_thread.progress.connect(lambda cur, tot: progress_dialog.setValue(cur))
+        progress_dialog.canceled.connect(self.delete_thread.cancel)
+
+        def on_thread_finished(result):
+            progress_dialog.close()
+            self.refresh_gallery()
+
+            # 显示删除统计
+            deleted = result.get('deleted', 0)
+            missing = result.get('missing_cleaned', 0)
+            cancelled = result.get('cancelled', 0)
+
+            msg_parts = []
+            if deleted > 0:
+                msg_parts.append(f"成功物理删除 {deleted} 个表情")
+            if missing > 0:
+                msg_parts.append(f"清理失效记录 {missing} 条")
+            if cancelled > 0:
+                msg_parts.append(f"已取消余下 {cancelled} 个表情的删除")
+
+            self.show_success(t(success_message), "，".join(msg_parts))
+
+            if on_finished_callback:
+                on_finished_callback()
+
+            self.delete_thread.deleteLater()
+            self.delete_thread = None
+
+        self.delete_thread.finished.connect(on_thread_finished)
+        self.delete_thread.start()
 
     def _start_background_import(self, filepaths, delete_after=False, silent=False, target_category=None, folder_stats=None):
         if self.import_thread and self.import_thread.isRunning():
