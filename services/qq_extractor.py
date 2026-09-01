@@ -1,7 +1,13 @@
 import os
+import re
+import json
+import time
 import shutil
+import hashlib
+import tempfile
 import configparser
 from pathlib import Path
+from PIL import Image, ImageSequence
 
 class QQExtractor:
     FILE_SIGNATURES = {
@@ -19,7 +25,103 @@ class QQExtractor:
     }
 
     @staticmethod
+    def is_apng_file(file_path):
+        """
+        通过解析 PNG Chunk 极速判断是否为 APNG（带有 acTL 块）
+        """
+        if not file_path or not os.path.exists(file_path):
+            return False
+        try:
+            with open(file_path, 'rb') as f:
+                header = f.read(8)
+                if header != b'\x89PNG\r\n\x1a\n':
+                    return False
+                while True:
+                    length_bytes = f.read(4)
+                    if len(length_bytes) < 4:
+                        break
+                    length = int.from_bytes(length_bytes, 'big')
+                    chunk_type = f.read(4)
+                    if chunk_type == b'acTL':
+                        return True
+                    if chunk_type in (b'IDAT', b'IEND'):
+                        break
+                    # 跳过数据块以及 4 字节 CRC
+                    f.seek(length + 4, 1)
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def get_temp_gif_cache_dir():
+        """获取 APNG 预览转码临时缓存目录"""
+        temp_dir = os.path.join(tempfile.gettempdir(), "SuzuEmojy_QQ_GIF_Cache")
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+
+    @staticmethod
+    def convert_apng_to_gif(apng_path, output_gif_path=None):
+        """
+        将 APNG 转换为带透明度的标准 GIF 动图。
+        如果未指定 output_gif_path，则在系统临时目录生成一个以文件哈希命名的缓存文件。
+        返回生成的 gif 路径，若转换失败则返回 None。
+        """
+        if not os.path.exists(apng_path):
+            return None
+
+        if output_gif_path is None:
+            try:
+                with open(apng_path, 'rb') as f:
+                    content = f.read()
+                file_hash = hashlib.md5(content).hexdigest()
+            except Exception:
+                file_hash = hashlib.md5(apng_path.encode('utf-8')).hexdigest()
+            output_gif_path = os.path.join(QQExtractor.get_temp_gif_cache_dir(), f"{file_hash}.gif")
+
+        # 如果临时缓存已存在且非空，直接返回
+        if os.path.exists(output_gif_path) and os.path.getsize(output_gif_path) > 0:
+            return output_gif_path
+
+        try:
+            im = Image.open(apng_path)
+            frames = []
+            durations = []
+            
+            # 逐帧提取
+            for frame in ImageSequence.Iterator(im):
+                # 保持 RGBA 色彩与透明通道
+                rgba_frame = frame.convert('RGBA')
+                frames.append(rgba_frame)
+                # 获取帧间隔时间，默认为 40ms (25fps)
+                dur = frame.info.get('duration', 40)
+                if dur <= 0:
+                    dur = 40
+                durations.append(dur)
+
+            if not frames:
+                return None
+
+            # 确保目标目录存在
+            os.makedirs(os.path.dirname(os.path.abspath(output_gif_path)), exist_ok=True)
+
+            # 保存为 GIF (disposal=2 防止帧残留叠影)
+            frames[0].save(
+                output_gif_path,
+                save_all=True,
+                append_images=frames[1:],
+                duration=durations,
+                loop=0,
+                disposal=2
+            )
+            return output_gif_path
+        except Exception as e:
+            print(f"APNG 转 GIF 失败 ({apng_path}): {e}")
+            return None
+
+    @staticmethod
     def get_actual_extension(file_path):
+        if not file_path or not os.path.exists(file_path):
+            return None
         try:
             with open(file_path, 'rb') as f:
                 header = f.read(16)
@@ -30,6 +132,146 @@ class QQExtractor:
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _calculate_emoji_score(file_path_str, actual_ext):
+        """
+        计算候选表情文件的综合质量得分：
+        1. APNG/GIF 动图优先 (+1000分)
+        2. 主文件优先于 _0, _1 切片 (+200分)
+        3. 优先目录权重 (apng > ori/raw > png > thumb/preview)
+        4. 文件体积评分 (+0~50分)
+        """
+        score = 0
+        file_base = os.path.splitext(os.path.basename(file_path_str))[0].lower()
+        lowered_path = file_path_str.lower().replace('\\', '/')
+
+        # 1. 动图优先
+        if actual_ext == 'png' and QQExtractor.is_apng_file(file_path_str):
+            score += 1000
+        elif actual_ext == 'gif':
+            score += 1000
+
+        # 2. 主图优先（非切片）
+        if not re.search(r'_\d+$', file_base):
+            score += 200
+
+        # 3. 目录层级权重
+        if '/apng/' in lowered_path or lowered_path.endswith('/apng'):
+            score += 100
+        elif '/ori/' in lowered_path or '/raw/' in lowered_path:
+            score += 80
+        elif '/png/' in lowered_path:
+            score += 40
+        elif '/thumb/' in lowered_path or '/preview/' in lowered_path:
+            score -= 100
+
+        # 4. 文件体积加分
+        try:
+            size_kb = os.path.getsize(file_path_str) / 1024
+            score += min(size_kb, 50.0)
+        except Exception:
+            pass
+
+        return score
+
+    @staticmethod
+    def _get_emoji_group_key(file_path_str, emoji_root_path):
+        """
+        根据相对路径和文件名生成归一化的表情分组键 (Group Key)。
+        使得同一个表情的 apng、png、切片 (370_0, 370_1) 归入同一个 Group Key 进行打分竞争。
+        """
+        try:
+            rel_path = os.path.relpath(file_path_str, emoji_root_path)
+        except Exception:
+            rel_path = os.path.basename(file_path_str)
+
+        rel_dir = os.path.dirname(rel_path)
+        file_name = os.path.basename(file_path_str)
+        file_base = os.path.splitext(file_name)[0].lower()
+
+        # 去除切片序号 (如 370_0 -> 370)
+        clean_name = re.sub(r'_\d+$', '', file_base)
+
+        # 过滤掉通用的子目录名称 (如 apng, png, ori, thumb 等)
+        normalized_dir = re.sub(r'[\\/](apng|png|ori|raw|thumb|preview)$', '', rel_dir, flags=re.IGNORECASE)
+        if normalized_dir in ['.', 'apng', 'png', 'ori', 'raw', 'thumb', 'preview']:
+            normalized_dir = ''
+
+        # 组合分组键
+        if normalized_dir:
+            group_key = f"{normalized_dir}/{clean_name}".replace('\\', '/').lower().strip('/')
+        else:
+            group_key = clean_name.lower().strip('/')
+
+        return group_key
+
+    @staticmethod
+    def get_nickname_cache_path():
+        appdata_path = os.getenv('LOCALAPPDATA')
+        if not appdata_path:
+            appdata_path = os.path.join(os.getenv('USERPROFILE', ''), 'AppData', 'LocalLow')
+        cache_dir = os.path.join(appdata_path, 'SuzuEmojy_QQ_Cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, 'user_nicknames.json')
+
+    @staticmethod
+    def load_nickname_cache():
+        cache_path = QQExtractor.get_nickname_cache_path()
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    @staticmethod
+    def save_nickname_cache(cache_data):
+        cache_path = QQExtractor.get_nickname_cache_path()
+        try:
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def get_user_nickname(qq_number):
+        cache = QQExtractor.load_nickname_cache()
+        now = int(time.time())
+        
+        # 检查缓存中是否有未过期的数据
+        if str(qq_number) in cache and \
+           'username_expire_time' in cache[str(qq_number)] and \
+           cache[str(qq_number)]['username_expire_time'] > now:
+            return cache[str(qq_number)].get('name', '')
+        
+        # 从API获取新数据
+        try:
+            import urllib.request
+            url = f"https://uapis.cn/api/v1/social/qq/userinfo?qq={qq_number}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    if data and data.get("nickname"):
+                        cache[str(qq_number)] = {
+                            'name': data['nickname'],
+                            'username_expire_time': now + 86400  # 缓存 1 天
+                        }
+                        QQExtractor.save_nickname_cache(cache)
+                        return data['nickname']
+        except Exception:
+            pass
+        
+        return ''
+
+    @staticmethod
+    def get_display_name(qq_number):
+        nickname = QQExtractor.get_user_nickname(qq_number)
+        if nickname:
+            return f"{nickname}（{qq_number}）"
+        return str(qq_number)
 
     @staticmethod
     def detect_tencent_files_path():
@@ -93,7 +335,6 @@ class QQExtractor:
         # 尝试常用编码，避免第三方依赖
         encodings = ['gb18030', 'utf-8', 'utf-16', 'gbk', 'big5', 'utf-16-le', 'latin-1']
         
-        # 尝试动态导入 chardet (如果存在)
         try:
             import chardet
             detected = chardet.detect(data)
@@ -156,48 +397,44 @@ class QQExtractor:
             return []
 
     @staticmethod
-    def scan_emojis(emoji_root_path, selected_folder):
-        """扫描并过滤有效表情包文件"""
-        if not emoji_root_path or not os.path.exists(emoji_root_path):
+    def scan_emojis(emoji_root_path, selected_folder=None):
+        """
+        针对不同 QQNT 表情分类，全量安全扫描并利用智能评分算法筛选出最优质的表情图片文件列表。
+        自动剔除冗余子帧/切片，动图自动优选，且保证不会遗漏任何有效表情。
+        """
+        emoji_path = Path(emoji_root_path) if emoji_root_path else None
+        if not emoji_path or not emoji_path.exists():
             return []
-        
-        target_scan_path = emoji_root_path
-        if selected_folder in ['emoji-recv', 'personal_emoji', 'marketface']:
-            try:
-                for d in os.listdir(emoji_root_path):
-                    if d.lower() == 'ori' and os.path.isdir(emoji_root_path / d):
-                        target_scan_path = emoji_root_path / d
-                        break
-            except Exception:
-                pass
 
+        # 1. 全量安全深度遍历，确保任何层级的文件都不会遗漏
         raw_files = []
-        for root, _, filenames in os.walk(str(target_scan_path)):
-            for filename in filenames:
-                raw_files.append(os.path.join(root, filename))
+        try:
+            for root, _, files in os.walk(str(emoji_path)):
+                for f in files:
+                    raw_files.append(os.path.join(root, f))
+        except Exception:
+            return []
 
-        # 快速通过魔数筛选与路径/格式优先级去重
-        unique_emojis = {}
+        # 2. 真实图片校验与分组智能竞争
+        # groups: { group_key: (best_file_path, best_score) }
+        groups = {}
+
         for file_path_str in raw_files:
             actual_ext = QQExtractor.get_actual_extension(file_path_str)
-            if actual_ext:
-                base_name = os.path.splitext(os.path.basename(file_path_str))[0].lower()
-                if base_name not in unique_emojis:
-                    unique_emojis[base_name] = (file_path_str, actual_ext)
-                else:
-                    existing_path, existing_ext = unique_emojis[base_name]
-                    is_new_gif = (actual_ext.lower() == 'gif')
-                    is_old_gif = (existing_ext.lower() == 'gif')
-                    
-                    if is_new_gif and not is_old_gif:
-                        unique_emojis[base_name] = (file_path_str, actual_ext)
-                    elif not is_new_gif and is_old_gif:
-                        pass
-                    else:
-                        # 如果都是gif或都不是gif，则优先选择ori原图目录下的文件
-                        new_is_ori = ('/ori/' in file_path_str.replace('\\', '/'))
-                        old_is_ori = ('/ori/' in existing_path.replace('\\', '/'))
-                        if new_is_ori and not old_is_ori:
-                            unique_emojis[base_name] = (file_path_str, actual_ext)
+            if not actual_ext:
+                continue
 
-        return [val[0] for val in unique_emojis.values()]
+            group_key = QQExtractor._get_emoji_group_key(file_path_str, emoji_path)
+            score = QQExtractor._calculate_emoji_score(file_path_str, actual_ext)
+
+            if group_key not in groups:
+                groups[group_key] = (file_path_str, score)
+            else:
+                _, existing_score = groups[group_key]
+                if score > existing_score:
+                    groups[group_key] = (file_path_str, score)
+
+        # 3. 提取每个分组的最佳表情文件
+        best_files = [val[0] for val in groups.values()]
+        best_files.sort()
+        return best_files

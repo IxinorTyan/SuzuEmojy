@@ -13,6 +13,7 @@ from fluent_ui.views.gallery_view import GalleryInterface
 from fluent_ui.views.setting_view import SettingInterface
 from fluent_ui.views.exchange_view import ExchangeInterface
 from fluent_ui.views.qq_scan_view import QQScanInterface
+from fluent_ui.views.tg_sticker_view import TGStickerInterface
 
 user32 = ctypes.windll.user32
 
@@ -172,12 +173,18 @@ class MainWindow(FramelessWindow):
         self.exchange_interface.export_all_requested.connect(self.gallery_interface._export_all_exchange_package)
         self.exchange_interface.export_selected_requested.connect(self.gallery_interface._export_selected_categories_exchange_package)
         self.exchange_interface.qq_scan_requested.connect(self.show_qq_scan)
+        self.exchange_interface.tg_sticker_requested.connect(self.show_tg_sticker)
         self.stacked_widget.addWidget(self.exchange_interface)
 
         # QQ扫描页面
         self.qq_scan_interface = QQScanInterface(self)
         self.qq_scan_interface.back_requested.connect(self.show_exchange)
         self.stacked_widget.addWidget(self.qq_scan_interface)
+
+        # TG贴纸下载页面
+        self.tg_sticker_interface = TGStickerInterface(self)
+        self.tg_sticker_interface.back_requested.connect(self.show_exchange)
+        self.stacked_widget.addWidget(self.tg_sticker_interface)
         
         self.gallery_interface.setting_requested.connect(self.show_settings)
         self.gallery_interface.exchange_requested.connect(self.show_exchange)
@@ -214,6 +221,12 @@ class MainWindow(FramelessWindow):
     def show_qq_scan(self):
         """切换到QQ扫描界面"""
         self.stacked_widget.setCurrentWidget(self.qq_scan_interface)
+        self.showNormal()
+        self.activateWindow()
+
+    def show_tg_sticker(self):
+        """切换到TG贴纸下载界面"""
+        self.stacked_widget.setCurrentWidget(self.tg_sticker_interface)
         self.showNormal()
         self.activateWindow()
 

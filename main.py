@@ -1,5 +1,14 @@
 import sys
 import os
+import warnings
+
+# 忽略 requests 与 urllib3 版本轻微不兼容产生的非致命警告
+try:
+    from requests.exceptions import RequestsDependencyWarning
+    warnings.filterwarnings("ignore", category=RequestsDependencyWarning)
+except ImportError:
+    pass
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
@@ -16,6 +25,11 @@ def main():
     from services.config import ConfigService
     config_service = ConfigService()
     
+    app_font = app.font()
+    if app_font.pointSize() <= 0:
+        app_font.setPointSize(9)
+        app.setFont(app_font)
+
     if config_service.get("use_system_font", False):
         try:
             system_font = app.font().family()

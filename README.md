@@ -209,9 +209,21 @@ SuzuEmojy/
 
 非常欢迎提交 Pull Request 或者在 Issues 中反馈你遇到的问题和想要的特性！
 
+## 🙏 致谢与鸣谢
+
+本项目在开发过程中，参考与借鉴了以下优秀开源项目的思路与技术实现，在此向原作者们致以衷心的感谢：
+
+- **[QQFavoriteExtract](https://github.com/VanillaNahida/QQFavoriteExtract)** (by [VanillaNahida](https://github.com/VanillaNahida))：为本项目的 QQNT 本地表情扫描、数据解析与提取导出功能提供了重要的实现思路与参考。
+- **[tg_sticker_downloader](https://github.com/Kiowx/tg_sticker_downloader)** (by [Kiowx](https://github.com/Kiowx))：为本项目的 Telegram 贴纸包解析、下载与转码处理功能提供了宝贵的技术借鉴。
+
+### ⚠️ 合规与正确使用声明
+1. **仅供个人学习与备份**：本项目提供的 QQ 表情扫描与 Telegram 贴纸下载等功能，仅用于用户对自己合法拥有或授权的表情数据进行本地备份、整理与学习交流。
+2. **遵守相关法规与平台规范**：请在遵守相关法律法规及对应平台服务条款的前提下使用本软件。
+3. **尊重原创版权**：表情包与贴纸资源的著作权及知识产权归原作者所有，请勿将获取的资源用于任何未经授权的商业用途或侵权传播。用户需自行承担因不当或违规使用而产生的法律责任。
+
 ## 📄 许可证
 
-本项目基于 [MIT License](LICENSE) 开源，请随意使用和修改。
+本项目基于 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 协议开源。
 
 ---
 
@@ -422,6 +434,18 @@ SuzuEmojy/
 
 Pull Requests and Issues reporting bugs or requesting new features are very welcome!
 
+## 🙏 Acknowledgments
+
+During the development of this project, we referenced and learned from the ideas and implementations of the following excellent open-source projects. We express our sincere gratitude to the original authors:
+
+- **[QQFavoriteExtract](https://github.com/VanillaNahida/QQFavoriteExtract)** (by [VanillaNahida](https://github.com/VanillaNahida)): Provided great ideas and reference for local QQNT emoji scanning, parsing, and extraction features.
+- **[tg_sticker_downloader](https://github.com/Kiowx/tg_sticker_downloader)** (by [Kiowx](https://github.com/Kiowx)): Provided valuable technical inspiration and references for Telegram sticker pack downloading and conversion workflows.
+
+### ⚠️ Fair Use & Compliance Statement
+1. **For Personal Backup & Study Only**: The emoji scanning and sticker downloading features in this project are strictly intended for users to backup, organize, and manage their own legitimately accessed emoji/sticker assets locally for personal use and learning.
+2. **Platform & Legal Compliance**: Please use this software in full compliance with applicable laws, regulations, and platform Terms of Service.
+3. **Respect Intellectual Property**: The copyright and intellectual property rights of all stickers, memes, and artwork belong to their original creators. Do not use acquired assets for unauthorized commercial purposes or infringing redistribution. Users are solely responsible for any misuse.
+
 ## 📄 License
 
-This project is open-sourced under the [MIT License](LICENSE). Feel free to use and modify it.
+This project is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).

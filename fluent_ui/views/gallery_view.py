@@ -140,62 +140,20 @@ class ImportThread(QThread):
         skipped_count = 0
         failed_count = 0
         total = len(self.filepaths)
-        
-        from services.webm_converter import convert_video_to_gif
-        import tempfile
-        
+
         for i, filepath in enumerate(self.filepaths):
-            is_webm = filepath.lower().endswith('.webm')
-            is_webp = filepath.lower().endswith('.webp')
-            
-            needs_conversion = False
-            if is_webm:
-                needs_conversion = True
-            elif is_webp:
-                # 检查是否是动态 webp
-                try:
-                    from PIL import Image
-                    with Image.open(filepath) as img:
-                        if getattr(img, "is_animated", False):
-                            needs_conversion = True
-                except Exception:
-                    pass
-                    
-            temp_gif_path = None
-            
-            if needs_conversion:
-                try:
-                    fd, temp_gif_path = tempfile.mkstemp(suffix=".gif")
-                    os.close(fd)
-                    convert_video_to_gif(filepath, temp_gif_path)
-                    process_path = temp_gif_path
-                except Exception as e:
-                    print(f"[ERROR] Video to GIF conversion failed: {e}")
-                    self._handle_failed_import(filepath)
-                    failed_count += 1
-                    self.progress.emit(i + 1, total)
-                    continue
-            else:
-                process_path = filepath
-                
-            saved_path, is_duplicate = self.storage.save_file(process_path)
-            
-            if temp_gif_path and os.path.exists(temp_gif_path):
-                try:
-                    os.remove(temp_gif_path)
-                except Exception:
-                    pass
-                    
+            saved_path, is_duplicate = self.storage.save_file(filepath)
+
             if saved_path:
                 if is_duplicate:
                     skipped_count += 1
                     self.storage.move_image_to_front(saved_path, self.target_category)
                 else:
                     saved_count += 1
-                    
+
                 if self.target_category not in ("全部表情", "未分类"):
                     self.storage.add_image_to_category(saved_path, self.target_category)
-                    
+
                 if self.delete_after and os.path.exists(filepath):
                     try:
                         os.remove(filepath)
@@ -204,10 +162,10 @@ class ImportThread(QThread):
             else:
                 self._handle_failed_import(filepath)
                 failed_count += 1
-            
+
             # 每处理一个文件汇报一次进度
             self.progress.emit(i + 1, total)
-            
+
         self.finished.emit(saved_count, skipped_count, failed_count)
 
 

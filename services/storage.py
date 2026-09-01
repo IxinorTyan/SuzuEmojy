@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime
 import shutil
 import json
@@ -66,6 +67,8 @@ class StorageService:
         self._recent_cache = None
         self._sync_key_index = None
 
+        self._repair_orphaned_resources()
+
     def _get_sync_key_index(self):
         if self._sync_key_index is not None:
             return self._sync_key_index
@@ -82,24 +85,24 @@ class StorageService:
                         self._sync_key_index.setdefault(skey, filename)
         return self._sync_key_index
 
-    def _atomic_write_json(self, file_path, data, indent=4):
+    def _atomic_save_json(self, target_file, data, indent=4):
         """原子写入 JSON，防止文件写入损坏"""
-        dir_name = os.path.dirname(file_path)
-        base_name = os.path.basename(file_path)
-        temp_file_path = os.path.join(dir_name, f".{base_name}.tmp")
+        temp_file = f"{target_file}.{uuid.uuid4()}.tmp"
         try:
-            with open(temp_file_path, 'w', encoding='utf-8') as f:
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=indent, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp_file_path, file_path)
-        except Exception as e:
-            if os.path.exists(temp_file_path):
+            os.replace(temp_file, target_file)
+        finally:
+            if os.path.exists(temp_file):
                 try:
-                    os.remove(temp_file_path)
+                    os.remove(temp_file)
                 except Exception:
                     pass
-            raise e
+
+    # 别名兼容
+    _atomic_write_json = _atomic_save_json
 
     def _ensure_db_tables(self):
         """确保各模块 SQLite 数据库表结构健全"""
@@ -227,28 +230,63 @@ class StorageService:
         return hashes
 
     def _save_hashes(self):
-        # 1. 保存到 JSON
-        try:
+        with self.lock:
+            # 1. 保存到 JSON
             self._atomic_write_json(self.hashes_file, self._hashes_cache)
-        except Exception as e:
-            print(f"[ERROR] 保存 hashes.json 失败: {e}")
 
-        # 2. 保存到 SQLite (features.db)
-        try:
-            records = []
-            for h_val, filename in self._hashes_cache.items():
-                records.append((os.path.basename(filename), h_val))
-            if records:
-                with sqlite3.connect(self.features_db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.executemany("""
-                        INSERT INTO image_features (image_path, md5)
-                        VALUES (?, ?)
-                        ON CONFLICT(image_path) DO UPDATE SET md5 = excluded.md5
-                    """, records)
-                    conn.commit()
-        except Exception as e:
-            print(f"[ERROR] 保存到 features.db 失败: {e}")
+            # 2. 保存到 SQLite (features.db)
+            try:
+                records = []
+                for h_val, filename in self._hashes_cache.items():
+                    records.append((os.path.basename(filename), h_val))
+                if records:
+                    with sqlite3.connect(self.features_db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.executemany("""
+                            INSERT INTO image_features (image_path, md5)
+                            VALUES (?, ?)
+                            ON CONFLICT(image_path) DO UPDATE SET md5 = excluded.md5
+                        """, records)
+                        conn.commit()
+            except Exception as e:
+                print(f"[ERROR] 保存到 features.db 失败: {e}")
+
+    def _repair_orphaned_resources(self):
+        """自愈孤儿资源：检查本地图片文件是否缺失索引记录，缺失时自动补齐"""
+        with self.lock:
+            if not os.path.exists(self.images_dir):
+                return
+            actual_filenames = sorted(f for f in os.listdir(self.images_dir) if f.lower().endswith(self.SUPPORTED_FORMATS))
+            if not actual_filenames:
+                return
+
+            all_saved = set(self.get_all_images())
+            saved_hashes_filenames = set(os.path.basename(p) for p in self._hashes_cache.values())
+            
+            repaired = False
+            for fname in actual_filenames:
+                abspath = self._to_abspath(fname)
+                if abspath not in all_saved or fname not in saved_hashes_filenames:
+                    try:
+                        with open(abspath, 'rb') as f:
+                            data_bytes = f.read()
+                        _, ext = os.path.splitext(fname)
+                        # 计算哈希并补齐 _hashes_cache
+                        file_hash = self._calculate_bytes_hash(data_bytes)
+                        if file_hash:
+                            self._hashes_cache[file_hash] = fname
+                        repaired = True
+                    except Exception as e:
+                        print(f"[WARNING] 自愈孤儿文件 {fname} 失败: {e}")
+            if repaired:
+                try:
+                    self._save_hashes()
+                    self._images_dirty = True
+                    # 重新生成并保存 order
+                    all_imgs = self.get_all_images()
+                    self.save_order(all_imgs)
+                except Exception as e:
+                    print(f"[WARNING] 保存自愈数据失败: {e}")
 
     def _calculate_pixel_hash(self, img):
         """计算图片纯像素数据的 MD5 哈希值，用于精准去重"""
@@ -921,30 +959,193 @@ class StorageService:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
         return f"{timestamp}{extension}"
 
-    def _standardize_and_save(self, data_bytes, original_ext):
-        try:
-            img = Image.open(io.BytesIO(data_bytes))
-            is_animated = getattr(img, "is_animated", False)
-            
+    @staticmethod
+    def detect_format_magic(data_bytes: bytes) -> str:
+        """
+        根据文件魔数识别真实格式
+        返回值: 'webm', 'webp', 'gif', 'png', 'jpeg', 'apng', 'bmp', 'tiff', 或 'unknown'
+        """
+        if not data_bytes or len(data_bytes) < 4:
+            return "unknown"
+
+        # WebM / Matroska 魔数: 1A 45 DF A3
+        if data_bytes.startswith(b"\x1a\x45\xdf\xa3"):
+            return "webm"
+
+        # RIFF 容器 (WebP): RIFF....WEBP
+        if data_bytes.startswith(b"RIFF") and len(data_bytes) >= 12 and data_bytes[8:12] == b"WEBP":
+            return "webp"
+
+        # GIF 魔数: GIF87a / GIF89a
+        if data_bytes.startswith(b"GIF87a") or data_bytes.startswith(b"GIF89a"):
+            return "gif"
+
+        # PNG 魔数: 89 50 4E 47 0D 0A 1A 0A
+        if data_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            # 检查是否为 APNG
+            if b"acTL" in data_bytes[:1024]:
+                return "apng"
+            return "png"
+
+        # JPEG 魔数: FF D8 FF
+        if data_bytes.startswith(b"\xff\xd8\xff"):
+            return "jpeg"
+
+        # BMP 魔数: BM
+        if data_bytes.startswith(b"BM"):
+            return "bmp"
+
+        # TIFF 魔数: II*\x00 或 MM\x00*
+        if data_bytes.startswith(b"II*\x00") or data_bytes.startswith(b"MM\x00*"):
+            return "tiff"
+
+        return "unknown"
+
+    def _convert_source_to_standard_bytes(self, data_bytes: bytes, source_path=None) -> tuple[bytes, str, bool]:
+        """
+        魔数识别并对动态格式进行归一化转码
+        返回: (standard_bytes, format_type, is_animated)
+        若转码失败则抛出异常或返回 None
+        """
+        fmt = self.detect_format_magic(data_bytes)
+
+        # 1. 动态 WebM 视频 -> 转为 GIF
+        if fmt == "webm":
+            from services.webm_converter import is_ffmpeg_available, convert_video_to_gif
+            if not is_ffmpeg_available():
+                raise RuntimeError("FFmpeg 缺失或不可用，无法转换 WebM 动态贴纸")
+
+            import tempfile
+            temp_in = None
+            temp_out = None
+            try:
+                # 写入临时文件供 FFmpeg 读取（若已有 source_path 且格式相符则直接使用，否则写入临时文件）
+                if source_path and os.path.exists(source_path):
+                    temp_in = source_path
+                    need_clean_in = False
+                else:
+                    fd_in, temp_in = tempfile.mkstemp(suffix=".webm")
+                    with os.fdopen(fd_in, "wb") as f:
+                        f.write(data_bytes)
+                    need_clean_in = True
+
+                fd_out, temp_out = tempfile.mkstemp(suffix=".gif")
+                os.close(fd_out)
+
+                convert_video_to_gif(temp_in, temp_out)
+
+                if not os.path.exists(temp_out) or os.path.getsize(temp_out) == 0:
+                    raise RuntimeError("FFmpeg 转换输出文件无效或为空")
+
+                with open(temp_out, "rb") as f:
+                    gif_bytes = f.read()
+
+                # 校验转换后的 GIF
+                with Image.open(io.BytesIO(gif_bytes)) as test_img:
+                    n_frames = getattr(test_img, "n_frames", 1)
+                    if n_frames < 1:
+                        raise RuntimeError("转换后的 GIF 图像帧数无效")
+
+                return gif_bytes, "gif", True
+            finally:
+                if temp_in and need_clean_in and os.path.exists(temp_in):
+                    try:
+                        os.remove(temp_in)
+                    except Exception:
+                        pass
+                if temp_out and os.path.exists(temp_out):
+                    try:
+                        os.remove(temp_out)
+                    except Exception:
+                        pass
+
+        # 2. WebP 格式：判断是动态还是静态
+        if fmt == "webp":
+            try:
+                with Image.open(io.BytesIO(data_bytes)) as img:
+                    is_animated = getattr(img, "is_animated", False) and getattr(img, "n_frames", 1) > 1
+            except Exception as e:
+                raise RuntimeError(f"解析 WebP 图像失败: {e}")
+
             if is_animated:
-                file_hash = self._calculate_bytes_hash(data_bytes)
-                final_bytes = data_bytes
-                final_ext = '.gif'
+                from services.webm_converter import convert_animated_webp_to_gif
+                try:
+                    gif_bytes = convert_animated_webp_to_gif(data_bytes)
+                    with Image.open(io.BytesIO(gif_bytes)) as test_img:
+                        if getattr(test_img, "n_frames", 1) < 1:
+                            raise RuntimeError("转换后的 GIF 帧数无效")
+                    return gif_bytes, "gif", True
+                except Exception as e:
+                    raise RuntimeError(f"动态 WebP 转 GIF 失败: {e}")
             else:
+                # 静态 WebP 不转为 GIF，保持现有静态处理方式
+                return data_bytes, "webp", False
+
+        # 3. APNG 格式 -> 转换为 GIF
+        if fmt == "apng":
+            try:
+                from services.qq_extractor import QQExtractor
+                import tempfile
+                fd_in, temp_in = tempfile.mkstemp(suffix=".png")
+                with os.fdopen(fd_in, "wb") as f:
+                    f.write(data_bytes)
+                temp_gif = None
+                try:
+                    temp_gif = QQExtractor.convert_apng_to_gif(temp_in)
+                    if temp_gif and os.path.exists(temp_gif):
+                        with open(temp_gif, "rb") as f:
+                            gif_bytes = f.read()
+                        return gif_bytes, "gif", True
+                    else:
+                        raise RuntimeError("APNG 转换 GIF 失败")
+                finally:
+                    if os.path.exists(temp_in):
+                        try:
+                            os.remove(temp_in)
+                        except Exception:
+                            pass
+                    if temp_gif and os.path.exists(temp_gif):
+                        try:
+                            os.remove(temp_gif)
+                        except Exception:
+                            pass
+            except Exception as e:
+                raise RuntimeError(f"APNG 转 GIF 异常: {e}")
+
+        # 4. 普通 GIF / PNG / JPEG / BMP / TIFF
+        return data_bytes, fmt, (fmt == "gif")
+
+    def _standardize_and_save(self, data_bytes, original_ext, source_path=None):
+        try:
+            # 步骤 1：格式归一化预处理（魔数识别、动态 WebM/动态 WebP/APNG 转为标准 GIF）
+            norm_bytes, norm_fmt, is_norm_animated = self._convert_source_to_standard_bytes(data_bytes, source_path)
+
+            img = Image.open(io.BytesIO(norm_bytes))
+            is_animated = getattr(img, "is_animated", False) or is_norm_animated
+
+            # 步骤 2：清洗与编码
+            if is_animated:
+                # 动态资源（GIF）保留原始帧与透明通道，对转换后的最终 GIF 执行哈希
+                final_bytes = norm_bytes
+                final_ext = '.gif'
+                file_hash = self._calculate_bytes_hash(final_bytes)
+            else:
+                # 静态资源（静态 WebP/PNG/JPG/BMP 等）现有处理方式一律不改
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
-                
+
                 clean_img = Image.new('RGBA', img.size)
                 clean_img.paste(img, (0, 0))
-                
+
                 output_io = io.BytesIO()
                 clean_img.save(output_io, format="PNG", optimize=True)
                 final_bytes = output_io.getvalue()
                 final_ext = '.png'
-                
+
                 # 语义钉死：写入 image_features.md5 的值一律是 file_md5
                 file_hash = self._calculate_bytes_hash(final_bytes)
-                
+
+            # 步骤 3：哈希查重与去重入库
             # L1 快路径：用最终入库文件的 file_md5 在 _hashes_cache 中查找
             if file_hash and file_hash in self._hashes_cache:
                 existing_filename = self._hashes_cache[file_hash]
@@ -954,7 +1155,7 @@ class StorageService:
                     return existing_path, True
                 else:
                     del self._hashes_cache[file_hash]
-            
+
             # L2 像素路径：快路径未命中且为静态图时，与本地 images 目录的 sync_key 索引比对
             if not is_animated:
                 pixel_hash = self._calculate_pixel_hash(img)
@@ -969,17 +1170,18 @@ class StorageService:
                             self._save_hashes()
                             self.move_image_to_front(existing_path)
                             return existing_path, True
-                            
+
+            # 步骤 4：正式写入磁盘
             filename = self.generate_new_filename(final_ext)
             filepath = os.path.join(self.images_dir, filename)
-            
+
             with open(filepath, 'wb') as f:
                 f.write(final_bytes)
-                
+
             if file_hash:
                 self._hashes_cache[file_hash] = filename
                 self._save_hashes()
-                
+
             # 同步维护内存中的 sync_key 索引
             if not is_animated:
                 pixel_hash = self._calculate_pixel_hash(img)
@@ -989,39 +1191,39 @@ class StorageService:
             else:
                 skey = f"f:{file_hash}"
                 self._get_sync_key_index().setdefault(skey, filename)
-                
+
             self._images_dirty = True
             return self._to_abspath(filename), False
-            
+
         except Exception as e:
             print(f"[ERROR] 图片标准化保存失败: {e}")
             return None, False
 
     def save_image(self, qimage):
         from PySide6.QtCore import QByteArray, QBuffer, QIODevice
-        
+
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
         qimage.save(buffer, "PNG")
         image_bytes = byte_array.data()
-        
+
         return self._standardize_and_save(image_bytes, ".png")
 
     def save_file(self, source_path):
         if not os.path.exists(source_path):
             return None, False
-            
+
         try:
             with open(source_path, 'rb') as f:
                 data_bytes = f.read()
-                
+
             _, ext = os.path.splitext(source_path)
             ext = ext.lower()
             if not ext:
                 ext = ".png"
-                
-            return self._standardize_and_save(data_bytes, ext)
+
+            return self._standardize_and_save(data_bytes, ext, source_path=source_path)
         except Exception as e:
             print(f"[ERROR] 读取文件失败: {e}")
             return None, False

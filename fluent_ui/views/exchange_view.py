@@ -1,32 +1,46 @@
-from PySide6.QtCore import Qt, Signal, QPoint
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QWidget, QHBoxLayout
 from PySide6.QtGui import QMouseEvent
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, ScrollArea, ExpandLayout,
     FluentIcon as FIF, TransparentToolButton, TitleLabel,
-    RoundMenu, Action
+    PushButton
 )
+from services.i18n import t, i18n_engine
 
-class ClickableSettingCard(SettingCard):
-    """可点击的设置卡片"""
+
+class ActionSettingCard(SettingCard):
+    """
+    带右侧操作按钮且整行可点击的 Fluent 风格卡片
+    """
     clicked = Signal()
 
-    def __init__(self, icon, title, content=None, parent=None):
+    def __init__(self, icon, title, content=None, btn_text="", parent=None):
         super().__init__(icon, title, content, parent)
         self.setCursor(Qt.PointingHandCursor)
+
+        self.button = PushButton(btn_text, self)
+        self.button.setFixedWidth(110)
+        self.button.clicked.connect(self.clicked.emit)
+
+        # 插入到 SettingCard 的右侧布局中
+        self.hBoxLayout.addWidget(self.button, 0, Qt.AlignRight)
+        self.hBoxLayout.addSpacing(16)
 
     def mouseReleaseEvent(self, e: QMouseEvent):
         super().mouseReleaseEvent(e)
         if e.button() == Qt.LeftButton:
             self.clicked.emit()
 
+
 class ExchangeInterface(ScrollArea):
-    """导出导入界面 (View)"""
+    """导出导入数据交换界面 (View)"""
     back_requested = Signal()
     import_requested = Signal()
     export_all_requested = Signal()
     export_selected_requested = Signal()
     qq_scan_requested = Signal()
+    tg_sticker_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -40,6 +54,7 @@ class ExchangeInterface(ScrollArea):
         self.scrollWidget.setStyleSheet("QWidget { background-color: transparent; }")
         
         self._init_ui()
+        self._connect_signals()
 
     def _init_ui(self):
         # 顶部返回工具栏
@@ -49,67 +64,113 @@ class ExchangeInterface(ScrollArea):
         self.topBarLayout.setSpacing(12)
 
         self.btnBack = TransparentToolButton(FIF.LEFT_ARROW, self.topBar)
-        self.btnBack.setToolTip("返回主面板")
+        self.btnBack.setToolTip(t("返回主面板"))
         self.btnBack.clicked.connect(self.back_requested.emit)
 
-        self.titleLabel = TitleLabel("导出导入", self.topBar)
+        self.titleLabel = TitleLabel(t("导入导出"), self.topBar)
 
         self.topBarLayout.addWidget(self.btnBack)
         self.topBarLayout.addWidget(self.titleLabel)
         self.topBarLayout.addStretch()
 
-        # =================== 导出导入选项 ===================
-        self.exchangeGroup = SettingCardGroup("数据交换", self.scrollWidget)
+        # =================== 1. 表情资源包卡片组 ===================
+        self.resourceGroup = SettingCardGroup(t("表情资源包"), self.scrollWidget)
 
-        # 1. 资源包
-        self.resourceCard = ClickableSettingCard(
-            FIF.SAVE, "资源包", "导入外部表情包，或将本地表情及分类打包导出",
-            parent=self.exchangeGroup
+        # 1.1 导入资源包
+        self.importCard = ActionSettingCard(
+            FIF.FOLDER_ADD,
+            t("导入资源包"),
+            t("导入外部表情包文件（.zip），自动识别表情分类并去重"),
+            btn_text=t("导入..."),
+            parent=self.resourceGroup
         )
-        self.resourceCard.clicked.connect(self._show_resource_menu)
+        self.importCard.clicked.connect(self.import_requested.emit)
 
-        # 2. 扫描 QQ 文件
-        self.qqScanCard = ClickableSettingCard(
-            FIF.PEOPLE, "扫描 QQ 文件", "扫描本地 QQ 缓存目录，提取商店表情与个人表情",
-            parent=self.exchangeGroup
+        # 1.2 导出全部表情包
+        self.exportAllCard = ActionSettingCard(
+            FIF.SAVE,
+            t("导出全部资源包"),
+            t("将本地表情库的所有分类及表情完整导出为一个资源包"),
+            btn_text=t("导出全部"),
+            parent=self.resourceGroup
+        )
+        self.exportAllCard.clicked.connect(self.export_all_requested.emit)
+
+        # 1.3 导出选中分类
+        self.exportSelectedCard = ActionSettingCard(
+            FIF.TAG,
+            t("导出指定分类"),
+            t("自由勾选需要导出的表情分类，单独打包生成资源包"),
+            btn_text=t("挑选导出..."),
+            parent=self.resourceGroup
+        )
+        self.exportSelectedCard.clicked.connect(self.export_selected_requested.emit)
+
+        self.resourceGroup.addSettingCard(self.importCard)
+        self.resourceGroup.addSettingCard(self.exportAllCard)
+        self.resourceGroup.addSettingCard(self.exportSelectedCard)
+
+        # =================== 2. 第三方平台导入卡片组 ===================
+        self.thirdPartyGroup = SettingCardGroup(t("第三方导入"), self.scrollWidget)
+
+        # 2.1 扫描 QQ 文件
+        self.qqScanCard = ActionSettingCard(
+            FIF.PEOPLE,
+            t("扫描 QQ 聊天表情"),
+            t("扫描本地 QQ 缓存目录，提取接收到的表情与个人表情"),
+            btn_text=t("开始扫描"),
+            parent=self.thirdPartyGroup
         )
         self.qqScanCard.clicked.connect(self.qq_scan_requested.emit)
 
-        # 3. 扫描微信文件
-        self.wechatScanCard = ClickableSettingCard(
-            FIF.MESSAGE, "扫描微信文件 (暂未开放)", "后续将支持导入微信表情缓存数据",
-            parent=self.exchangeGroup
+        # 2.2 下载 TG 贴纸
+        self.tgStickerCard = ActionSettingCard(
+            FIF.SEND,
+            t("下载 TG 贴纸"),
+            t("批量解析并下载 Telegram 贴纸包/表情包，支持格式转换与入库"),
+            btn_text=t("前往下载"),
+            parent=self.thirdPartyGroup
         )
-        self.wechatScanCard.setEnabled(False)
+        self.tgStickerCard.clicked.connect(self.tg_sticker_requested.emit)
 
-        # 将卡片加入组中
-        self.exchangeGroup.addSettingCard(self.resourceCard)
-        self.exchangeGroup.addSettingCard(self.qqScanCard)
-        self.exchangeGroup.addSettingCard(self.wechatScanCard)
+        self.thirdPartyGroup.addSettingCard(self.qqScanCard)
+        self.thirdPartyGroup.addSettingCard(self.tgStickerCard)
 
+        # 布局排列
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         
         self.expandLayout.addWidget(self.topBar)
-        self.expandLayout.addWidget(self.exchangeGroup)
+        self.expandLayout.addWidget(self.resourceGroup)
+        self.expandLayout.addWidget(self.thirdPartyGroup)
 
-    def _show_resource_menu(self):
-        menu = RoundMenu(parent=self)
+    def _connect_signals(self):
+        # 绑定多语言切换
+        i18n_engine.language_changed.connect(self.update_texts)
 
-        action_import = Action("导入资源包...", parent=menu)
-        action_import.triggered.connect(self.import_requested.emit)
-        menu.addAction(action_import)
+    def update_texts(self, lang):
+        """动态刷新界面文本"""
+        self.titleLabel.setText(t("导入导出"))
+        self.btnBack.setToolTip(t("返回主面板"))
 
-        menu.addSeparator()
+        self.resourceGroup.titleLabel.setText(t("表情资源包"))
+        self.importCard.setTitle(t("导入资源包"))
+        self.importCard.setContent(t("导入外部表情包文件（.zip），自动识别表情分类并去重"))
+        self.importCard.button.setText(t("导入..."))
 
-        action_export_all = Action("导出全部资源包", parent=menu)
-        action_export_all.triggered.connect(self.export_all_requested.emit)
-        menu.addAction(action_export_all)
+        self.exportAllCard.setTitle(t("导出全部资源包"))
+        self.exportAllCard.setContent(t("将本地表情库的所有分类及表情完整导出为一个资源包"))
+        self.exportAllCard.button.setText(t("导出全部"))
 
-        action_export_selected = Action("导出选中的收藏夹资源包", parent=menu)
-        action_export_selected.triggered.connect(self.export_selected_requested.emit)
-        menu.addAction(action_export_selected)
+        self.exportSelectedCard.setTitle(t("导出指定分类"))
+        self.exportSelectedCard.setContent(t("自由勾选需要导出的表情分类，单独打包生成资源包"))
+        self.exportSelectedCard.button.setText(t("挑选导出..."))
 
-        # 弹在卡片下方
-        pos = self.resourceCard.mapToGlobal(QPoint(0, self.resourceCard.height()))
-        menu.exec(pos)
+        self.thirdPartyGroup.titleLabel.setText(t("第三方导入"))
+        self.qqScanCard.setTitle(t("扫描 QQ 聊天表情"))
+        self.qqScanCard.setContent(t("扫描本地 QQ 缓存目录，提取接收到的表情与个人表情"))
+        self.qqScanCard.button.setText(t("开始扫描"))
+
+        self.tgStickerCard.setTitle(t("下载 TG 贴纸"))
+        self.tgStickerCard.setContent(t("批量解析并下载 Telegram 贴纸包/表情包，支持格式转换与入库"))
+        self.tgStickerCard.button.setText(t("前往下载"))
