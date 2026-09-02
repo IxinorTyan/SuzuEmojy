@@ -15,6 +15,7 @@ from qfluentwidgets import (
 
 from fluent_ui.components.emoji_card import EmojiCard
 from fluent_ui.components.hover_preview import HoverPreviewPopup
+from fluent_ui.components.hover_preview_controller import HoverPreviewController
 
 user32 = ctypes.windll.user32
 
@@ -376,7 +377,10 @@ class CategorySidebar(QWidget):
         
         self.list_widget.currentItemChanged.connect(self._on_item_changed)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        
+
+        from services.i18n import i18n_engine
+        i18n_engine.language_changed.connect(self._update_i18n_texts)
+
         self.is_grid_mode = self.config.get("sidebar_is_grid_mode", False) if self.config else False
         
         self.update_theme()
@@ -540,7 +544,7 @@ class CategorySidebar(QWidget):
             self.list_widget.setIconSize(QSize(icon_size, icon_size))
             self.list_widget.setGridSize(QSize()) # 清除网格大小限制
         
-        item_all = QListWidgetItem(FIF.HOME.icon(), "全部表情")
+        item_all = QListWidgetItem(FIF.HOME.icon(), self._display_category_name("全部表情"))
         item_all.setData(Qt.UserRole, "全部表情")
         if getattr(self, 'is_grid_mode', False):
             item_all.setTextAlignment(Qt.AlignCenter)
@@ -581,13 +585,13 @@ class CategorySidebar(QWidget):
                     painter.end()
                     nav_icon = QIcon(pixmap)
                 
-            item = QListWidgetItem(nav_icon, cat)
+            item = QListWidgetItem(nav_icon, self._display_category_name(cat))
             item.setData(Qt.UserRole, cat)
             if getattr(self, 'is_grid_mode', False):
                 item.setTextAlignment(Qt.AlignCenter)
             self.list_widget.addItem(item)
             
-        item_add = QListWidgetItem(FIF.ADD.icon(), "新建分类")
+        item_add = QListWidgetItem(FIF.ADD.icon(), self._display_category_name("新建分类"))
         item_add.setData(Qt.UserRole, "新建分类")
         if getattr(self, 'is_grid_mode', False):
             item_add.setTextAlignment(Qt.AlignCenter)
@@ -620,7 +624,7 @@ class CategorySidebar(QWidget):
                 real_name = item.data(Qt.UserRole)
                 item.setText("")
                 if real_name:
-                    item.setToolTip(real_name if show_tooltip else "")
+                    item.setToolTip(self._display_category_name(real_name) if show_tooltip else "")
         else:
             self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             
@@ -628,8 +632,16 @@ class CategorySidebar(QWidget):
                 item = self.list_widget.item(i)
                 real_name = item.data(Qt.UserRole)
                 if real_name:
-                    item.setText(real_name)
+                    item.setText(self._display_category_name(real_name))
                     item.setToolTip("")
+
+    def _display_category_name(self, category_name):
+        from services.i18n import t
+        if category_name == "全部表情":
+            return t("全部表情")
+        if category_name == "新建分类":
+            return t("新建分类")
+        return category_name
 
     def set_active_category(self, category_name):
         for i in range(self.list_widget.count()):
@@ -661,7 +673,10 @@ class CategorySidebar(QWidget):
                 self.gallery_view.set_category(cat_name)
 
     def _create_new_category(self):
-        name, ok = QInputDialog.getText(self, "新建分类", "请输入分类名称：", QLineEdit.Normal, "")
+        from services.i18n import t
+        name, ok = QInputDialog.getText(
+            self, t("新建分类"), t("请输入分类名称："), QLineEdit.Normal, ""
+        )
         if ok and name.strip():
             name = name.strip()
             if name != "全部表情" and name != "新建分类":
@@ -675,6 +690,13 @@ class CategorySidebar(QWidget):
                     from qfluentwidgets import MessageBox
                     w = MessageBox("错误", "分类已存在或名称不合法", self.window())
                     w.exec()
+
+    def _update_i18n_texts(self, lang):
+        self.refresh_list(
+            self.list_widget.currentItem().data(Qt.UserRole)
+            if self.list_widget.currentItem()
+            else "全部表情"
+        )
 
     def _show_context_menu(self, pos):
         item = self.list_widget.itemAt(pos)
@@ -879,10 +901,12 @@ class GalleryInterface(QWidget):
         
         # 悬停预览组件
         self.preview_popup = HoverPreviewPopup(self)
-        self.hover_timer = QTimer(self)
-        self.hover_timer.setSingleShot(True)
-        self.hover_timer.timeout.connect(self._show_preview_popup)
-        self.current_hover_path = None
+        self.preview_controller = HoverPreviewController(
+            self,
+            self.preview_popup,
+            self.scroll_area.viewport(),
+            parent=self,
+        )
         
         # 焦点追踪器，用于复制后自动粘贴
         self.focus_timer = QTimer(self)
@@ -1676,8 +1700,12 @@ class GalleryInterface(QWidget):
             card.clicked.connect(self.on_image_clicked)
             card.delete_requested.connect(self.on_delete_requested)
             
-            card.hover_started.connect(self.on_hover_started)
-            card.hover_ended.connect(self.on_hover_ended)
+            card.hover_started.connect(
+                lambda path, card=card: self.on_hover_started(card, path)
+            )
+            card.hover_ended.connect(
+                lambda card=card: self.on_hover_ended(card)
+            )
             
             card.set_selectable(self.is_selection_mode)
             # 恢复选中状态
@@ -1858,32 +1886,24 @@ class GalleryInterface(QWidget):
         except Exception as e:
             self.show_error("导出失败", str(e))
 
-    def on_hover_started(self, image_path):
-        if self.is_selection_mode: return
-        self.current_hover_path = image_path
-        self.hover_timer.start(self.config.get("preview_delay", 500))
+    def on_hover_started(self, card, image_path):
+        if self.is_selection_mode:
+            return
+        self.preview_controller.set_delay(self.config.get("preview_delay", 500))
+        self.preview_controller.enter(card, image_path)
 
-    def on_hover_ended(self):
-        self.hover_timer.stop()
-        self.current_hover_path = None
-        self.preview_popup.hide_preview()
+    def on_hover_ended(self, card):
+        self.preview_controller.leave(card)
 
-    def _show_preview_popup(self):
-        if not self.current_hover_path: return
-        
-        categories = self.storage.get_categories_by_image(self.current_hover_path)
-        keywords = self.storage.get_image_keywords(self.current_hover_path)
-        
+    def get_preview_size(self):
+        return self.config.get("preview_size", 320)
+
+    def get_preview_metadata(self, image_path):
+        categories = self.storage.get_categories_by_image(image_path)
+        keywords = self.storage.get_image_keywords(image_path)
         cat_str = ", ".join(categories) if categories else "无"
         kw_str = keywords if keywords else "无"
-        
-        self.preview_popup.show_preview(
-            self.current_hover_path, 
-            QCursor.pos(), 
-            self.config.get("preview_size", 320),
-            cat_str,
-            kw_str
-        )
+        return cat_str, kw_str
 
     def on_image_clicked(self, image_path, modifiers=Qt.NoModifier):
         is_ctrl = bool(modifiers & Qt.ControlModifier)

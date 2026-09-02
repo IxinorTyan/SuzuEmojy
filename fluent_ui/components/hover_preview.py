@@ -13,8 +13,16 @@ class HoverPreviewPopup(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # 简化标志，ToolTip 本身就是悬浮提示框，不会抢占输入焦点，并且默认置顶
-        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # 使用无焦点的工具窗口，避免 Qt.ToolTip 在应用失去激活状态时自动隐藏。
+        # 预览不接收鼠标事件，因此不会阻挡指针离开缩略图。
+        self.setWindowFlags(
+            Qt.Tool
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         
         # 核心布局
         self.layout = QVBoxLayout(self)
@@ -109,34 +117,76 @@ class HoverPreviewPopup(QWidget):
             
         self.image_label.clear()
         
-        # 根据元数据计算底部高度，大约需要 40px 留给文字
-        total_height = size_config + 40
-        self.setFixedSize(size_config, total_height)
+        # 根据当前屏幕可用空间限制预览尺寸，避免边缘位置放不下时窗口
+        # 超出屏幕或覆盖指针，继而被悬停逻辑立即隐藏。
+        screen = QApplication.screenAt(global_pos)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        screen_rect = screen.availableGeometry()
+
+        gap = 15
+        metadata_height = 40
+        max_popup_width = max(1, screen_rect.width() - gap * 2)
+        max_image_size = max(
+            1,
+            screen_rect.height() - gap * 2 - metadata_height,
+        )
+        display_size = min(
+            int(size_config),
+            max_popup_width,
+            max_image_size,
+        )
+        total_height = display_size + metadata_height
+        self.setFixedSize(display_size, total_height)
         
         # 预读图片获取原始尺寸
         from PySide6.QtGui import QImageReader
         reader = QImageReader(image_path)
         original_size = reader.size()
         
-        target_size = self.calculate_scaled_size(original_size, size_config)
+        target_size = self.calculate_scaled_size(original_size, display_size)
         
-        self.image_label.setFixedSize(size_config - 16, size_config - 16)
+        self.image_label.setFixedSize(
+            max(1, display_size - 16),
+            max(1, display_size - 16),
+        )
         self.image_label.setScaledContents(False)
 
-        # 2. 智能计算位置，防止超出屏幕
-        screen_rect = QApplication.primaryScreen().availableGeometry()
-        
-        # 默认放在鼠标右下方偏移一定像素
-        target_x = global_pos.x() + 15
-        target_y = global_pos.y() + 15
-        
-        # 如果超出右边界，往左翻转
-        if target_x + size_config > screen_rect.right():
-            target_x = global_pos.x() - size_config - 15
-            
-        # 如果超出下边界，往上翻转
-        if target_y + total_height > screen_rect.bottom():
-            target_y = global_pos.y() - total_height - 15
+        # 2. 智能计算位置，防止预览窗口落到屏幕外
+        popup_width = self.width()
+        popup_height = self.height()
+
+        # 优先放在指针右下方；空间不足时分别翻转到左侧/上方。
+        candidate_positions = (
+            (global_pos.x() + gap, global_pos.y() + gap),
+            (global_pos.x() - popup_width - gap, global_pos.y() + gap),
+            (global_pos.x() + gap, global_pos.y() - popup_height - gap),
+            (global_pos.x() - popup_width - gap, global_pos.y() - popup_height - gap),
+        )
+
+        target_x, target_y = next(
+            (
+                (x, y)
+                for x, y in candidate_positions
+                if (
+                    x >= screen_rect.left()
+                    and y >= screen_rect.top()
+                    and x + popup_width <= screen_rect.right() + 1
+                    and y + popup_height <= screen_rect.bottom() + 1
+                )
+            ),
+            (
+                # 四个方向都放不下时，夹紧到当前屏幕可用区域。
+                max(
+                    screen_rect.left(),
+                    min(global_pos.x() + gap, screen_rect.right() - popup_width + 1),
+                ),
+                max(
+                    screen_rect.top(),
+                    min(global_pos.y() + gap, screen_rect.bottom() - popup_height + 1),
+                ),
+            ),
+        )
 
         # 3. 移动并无焦点显示窗口
         self.move(target_x, target_y)

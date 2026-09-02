@@ -1,6 +1,31 @@
 import sys
 import os
+import glob
 import warnings
+
+
+def _lock_ffmpeg_path_for_frozen_app():
+    """在 Nuitka/PyInstaller 冻结环境中锁定随程序发布的 FFmpeg。"""
+    is_frozen = bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+    if not is_frozen:
+        return
+
+    executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+    pattern = os.path.join(
+        executable_dir,
+        "imageio_ffmpeg",
+        "binaries",
+        "ffmpeg*.exe",
+    )
+    ffmpeg_candidates = sorted(glob.glob(pattern))
+    if ffmpeg_candidates:
+        os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_candidates[0]
+        print(f"[INFO] Locked FFmpeg executable: {ffmpeg_candidates[0]}")
+    else:
+        print(f"[WARNING] Bundled FFmpeg executable not found under: {os.path.dirname(pattern)}")
+
+
+_lock_ffmpeg_path_for_frozen_app()
 
 # 忽略 requests 与 urllib3 版本轻微不兼容产生的非致命警告
 try:
@@ -89,7 +114,11 @@ def main():
     # 初始化多语言引擎
     i18n_engine.init(config_service)
     
-    theme_mode = config_service.get("theme_mode", "system")
+    # 外观模式使用 appearance_mode；兼容旧版本保存的 theme_mode
+    theme_mode = config_service.get(
+        "appearance_mode",
+        config_service.get("theme_mode", "system"),
+    )
     if theme_mode == "dark":
         setTheme(Theme.DARK)
     elif theme_mode == "light":

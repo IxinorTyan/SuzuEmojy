@@ -7,6 +7,7 @@ from qfluentwidgets import SearchLineEdit, ScrollArea, isDarkTheme, BodyLabel
 
 from fluent_ui.components.emoji_card import EmojiCard
 from fluent_ui.components.hover_preview import HoverPreviewPopup
+from fluent_ui.components.hover_preview_controller import HoverPreviewController
 
 user32 = ctypes.windll.user32
 
@@ -52,10 +53,12 @@ class QuickPanel(QWidget):
             Qt.WindowDoesNotAcceptFocus
         )
         
-        self.hover_timer = QTimer(self)
-        self.hover_timer.setSingleShot(True)
-        self.hover_timer.timeout.connect(self._show_preview_popup)
-        self.current_hover_path = None
+        self.preview_controller = HoverPreviewController(
+            self,
+            self.preview_popup,
+            self.scroll_area.viewport(),
+            parent=self,
+        )
         
         # 搜索防抖
         self.search_timer = QTimer(self)
@@ -283,8 +286,12 @@ class QuickPanel(QWidget):
             card._is_loaded = False
             
             card.clicked.connect(self._on_card_clicked)
-            card.hover_started.connect(self._on_card_hover_started)
-            card.hover_ended.connect(self._on_card_hover_ended)
+            card.hover_started.connect(
+                lambda path, card=card: self._on_card_hover_started(card, path)
+            )
+            card.hover_ended.connect(
+                lambda card=card: self._on_card_hover_ended(card)
+            )
             self._all_card_widgets.append(card)
             
         # 如果窗口已经可见（用户在搜索框中输入），则立即触发布局
@@ -414,34 +421,21 @@ class QuickPanel(QWidget):
         user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
         user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
 
-    def _on_card_hover_started(self, path):
-        self.current_hover_path = path
-        delay = self.config.get("preview_delay", 500)
-        self.hover_timer.start(delay)
+    def _on_card_hover_started(self, card, path):
+        self.preview_controller.set_delay(self.config.get("preview_delay", 500))
+        self.preview_controller.enter(card, path)
 
-    def _on_card_hover_ended(self):
-        self.hover_timer.stop()
-        self.current_hover_path = None
-        self.preview_popup.hide_preview()
+    def _on_card_hover_ended(self, card):
+        self.preview_controller.leave(card)
 
-    def _show_preview_popup(self):
-        if not self.current_hover_path or not self.isVisible():
-            return
-            
-        global_pos = QCursor.pos()
-        size_config = self.config.get("preview_size", 320)
-        
-        cats = self.storage.get_categories_by_image(self.current_hover_path)
+    def get_preview_size(self):
+        return self.config.get("preview_size", 320)
+
+    def get_preview_metadata(self, path):
+        cats = self.storage.get_categories_by_image(path)
         cat_str = ", ".join(cats) if cats else "无"
-        kw_str = self.storage.get_image_keywords(self.current_hover_path) or "无"
-        
-        self.preview_popup.show_preview(
-            self.current_hover_path, 
-            global_pos, 
-            size_config, 
-            cat_str, 
-            kw_str
-        )
+        kw_str = self.storage.get_image_keywords(path) or "无"
+        return cat_str, kw_str
 
     def show_at_cursor(self):
         # 每次唤醒时读取最新的宽高配置
@@ -484,8 +478,7 @@ class QuickPanel(QWidget):
         self.search_box.setFocus()
 
     def hide_panel(self):
-        self.hover_timer.stop()
-        self.preview_popup.hide_preview()
+        self.preview_controller.cancel()
         self.hide()
         
     def resizeEvent(self, event):

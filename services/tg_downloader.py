@@ -17,6 +17,7 @@ import os
 import re
 import io
 import sys
+import logging
 import gzip
 import json
 import time
@@ -31,14 +32,16 @@ from urllib.parse import urlparse, parse_qs, quote
 import requests
 from PIL import Image
 
-try:
-    import cv2
-    HAS_CV2 = True
-except ImportError:
-    HAS_CV2 = False
+HAS_CV2 = False
+
+logger = logging.getLogger(__name__)
 
 try:
-    from services.webm_converter import convert_video_to_gif, is_ffmpeg_available
+    from services.webm_converter import (
+        convert_video_to_gif,
+        is_ffmpeg_available,
+        webm_to_png_frame_ffmpeg,
+    )
     HAS_FFMPEG_CONVERTER = is_ffmpeg_available()
 except Exception:
     HAS_FFMPEG_CONVERTER = False
@@ -380,24 +383,28 @@ class TGStickerDownloader:
 
     @staticmethod
     def webm_to_png_frame(webm_bytes: bytes) -> bytes:
-        """提取 WebM 视频第一帧为 PNG bytes"""
-        if HAS_CV2:
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tf:
-                tf.write(webm_bytes)
-                tmp_path = tf.name
-            try:
-                cap = cv2.VideoCapture(tmp_path)
-                success, frame = cap.read()
-                cap.release()
-                if success:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-                    pil_img = Image.fromarray(frame_rgb)
-                    out_io = io.BytesIO()
-                    pil_img.save(out_io, format="PNG")
-                    return out_io.getvalue()
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+        """提取 WebM 视频第一帧为 PNG bytes，优先使用 FFmpeg。"""
+        tmp_in = None
+        tmp_out = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tf_in:
+                tf_in.write(webm_bytes)
+                tmp_in = tf_in.name
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf_out:
+                tmp_out = tf_out.name
+
+            webm_to_png_frame_ffmpeg(tmp_in, tmp_out)
+            with open(tmp_out, "rb") as f:
+                return f.read()
+        except Exception as e:
+            logger.warning("FFmpeg 首帧提取失败，回退 cv2: %s", e)
+        finally:
+            for path in (tmp_in, tmp_out):
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
 
         try:
             with Image.open(io.BytesIO(webm_bytes)) as img:
@@ -405,8 +412,7 @@ class TGStickerDownloader:
                 img.save(out_io, format="PNG")
                 return out_io.getvalue()
         except Exception:
-            pass
-        return webm_bytes
+            return webm_bytes
 
     @staticmethod
     def webm_to_gif(webm_bytes: bytes, fps: int = 15, max_frames: int = 120, max_size: int = 512) -> bytes:
@@ -426,8 +432,8 @@ class TGStickerDownloader:
                 if convert_video_to_gif(tmp_in, tmp_out, fps=fps, max_size=max_size):
                     with open(tmp_out, "rb") as f:
                         return f.read()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("FFmpeg GIF 转换失败，回退 cv2: %s", e)
             finally:
                 if tmp_in and os.path.exists(tmp_in):
                     try:
@@ -440,47 +446,9 @@ class TGStickerDownloader:
                     except Exception:
                         pass
 
-        # 2. 回退使用 cv2 + Pillow
-        if HAS_CV2:
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tf:
-                tf.write(webm_bytes)
-                tmp_path = tf.name
-            try:
-                cap = cv2.VideoCapture(tmp_path)
-                frames = []
-                count = 0
-                while cap.isOpened() and count < max_frames:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    pil_frame = Image.fromarray(frame_rgb)
-                    if max(pil_frame.size) > max_size:
-                        pil_frame.thumbnail((max_size, max_size), Image.Resampling.BILINEAR)
-                    frames.append(pil_frame)
-                    count += 1
-                cap.release()
-
-                if frames:
-                    out_io = io.BytesIO()
-                    duration = int(1000 / fps)
-                    frames[0].save(
-                        out_io,
-                        format="GIF",
-                        save_all=True,
-                        append_images=frames[1:],
-                        duration=duration,
-                        loop=0,
-                    )
-                    return out_io.getvalue()
-            finally:
-                if os.path.exists(tmp_path):
-                    try:
-                        os.remove(tmp_path)
-                    except Exception:
-                        pass
-
+        # FFmpeg 不可用或转换失败时返回原始 WebM，避免引入体积很大的 OpenCV。
         return webm_bytes
+
 
     @staticmethod
     def decompress_tgs_json(tgs_bytes: bytes) -> str:

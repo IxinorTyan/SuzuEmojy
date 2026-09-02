@@ -32,7 +32,7 @@ from services.tg_downloader import (
     DEF_TOKEN,
     TG_DIRECT_API
 )
-from services.i18n import t
+from services.i18n import t, i18n_engine
 
 # Cloudflare Worker 示例脚本
 CORS_WORKER_SAMPLE = """export default {
@@ -69,10 +69,34 @@ class TGHelpDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Telegram 贴纸下载器 - 使用说明与高级配置教程")
+        self._window_title_source = "Telegram 贴纸下载器 - 使用说明与高级配置教程"
+        self.setWindowTitle(t(self._window_title_source))
         self.resize(780, 560)
         self.setMinimumSize(600, 450)
         self.initUI()
+
+    def _get_help_html(self, section):
+        pages = {
+            "links": {
+                "zh": """<div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4;">📘 如何获取 Telegram 贴纸链接与包名？</h3><ol><li><b>在客户端中复制链接</b>：在 Telegram 中打开任意聊天，点击任一贴纸/表情，点击<b>「添加贴纸包」</b>进入详情页；</li><li><b>分享并复制链接</b>：点击右上角菜单，选择<b>「分享」</b>或<b>「复制链接」</b>；</li><li><b>支持的常见输入格式</b>：<ul><li><b>标准贴纸链接</b>：<code>https://t.me/addstickers/FunnyDogs</code></li><li><b>短链接格式</b>：<code>t.me/addstickers/FunnyDogs</code></li><li><b>自定义表情包链接</b>：<code>https://t.me/addemoji/MyEmojiPack</code></li><li><b>TG 协议链接</b>：<code>tg://resolve?domain=addstickers&set=FunnyDogs</code></li><li><b>直接输入包名</b>：直接输入末尾的短英文名称，例如 <code>FunnyDogs</code> 即可直接解析！</li></ul></li></ol><h3 style="color: #0078d4;">💡 格式转换说明</h3><ul><li><b>PNG</b>：通用静态图片格式。对于动图或视频贴纸，会智能提取其第一帧高清画面。</li><li><b>GIF</b>：动态图片格式。支持将 <b>TGS (Lottie矢量动画)</b> 与 <b>WebM (VP9高清视频贴纸)</b> 自动转码为可循环播放的 GIF。</li><li><b>原始格式</b>：不进行任何转换，原汁原味保存 Telegram 官方服务器原始文件（<code>.webp</code> / <code>.tgs</code> / <code>.webm</code>）。</li></ul></div>""",
+                "zh_TW": """<div style="font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4;">📘 如何取得 Telegram 貼圖連結與套組名稱？</h3><ol><li><b>在用戶端複製連結</b>：在 Telegram 開啟任意聊天，點選貼圖／表情，再點選<b>「加入貼圖套組」</b>進入詳細頁面；</li><li><b>分享並複製連結</b>：點選右上角選單，選擇<b>「分享」</b>或<b>「複製連結」</b>；</li><li><b>支援的常見輸入格式</b>：<ul><li><b>標準貼圖連結</b>：<code>https://t.me/addstickers/FunnyDogs</code></li><li><b>短連結格式</b>：<code>t.me/addstickers/FunnyDogs</code></li><li><b>自訂表情套組連結</b>：<code>https://t.me/addemoji/MyEmojiPack</code></li><li><b>TG 協定連結</b>：<code>tg://resolve?domain=addstickers&set=FunnyDogs</code></li><li><b>直接輸入套組名稱</b>：輸入末尾的英文名稱，例如 <code>FunnyDogs</code> 即可解析！</li></ul></li></ol><h3 style="color: #0078d4;">💡 格式轉換說明</h3><ul><li><b>PNG</b>：通用靜態圖片格式。動態或影片貼圖會智慧擷取第一幀高清畫面。</li><li><b>GIF</b>：動態圖片格式。支援將 <b>TGS（Lottie 向量動畫）</b>與 <b>WebM（VP9 高畫質影片貼圖）</b>轉碼為可循環播放的 GIF。</li><li><b>原始格式</b>：不進行轉換，保留 Telegram 官方伺服器的原始檔案（<code>.webp</code>／<code>.tgs</code>／<code>.webm</code>）。</li></ul></div>""",
+                "en": """<div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4;">📘 How to get Telegram sticker links and pack names</h3><ol><li><b>Copy a link in the client</b>: Open any chat in Telegram, click a sticker or emoji, then click <b>“Add Sticker Pack”</b> to open its details.</li><li><b>Share and copy the link</b>: Open the top-right menu and choose <b>“Share”</b> or <b>“Copy Link”</b>.</li><li><b>Supported input formats</b>: <ul><li><b>Standard sticker link</b>: <code>https://t.me/addstickers/FunnyDogs</code></li><li><b>Short link</b>: <code>t.me/addstickers/FunnyDogs</code></li><li><b>Custom emoji pack link</b>: <code>https://t.me/addemoji/MyEmojiPack</code></li><li><b>TG protocol link</b>: <code>tg://resolve?domain=addstickers&set=FunnyDogs</code></li><li><b>Pack name</b>: Enter a short English name such as <code>FunnyDogs</code> to parse it directly.</li></ul></li></ol><h3 style="color: #0078d4;">💡 Format conversion</h3><ul><li><b>PNG</b>: A universal static image format. The first high-quality frame is extracted from animated or video stickers.</li><li><b>GIF</b>: Animated stickers and videos are converted to looping GIFs. TGS (Lottie vector animation) and WebM (VP9 video stickers) are supported.</li><li><b>Original format</b>: No conversion; the original Telegram files are preserved (<code>.webp</code> / <code>.tgs</code> / <code>.webm</code>).</li></ul></div>""",
+                "ja": """<div style="font-family: 'Segoe UI', 'Yu Gothic', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4;">📘 Telegram ステッカーのリンクとパック名を取得する方法</h3><ol><li><b>クライアントでリンクをコピー</b>：Telegram のチャットでステッカーまたは絵文字をクリックし、<b>「ステッカーパックを追加」</b>を選択します。</li><li><b>共有してリンクをコピー</b>：右上のメニューから<b>「共有」</b>または<b>「リンクをコピー」</b>を選択します。</li><li><b>対応する入力形式</b>：<ul><li><b>標準リンク</b>：<code>https://t.me/addstickers/FunnyDogs</code></li><li><b>短縮リンク</b>：<code>t.me/addstickers/FunnyDogs</code></li><li><b>カスタム絵文字パック</b>：<code>https://t.me/addemoji/MyEmojiPack</code></li><li><b>TG プロトコル</b>：<code>tg://resolve?domain=addstickers&set=FunnyDogs</code></li><li><b>パック名</b>：<code>FunnyDogs</code> のような短い英語名を直接入力できます。</li></ul></li></ol><h3 style="color: #0078d4;">💡 形式変換について</h3><ul><li><b>PNG</b>：静止画形式。アニメーションや動画ステッカーから最初の高画質フレームを抽出します。</li><li><b>GIF</b>：TGS（Lottie ベクターアニメーション）と WebM（VP9 動画ステッカー）をループ再生可能な GIF に変換します。</li><li><b>元の形式</b>：変換せず、Telegram サーバーの元ファイル（<code>.webp</code>／<code>.tgs</code>／<code>.webm</code>）を保存します。</li></ul></div>"""
+            },
+            "proxy": {
+                "zh": """<div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">☁️ 为什么需要 Cloudflare Workers 代理？</h3><p>由于部分地区网络无法直接访问 <code>api.telegram.org</code>，本工具内置了官方直连优先 + 备用 Worker 代理的智能路由。如果您想完全使用自己独立稳定的线路，可在 Cloudflare 上免费搭建 1 个 Worker 转发代理。</p><h3 style="color: #0078d4;">🚀 快速部署指引</h3><ol><li>登录 <a href="https://dash.cloudflare.com/">Cloudflare 控制台</a>，进入 <b>Workers & Pages</b>，点击 <b>Create Application</b> → <b>Create Worker</b>；</li><li>点击 <b>Deploy</b> 部署默认模板，然后点击 <b>Quick Edit（快速编辑）</b>；</li><li>清空编辑器中的代码，粘贴下方提供的 <b>Worker 代理脚本</b> 并点击 <b>Save and Deploy</b>；</li><li>部署完成后复制您的 Worker 域名（例如 <code>https://your-worker.workers.dev</code>），填入本软件的高级配置 <b>「CF 代理 URL」</b> 中，点击<b>「测试连通性」</b>即可。</li></ol></div>""",
+                "zh_TW": """<div style="font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">☁️ 為什麼需要 Cloudflare Workers 代理？</h3><p>由於部分地區的網路無法直接存取 <code>api.telegram.org</code>，本工具內建官方直連優先與備用 Worker 代理的智慧路由。若您想完全使用獨立且穩定的線路，可以在 Cloudflare 免費建立一個 Worker 轉發代理。</p><h3 style="color: #0078d4;">🚀 快速部署指引</h3><ol><li>登入 <a href="https://dash.cloudflare.com/">Cloudflare 控制台</a>，進入 <b>Workers & Pages</b>，點選 <b>Create Application</b> → <b>Create Worker</b>；</li><li>點選 <b>Deploy</b> 部署預設範本，再點選 <b>Quick Edit（快速編輯）</b>；</li><li>清空編輯器中的程式碼，貼上方提供的 <b>Worker 代理腳本</b>，然後點選 <b>Save and Deploy</b>；</li><li>部署完成後複製 Worker 網域（例如 <code>https://your-worker.workers.dev</code>），填入本軟體進階設定的 <b>「CF 代理 URL」</b>，再點選<b>「測試連線」</b>即可。</li></ol></div>""",
+                "en": """<div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">☁️ Why use a Cloudflare Workers proxy?</h3><p>Some networks cannot access <code>api.telegram.org</code> directly. This tool uses direct access first and falls back to a Worker proxy through smart routing. To use your own stable route, you can deploy a free forwarding Worker on Cloudflare.</p><h3 style="color: #0078d4;">🚀 Quick deployment guide</h3><ol><li>Sign in to the <a href="https://dash.cloudflare.com/">Cloudflare dashboard</a>, open <b>Workers & Pages</b>, and click <b>Create Application</b> → <b>Create Worker</b>;</li><li>Click <b>Deploy</b> to deploy the default template, then click <b>Quick Edit</b>;</li><li>Clear the editor, paste the <b>Worker proxy script</b> provided below, and click <b>Save and Deploy</b>;</li><li>After deployment, copy your Worker domain, such as <code>https://your-worker.workers.dev</code>. Enter it in <b>CF Proxy URL</b> under this tool's advanced settings and click <b>Test Connection</b>.</li></ol></div>""",
+                "ja": """<div style="font-family: 'Segoe UI', 'Yu Gothic', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">☁️ Cloudflare Workers プロキシが必要な理由</h3><p>一部のネットワークでは <code>api.telegram.org</code> に直接アクセスできません。本ツールは直接接続を優先し、必要に応じて Worker プロキシへフォールバックするスマートルーティングを使用します。独自の安定した経路を使う場合は、Cloudflare に無料の転送 Worker をデプロイできます。</p><h3 style="color: #0078d4;">🚀 簡単なデプロイ手順</h3><ol><li><a href="https://dash.cloudflare.com/">Cloudflare ダッシュボード</a>にログインし、<b>Workers & Pages</b>を開いて<b>Create Application</b> → <b>Create Worker</b>をクリックします。</li><li><b>Deploy</b>で既定のテンプレートをデプロイし、<b>Quick Edit</b>をクリックします。</li><li>エディターのコードを消去し、下にある<b>Worker プロキシスクリプト</b>を貼り付けて<b>Save and Deploy</b>をクリックします。</li><li>デプロイ後、<code>https://your-worker.workers.dev</code>のような Worker ドメインをコピーし、本ツールの詳細設定にある<b>CF Proxy URL</b>へ入力して<b>接続テスト</b>をクリックします。</li></ol></div>"""
+            },
+            "token": {
+                "zh": """<div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 如何免费获取 Telegram Bot Token？</h3><p>本工具已<b>内置默认 Bot Token</b>，通常情况下您无需配置即可直接使用。<br/>如果您需要长期稳定下载、避免公用 Token 偶尔触发 Telegram 速率限制，建议向官方申请一个属于您自己的免费 Token。</p><h3 style="color: #0078d4;">📝 获取步骤（仅需 1 分钟）</h3><ol><li>在 Telegram 中搜索官方机器人 <b>@BotFather</b> 并开启对话，或访问 <a href="https://t.me/BotFather">https://t.me/BotFather</a>；</li><li>向 BotFather 发送命令 <code>/newbot</code>；</li><li>按照提示输入机器人的<b>昵称</b>（如 <code>MyStickerTool</code>）和<b>用户名</b>（需以 <code>bot</code> 结尾，如 <code>my_sticker_dl_bot</code>）；</li><li>创建成功后，BotFather 会发送一段 HTTP API Token（格式类似 <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>）；</li><li>将 Token 复制并粘贴到本软件高级配置的 <b>Bot Token</b> 栏中，点击<b>测试连通性</b>即可完成配置。</li></ol></div>""",
+                "zh_TW": """<div style="font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 如何免費取得 Telegram Bot Token？</h3><p>本工具已<b>內建預設 Bot Token</b>，通常不需設定即可直接使用。<br/>若您需要長期穩定下載，避免共用 Token 偶爾觸發 Telegram 速率限制，建議向官方申請一個屬於自己的免費 Token。</p><h3 style="color: #0078d4;">📝 取得步驟（只需 1 分鐘）</h3><ol><li>在 Telegram 搜尋官方機器人 <b>@BotFather</b> 並開始對話，或造訪 <a href="https://t.me/BotFather">https://t.me/BotFather</a>；</li><li>向 BotFather 傳送指令 <code>/newbot</code>；</li><li>依照提示輸入機器人的<b>暱稱</b>（如 <code>MyStickerTool</code>）與<b>使用者名稱</b>（需以 <code>bot</code> 結尾，如 <code>my_sticker_dl_bot</code>）；</li><li>建立成功後，BotFather 會傳送一段 HTTP API Token（格式類似 <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>）；</li><li>將 Token 複製並貼到本軟體進階設定的 <b>Bot Token</b> 欄位，點選<b>測試連線</b>即可完成設定。</li></ol></div>""",
+                "en": """<div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 How to get a Telegram Bot Token for free</h3><p>This tool includes a <b>built-in default Bot Token</b>, so no configuration is normally required. If you need stable long-term downloads and want to avoid rate limits that may occasionally affect a shared Token, apply for your own free Token.</p><h3 style="color: #0078d4;">📝 Steps（about 1 minute）</h3><ol><li>Search for the official bot <b>@BotFather</b> in Telegram and start a conversation, or open <a href="https://t.me/BotFather">https://t.me/BotFather</a>;</li><li>Send <code>/newbot</code> to BotFather;</li><li>Follow the instructions to enter a bot <b>display name</b> such as <code>MyStickerTool</code> and a <b>username</b> ending in <code>bot</code>, such as <code>my_sticker_dl_bot</code>;</li><li>After creation, BotFather sends an HTTP API Token similar to <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>;</li><li>Copy the Token into the <b>Bot Token</b> field in this tool's advanced settings and click <b>Test Connection</b>.</li></ol></div>""",
+                "ja": """<div style="font-family: 'Segoe UI', 'Yu Gothic', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 Telegram Bot Token を無料で取得する方法</h3><p>本ツールには<b>既定の Bot Token</b>が組み込まれているため、通常は設定せずに使用できます。長期的に安定してダウンロードしたい場合や、共有 Token による Telegram のレート制限を避けたい場合は、自分専用の無料 Token を申請してください。</p><h3 style="color: #0078d4;">📝 取得手順（約 1 分）</h3><ol><li>Telegram で公式ボット <b>@BotFather</b>を検索して会話を開始するか、<a href="https://t.me/BotFather">https://t.me/BotFather</a>を開きます。</li><li>BotFather に <code>/newbot</code> を送信します。</li><li>案内に従い、<code>MyStickerTool</code>のような<b>表示名</b>と、<code>my_sticker_dl_bot</code>のように末尾が <code>bot</code> の<b>ユーザー名</b>を入力します。</li><li>作成が完了すると、BotFather から <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>のような HTTP API Token が届きます。</li><li>Token を本ツールの詳細設定にある<b>Bot Token</b>欄へ貼り付け、<b>接続テスト</b>をクリックします。</li></ol></div>"""
+            }
+        }
+        return pages[section].get(i18n_engine.current_lang, pages[section]["zh"])
 
     def initUI(self):
         layout = QVBoxLayout(self)
@@ -107,52 +131,16 @@ class TGHelpDialog(QDialog):
         tab1_layout = QVBoxLayout(tab1)
         tb1 = QTextBrowser()
         tb1.setOpenExternalLinks(True)
-        tb1.setHtml("""
-        <div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;">
-            <h3 style="color: #0078d4; margin-top:0;">📘 如何获取 Telegram 贴纸链接与包名？</h3>
-            <ol>
-                <li><b>在客户端中复制链接</b>：在 Telegram 中打开任意聊天，点击任一贴纸/表情，点击<b>「添加贴纸包」</b>进入详情页；</li>
-                <li><b>分享并复制链接</b>：点击右上角菜单，选择<b>「分享」</b>或<b>「复制链接」</b>；</li>
-                <li><b>支持的常见输入格式</b>：
-                    <ul>
-                        <li><b>标准贴纸链接</b>：<code>https://t.me/addstickers/FunnyDogs</code></li>
-                        <li><b>短链接格式</b>：<code>t.me/addstickers/FunnyDogs</code></li>
-                        <li><b>自定义表情包链接</b>：<code>https://t.me/addemoji/MyEmojiPack</code></li>
-                        <li><b>TG 协议链接</b>：<code>tg://resolve?domain=addstickers&set=FunnyDogs</code></li>
-                        <li><b>直接输入包名</b>：直接输入末尾的短英文名称，例如 <code>FunnyDogs</code> 即可直接解析！</li>
-                    </ul>
-                </li>
-            </ol>
-            <h3 style="color: #0078d4;">💡 格式转换说明</h3>
-            <ul>
-                <li><b>PNG</b>：通用静态图片格式。对于动图或视频贴纸，会智能提取其第一帧高清画面。</li>
-                <li><b>GIF</b>：动态图片格式。支持将 <b>TGS (Lottie矢量动画)</b> 与 <b>WebM (VP9高清视频贴纸)</b> 自动转码为可循环播放的 GIF。</li>
-                <li><b>原始格式</b>：不进行任何转换，原汁原味保存 Telegram 官方服务器原始文件（<code>.webp</code> / <code>.tgs</code> / <code>.webm</code>）。</li>
-            </ul>
-        </div>
-        """)
+        tb1.setHtml(self._get_help_html("links"))
         tab1_layout.addWidget(tb1)
-        tabs.addTab(tab1, "📘 贴纸链接获取")
+        tabs.addTab(tab1, t("📘 贴纸链接获取"))
 
         # Tab 2: Cloudflare CORS 代理搭建教程
         tab2 = QWidget()
         tab2_layout = QVBoxLayout(tab2)
         tb2 = QTextBrowser()
         tb2.setOpenExternalLinks(True)
-        tb2.setHtml("""
-        <div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;">
-            <h3 style="color: #0078d4; margin-top:0;">☁️ 为什么需要 Cloudflare Workers 代理？</h3>
-            <p>由于部分地区网络无法直接访问 <code>api.telegram.org</code>，本工具内置了官方直连优先 + 备用 Worker 代理的智能路由。如果您想完全使用自己独立稳定的线路，可在 Cloudflare 上免费搭建 1 个 Worker 转发代理。</p>
-            
-            <h3 style="color: #0078d4;">🚀 快速部署指引</h3>
-            <ol>
-                <li>登录 <a href="https://dash.cloudflare.com/">Cloudflare 控制台</a>，进入 <b>Workers & Pages</b>，点击 <b>Create Application</b> -> <b>Create Worker</b>；</li>
-                <li>点击 <b>Deploy</b> 部署默认模板，然后点击 <b>Quick Edit (快速编辑)</b>；</li>
-                <li>清空编辑器中的代码，粘贴下方提供的 <b>Worker 代理脚本</b> 并点击 <b>Save and Deploy</b>；</li>
-                <li>部署完成后复制您的 Worker 域名（形如 <code>https://your-worker.workers.dev</code>），填入本软件的高级配置 <b>「CF 代理 URL」</b> 中，点击<b>「测试连通」</b>即可！</li>
-            </ol>
-        </div>
-        """)
+        tb2.setHtml(self._get_help_html("proxy"))
         tab2_layout.addWidget(tb2)
 
         self.codeEdit = TextEdit()
@@ -162,47 +150,86 @@ class TGHelpDialog(QDialog):
         self.codeEdit.setMaximumHeight(140)
         tab2_layout.addWidget(self.codeEdit)
 
-        btn_copy_code = PushButton("📋 复制上方 Worker 部署代码")
+        btn_copy_code = PushButton(t("📋 复制上方 Worker 部署代码"))
         btn_copy_code.clicked.connect(self._copyWorkerCode)
         tab2_layout.addWidget(btn_copy_code)
 
-        tabs.addTab(tab2, "☁️ Cloudflare 代理教程")
+        tabs.addTab(tab2, t("☁️ Cloudflare 代理教程"))
 
         # Tab 3: Bot Token 申请指引
         tab3 = QWidget()
         tab3_layout = QVBoxLayout(tab3)
         tb3 = QTextBrowser()
         tb3.setOpenExternalLinks(True)
-        tb3.setHtml("""
-        <div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;">
-            <h3 style="color: #0078d4; margin-top:0;">🤖 如何免费获取 Telegram Bot Token？</h3>
-            <p>本工具已<b>内置默认 Bot Token</b>，通常情况下您无需配置即可直接使用。<br/>
-            如果您需要长期稳定下载、避免公用 Token 偶尔触发的 Telegram 速率限制 (Rate Limit)，建议自己向官方申请一个完全属于您自己的免费 Token。</p>
-            
-            <h3 style="color: #0078d4;">📝 获取步骤 (仅需 1 分钟)</h3>
-            <ol>
-                <li>在 Telegram 中搜索官方机器人 <b>@BotFather</b> 并点击开启对话（或访问 <a href="https://t.me/BotFather">https://t.me/BotFather</a>）；</li>
-                <li>向 BotFather 发送命令 <code>/newbot</code>；</li>
-                <li>按照提示输入机器人的<b>昵称</b>（如 <code>MyStickerTool</code>）和<b>用户名</b>（需以 <code>bot</code> 结尾，如 <code>my_sticker_dl_bot</code>）；</li>
-                <li>创建成功后，BotFather 会发送一段 HTTP API Token（格式形如 <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>）；</li>
-                <li>将该 Token 复制并粘贴到本软件的高级配置 <b>「Bot Token」</b> 栏中，点击<b>「测试连通」</b>即可完成绑定。</li>
-            </ol>
-        </div>
-        """)
+        tb3.setHtml(self._get_help_html("token"))
         tab3_layout.addWidget(tb3)
-        tabs.addTab(tab3, "🤖 Bot Token 说明")
+        tabs.addTab(tab3, t("🤖 Bot Token 说明"))
 
         layout.addWidget(tabs)
 
-        btn_close = PrimaryPushButton("关闭")
+        btn_close = PrimaryPushButton(t("关闭"))
         btn_close.setFixedWidth(100)
         btn_close.clicked.connect(self.accept)
         layout.addWidget(btn_close, alignment=Qt.AlignCenter)
 
+        self._help_browsers = (tb1, tb2, tb3)
+        self._i18n_widgets = []
+        self._register_i18n_widgets()
+        i18n_engine.language_changed.connect(self.update_texts)
+        self.update_texts()
+
+    def _register_i18n_widgets(self):
+        for widget in self.findChildren(QWidget):
+            if hasattr(widget, "text") and hasattr(widget, "setText"):
+                source = widget.text()
+                if source and any("\u4e00" <= char <= "\u9fff" for char in source):
+                    widget.setProperty("_tg_i18n_source", source)
+                    self._i18n_widgets.append(widget)
+            if hasattr(widget, "placeholderText") and hasattr(widget, "setPlaceholderText"):
+                source = widget.placeholderText()
+                if source and any("\u4e00" <= char <= "\u9fff" for char in source):
+                    widget.setProperty("_tg_i18n_placeholder_source", source)
+                    self._i18n_widgets.append(widget)
+
+        self._combo_i18n_sources = {}
+        for combo in self.findChildren(ComboBox):
+            sources = {}
+            for index in range(combo.count()):
+                source = combo.itemText(index)
+                if source and any("\u4e00" <= char <= "\u9fff" for char in source):
+                    sources[index] = source
+            if sources:
+                self._combo_i18n_sources[combo] = sources
+
+    def update_texts(self, _lang=None):
+        if hasattr(self, "_window_title_source"):
+            self.setWindowTitle(t(self._window_title_source))
+
+        for browser, section in zip(getattr(self, "_help_browsers", ()), ("links", "proxy", "token")):
+            browser.setHtml(self._get_help_html(section))
+
+        for widget in getattr(self, "_i18n_widgets", []):
+            source = widget.property("_tg_i18n_source")
+            if source is not None:
+                widget.setText(t(source))
+            placeholder = widget.property("_tg_i18n_placeholder_source")
+            if placeholder is not None:
+                widget.setPlaceholderText(t(placeholder))
+
+        for combo, sources in getattr(self, "_combo_i18n_sources", {}).items():
+            for index, source in sources.items():
+                combo.setItemText(index, t(source))
+
+
     def _copyWorkerCode(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(CORS_WORKER_SAMPLE)
-        QMessageBox.information(self, "复制成功", "Cloudflare Worker 脚本已成功复制到剪贴板！", QMessageBox.Ok)
+        QMessageBox.information(
+            self,
+            t("复制成功"),
+            t("Cloudflare Worker 脚本已成功复制到剪贴板！"),
+            QMessageBox.Ok,
+        )
 
 
 # ==================== 后台工作线程 ====================
@@ -444,10 +471,22 @@ class ImportPackThread(QThread):
                             imported_count += 1
                             if is_dup:
                                 dup_count += 1
-                            self.progress.emit(done_count, total_count, f"已入库 ({done_count}/{total_count}): 贴纸 #{idx + 1}")
+                            self.progress.emit(
+                                done_count,
+                                total_count,
+                                t("已入库 ({done}/{total}): 贴纸 #{index}").format(
+                                    done=done_count, total=total_count, index=idx + 1
+                                ),
+                            )
                         else:
                             fail_count += 1
-                            self.progress.emit(done_count, total_count, f"入库失败: 贴纸 #{idx + 1} ({err})")
+                            self.progress.emit(
+                                done_count,
+                                total_count,
+                                t("入库失败: 贴纸 #{index} ({error})").format(
+                                    index=idx + 1, error=err
+                                ),
+                            )
                     else:
                         fail_count += 1
 
@@ -507,10 +546,10 @@ class TGStickerInterface(QWidget):
         self.topBarLayout.setSpacing(12)
 
         self.btnBack = TransparentToolButton(FIF.LEFT_ARROW, self.topBar)
-        self.btnBack.setToolTip("返回主面板")
+        self.btnBack.setToolTip(t("返回主面板"))
         self.btnBack.clicked.connect(self.back_requested.emit)
 
-        self.titleLabel = TitleLabel("下载TG贴纸", self.topBar)
+        self.titleLabel = TitleLabel(t("下载TG贴纸"), self.topBar)
 
         self.topBarLayout.addWidget(self.btnBack)
         self.topBarLayout.addWidget(self.titleLabel)
@@ -840,12 +879,53 @@ class TGStickerInterface(QWidget):
 
         self.mainLayout.addLayout(content_layout)
 
-        self.log("💬 Telegram 贴纸包批量下载工具已就绪")
-        self.log("💡 支持官方直连与智能路由回退，在上方输入贴纸包链接即可开始解析。")
+        self.log(t("💬 Telegram 贴纸包批量下载工具已就绪"))
+        self.log(t("💡 支持官方直连与智能路由回退，在上方输入贴纸包链接即可开始解析。"))
+
+        self._i18n_widgets = []
+        self._register_i18n_widgets()
+        i18n_engine.language_changed.connect(self.update_texts)
+        self.update_texts()
 
     # ==========================================
     # 日志输出与辅助函数
     # ==========================================
+
+    def _register_i18n_widgets(self):
+        for widget in self.findChildren(QWidget):
+            if hasattr(widget, "text") and hasattr(widget, "setText"):
+                source = widget.text()
+                if source and any("\u4e00" <= char <= "\u9fff" for char in source):
+                    widget.setProperty("_tg_i18n_source", source)
+                    self._i18n_widgets.append(widget)
+            if hasattr(widget, "placeholderText") and hasattr(widget, "setPlaceholderText"):
+                source = widget.placeholderText()
+                if source and any("\u4e00" <= char <= "\u9fff" for char in source):
+                    widget.setProperty("_tg_i18n_placeholder_source", source)
+                    self._i18n_widgets.append(widget)
+
+        self._combo_i18n_sources = {}
+        for combo in self.findChildren(ComboBox):
+            sources = {}
+            for index in range(combo.count()):
+                source = combo.itemText(index)
+                if source and any("\u4e00" <= char <= "\u9fff" for char in source):
+                    sources[index] = source
+            if sources:
+                self._combo_i18n_sources[combo] = sources
+
+    def update_texts(self, _lang=None):
+        for widget in getattr(self, "_i18n_widgets", []):
+            source = widget.property("_tg_i18n_source")
+            if source is not None:
+                widget.setText(t(source))
+            placeholder = widget.property("_tg_i18n_placeholder_source")
+            if placeholder is not None:
+                widget.setPlaceholderText(t(placeholder))
+
+        for combo, sources in getattr(self, "_combo_i18n_sources", {}).items():
+            for index, source in sources.items():
+                combo.setItemText(index, t(source))
 
     def log(self, message: str):
         self.logTextEdit.append(message)
@@ -864,33 +944,40 @@ class TGStickerInterface(QWidget):
         is_visible = self.advWidget.isVisible()
         self.advWidget.setVisible(not is_visible)
         if not is_visible:
-            self.toggleAdvBtn.setText("▼ 收起高级设置 (Token / 网络代理)")
+            self.toggleAdvBtn.setText(t("▼ 收起高级设置 (Token / 网络代理)"))
         else:
-            self.toggleAdvBtn.setText("▶ 展开高级设置 (Token / 网络代理)")
+            self.toggleAdvBtn.setText(t("▶ 展开高级设置 (Token / 网络代理)"))
 
     def toggleTokenVisibility(self):
         """切换 Token 输入框密码显隐"""
         if self.tokenEdit.echoMode() == LineEdit.Password:
             self.tokenEdit.setEchoMode(LineEdit.Normal)
-            self.toggleTokenBtn.setText("🔒 隐藏")
+            self.toggleTokenBtn.setText(t("🔒 隐藏"))
         else:
             self.tokenEdit.setEchoMode(LineEdit.Password)
-            self.toggleTokenBtn.setText("👁️ 显示")
+            self.toggleTokenBtn.setText(t("👁️ 显示"))
 
     def resetConfig(self):
         """重置高级配置为默认"""
         self.tokenEdit.clear()
         self.cfProxyEdit.clear()
         self.proxyEdit.clear()
-        self.log("✅ 已恢复默认网络与 Token 配置")
-        QMessageBox.information(self, "恢复默认", "高级网络与 Token 配置已恢复为内置默认值！", QMessageBox.Ok)
+        self.log(t("✅ 已恢复默认网络与 Token 配置"))
+        QMessageBox.information(
+            self,
+            t("恢复默认"),
+            t("高级网络与 Token 配置已恢复为内置默认值！"),
+            QMessageBox.Ok,
+        )
 
     def selectSavePath(self):
-        directory = QFileDialog.getExistingDirectory(self, "💬 请选择贴纸保存路径", self.savePathEdit.text())
+        directory = QFileDialog.getExistingDirectory(
+            self, t("💬 请选择贴纸保存路径"), self.savePathEdit.text()
+        )
         if directory:
             self.savePathEdit.setText(directory)
             self.save_path = directory
-            self.log(f"✅ 已将保存路径设置为: {directory}")
+            self.log(t("✅ 已将保存路径设置为: {path}").format(path=directory))
 
     def _get_configured_downloader(self) -> TGStickerDownloader:
         """根据当前 UI 的高级配置项动态创建 TGStickerDownloader 实例"""
@@ -912,21 +999,34 @@ class TGStickerInterface(QWidget):
         )
 
     def testNetworkConnection(self):
-        self.log("💬 正在测试 Telegram API 连通性与 Token 有效性...")
+        self.log(t("💬 正在测试 Telegram API 连通性与 Token 有效性..."))
         downloader = self._get_configured_downloader()
         try:
             res = downloader.test_connection()
             if res["bot_ok"]:
-                msg = f"✅ 连接成功!\n\n通道: {res.get('channel')}\nBot 名称: @{res.get('bot_username')}"
-                self.log(f"✅ 连接成功! 通道: {res.get('channel')}, Bot: @{res.get('bot_username')}")
-                QMessageBox.information(self, "连通性测试", msg, QMessageBox.Ok)
+                msg = t("✅ 连接成功!\n\n通道: {channel}\nBot 名称: @{bot}").format(
+                    channel=res.get("channel"), bot=res.get("bot_username")
+                )
+                self.log(
+                    t("✅ 连接成功! 通道: {channel}, Bot: @{bot}").format(
+                        channel=res.get("channel"), bot=res.get("bot_username")
+                    )
+                )
+                QMessageBox.information(self, t("连通性测试"), msg, QMessageBox.Ok)
             else:
-                msg = f"❌ 连接失败: {res.get('error', '未知错误')}"
+                msg = t("❌ 连接失败: {error}").format(
+                    error=res.get("error", t("未知错误"))
+                )
                 self.log(msg)
-                QMessageBox.warning(self, "连通性测试", msg, QMessageBox.Ok)
+                QMessageBox.warning(self, t("连通性测试"), msg, QMessageBox.Ok)
         except Exception as e:
-            self.log(f"❌ 测试出错: {e}")
-            QMessageBox.critical(self, "测试出错", f"发生异常: {e}", QMessageBox.Ok)
+            self.log(t("❌ 测试出错: {error}").format(error=e))
+            QMessageBox.critical(
+                self,
+                t("测试出错"),
+                t("发生异常: {error}").format(error=e),
+                QMessageBox.Ok,
+            )
 
     # ==========================================
     # 解析贴纸包逻辑与懒加载体系
@@ -935,8 +1035,13 @@ class TGStickerInterface(QWidget):
     def startParsePack(self):
         link = self.urlInputEdit.text().strip()
         if not link:
-            self.log("❌ 请先输入 Telegram 贴纸链接或包名！")
-            QMessageBox.warning(self, "提示", "请先输入 Telegram 贴纸链接或包名！", QMessageBox.Ok)
+            self.log(t("❌ 请先输入 Telegram 贴纸链接或包名！"))
+            QMessageBox.warning(
+                self,
+                t("提示"),
+                t("请先输入 Telegram 贴纸链接或包名！"),
+                QMessageBox.Ok,
+            )
             return
 
         self._cancelActiveThreads()
@@ -954,9 +1059,9 @@ class TGStickerInterface(QWidget):
         self.is_batch_loading = False
 
         self.detailPreviewLabel.clear()
-        self.detailInfoLabel.setText("未选中贴纸")
+        self.detailInfoLabel.setText(t("未选中贴纸"))
 
-        self.log(f"💬 正在解析贴纸包 [{link}] ...")
+        self.log(t("💬 正在解析贴纸包 [{link}] ...").format(link=link))
         self.progressBar.setMaximum(0)
 
         self.downloader = self._get_configured_downloader()
@@ -996,9 +1101,17 @@ class TGStickerInterface(QWidget):
         self.current_pack = pack
         self.all_stickers = pack.stickers
 
-        self.previewTitleLabel.setText(f"贴纸预览区 ({pack.title} - 共 {pack.total_count} 张)")
-        self.log(f"✅ 成功解析贴纸包: 《{pack.title}》({pack.name})，共 {pack.total_count} 张贴纸。")
-        self.log(f"ℹ️ 贴纸类型: {pack.type_desc}")
+        self.previewTitleLabel.setText(
+            t("贴纸预览区 ({title} - 共 {total} 张)").format(
+                title=pack.title, total=pack.total_count
+            )
+        )
+        self.log(
+            t("✅ 成功解析贴纸包: 《{title}》({name})，共 {total} 张贴纸。").format(
+                title=pack.title, name=pack.name, total=pack.total_count
+            )
+        )
+        self.log(t("ℹ️ 贴纸类型: {type}").format(type=pack.type_desc))
 
         if pack.is_animated or pack.is_video:
             self.formatComboBox.setCurrentIndex(1)
@@ -1016,9 +1129,16 @@ class TGStickerInterface(QWidget):
         self.parseButton.setEnabled(True)
         self.progressBar.setMaximum(100)
         self.progressBar.setValue(0)
-        self.previewTitleLabel.setText("贴纸预览区 (解析失败)")
-        self.log(f"❌ 解析贴纸包失败: {error_msg}")
-        QMessageBox.critical(self, "解析失败", f"无法获取贴纸包信息:\n{error_msg}\n\n建议检查网络代理、Token 或贴纸链接是否正确。", QMessageBox.Ok)
+        self.previewTitleLabel.setText(t("贴纸预览区 (解析失败)"))
+        self.log(t("❌ 解析贴纸包失败: {error}").format(error=error_msg))
+        QMessageBox.critical(
+            self,
+            t("解析失败"),
+            t("无法获取贴纸包信息:\n{error}\n\n建议检查网络代理、Token 或贴纸链接是否正确。").format(
+                error=error_msg
+            ),
+            QMessageBox.Ok,
+        )
 
     def onScrollBarMoved(self, value):
         """监听滚动条位置，滑动到底部 85% 时触发懒加载下一批"""
@@ -1051,17 +1171,30 @@ class TGStickerInterface(QWidget):
             painter = QPainter(placeholder_pixmap)
             painter.setPen(QColor(150, 150, 150))
             painter.setFont(QFont("Arial", 8))
-            painter.drawText(placeholder_pixmap.rect(), Qt.AlignCenter, f"#{s.index + 1}\n加载中...")
+            painter.drawText(
+                placeholder_pixmap.rect(), Qt.AlignCenter, t("#{index}\n加载中...").format(index=s.index + 1)
+            )
             painter.end()
 
             item = QListWidgetItem()
             item.setIcon(QIcon(placeholder_pixmap))
             item.setData(Qt.UserRole, s.index)
-            item.setToolTip(f"序号: #{s.index + 1}\n表情: {s.emoji or '无'}\n尺寸: {s.width}x{s.height}")
+            item.setToolTip(
+                t("序号: #{index}\n表情: {emoji}\n尺寸: {width}x{height}").format(
+                    index=s.index + 1,
+                    emoji=s.emoji or t("无"),
+                    width=s.width,
+                    height=s.height,
+                )
+            )
             self.previewListWidget.addItem(item)
 
         self.loaded_sticker_count = end_idx
-        self.log(f"💬 正在加载缩略图 [{start_idx + 1} - {end_idx}] / 共 {len(self.all_stickers)} 张...")
+        self.log(
+            t("💬 正在加载缩略图 [{start} - {end}] / 共 {total} 张...").format(
+                start=start_idx + 1, end=end_idx, total=len(self.all_stickers)
+            )
+        )
 
         self._batch_thread = BatchThumbnailThread(self.downloader, batch_stickers, self)
         self._batch_thread.item_loaded.connect(self._onThumbnailLoaded)
@@ -1110,7 +1243,11 @@ class TGStickerInterface(QWidget):
 
     def _onBatchDone(self):
         self.is_batch_loading = False
-        self.log(f"✅ 已完成渲染预览：{self.loaded_sticker_count}/{len(self.all_stickers)}")
+        self.log(
+            t("✅ 已完成渲染预览：{loaded}/{total}").format(
+                loaded=self.loaded_sticker_count, total=len(self.all_stickers)
+            )
+        )
 
     # ==========================================
     # 中间预览区选择控制
@@ -1119,17 +1256,21 @@ class TGStickerInterface(QWidget):
     def selectAllLoaded(self):
         for i in range(self.previewListWidget.count()):
             self.previewListWidget.item(i).setSelected(True)
-        self.log(f"✅ 已全选当前已加载的 {self.previewListWidget.count()} 个贴纸")
+        self.log(
+            t("✅ 已全选当前已加载的 {count} 个贴纸").format(
+                count=self.previewListWidget.count()
+            )
+        )
 
     def clearSelection(self):
         self.previewListWidget.clearSelection()
-        self.log("✅ 已清空当前选择")
+        self.log(t("✅ 已清空当前选择"))
 
     def invertSelection(self):
         for i in range(self.previewListWidget.count()):
             item = self.previewListWidget.item(i)
             item.setSelected(not item.isSelected())
-        self.log("✅ 已反转当前选择")
+        self.log(t("✅ 已反转当前选择"))
 
     # ==========================================
     # 右侧详细预览面板逻辑
@@ -1151,7 +1292,7 @@ class TGStickerInterface(QWidget):
 
         if not current_item or not current_item.isSelected() or not self.current_pack:
             self.detailPreviewLabel.clear()
-            self.detailInfoLabel.setText("未选中贴纸")
+            self.detailInfoLabel.setText(t("未选中贴纸"))
             return
 
         sticker_idx = current_item.data(Qt.UserRole)
@@ -1160,21 +1301,30 @@ class TGStickerInterface(QWidget):
 
         sticker = self.all_stickers[sticker_idx]
 
-        format_display = "静态贴纸 (WebP)"
+        format_display = t("静态贴纸 (WebP)")
         if sticker.is_animated:
-            format_display = "矢量动画 (TGS / Lottie)"
+            format_display = t("矢量动画 (TGS / Lottie)")
         elif sticker.is_video:
-            format_display = "视频动图 (WebM / VP9)"
+            format_display = t("视频动图 (WebM / VP9)")
 
-        info_text = (
-            f"<b>贴纸序号:</b> #{sticker.index + 1}<br/>"
-            f"<b>代表表情:</b> {sticker.emoji or '无'}<br/>"
-            f"<b>所属贴纸包:</b> {self.current_pack.title}<br/>"
-            f"<b>贴纸类型:</b> {format_display}<br/>"
-            f"<b>原始尺寸:</b> {sticker.width} x {sticker.height}<br/>"
-            f"<b>文件大小:</b> {((sticker.file_size or 0) / 1024):.2f} KB<br/><br/>"
-            f"<b>Telegram File ID:</b><br/>"
-            f"<span style='font-size:10px; color:#666;'>{sticker.file_id[:26]}...</span>"
+        info_text = t(
+            "<b>贴纸序号:</b> #{index}<br/>"
+            "<b>代表表情:</b> {emoji}<br/>"
+            "<b>所属贴纸包:</b> {pack}<br/>"
+            "<b>贴纸类型:</b> {type}<br/>"
+            "<b>原始尺寸:</b> {width} x {height}<br/>"
+            "<b>文件大小:</b> {size:.2f} KB<br/><br/>"
+            "<b>Telegram File ID:</b><br/>"
+            "<span style='font-size:10px; color:#666;'>{file_id}...</span>"
+        ).format(
+            index=sticker.index + 1,
+            emoji=sticker.emoji or t("无"),
+            pack=self.current_pack.title,
+            type=format_display,
+            width=sticker.width,
+            height=sticker.height,
+            size=(sticker.file_size or 0) / 1024,
+            file_id=sticker.file_id[:26],
         )
         self.detailInfoLabel.setText(info_text)
 
@@ -1189,7 +1339,7 @@ class TGStickerInterface(QWidget):
             scaled = thumb.scaled(240, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.detailPreviewLabel.setPixmap(scaled)
         else:
-            self.detailPreviewLabel.setText("正在加载预览...")
+            self.detailPreviewLabel.setText(t("正在加载预览..."))
 
         self._detail_thread = DetailPreviewThread(self.downloader, sticker, self)
         self._detail_thread.preview_ready.connect(self._onDetailPreviewReady)
@@ -1205,7 +1355,9 @@ class TGStickerInterface(QWidget):
     def _onDetailPreviewFailed(self, sticker_index: int, error_msg: str):
         current_item = self.previewListWidget.currentItem()
         if current_item and current_item.data(Qt.UserRole) == sticker_index:
-            self.detailPreviewLabel.setText(f"预览加载失败:\n{error_msg}")
+            self.detailPreviewLabel.setText(
+                t("预览加载失败:\n{error}").format(error=error_msg)
+            )
 
     def _displayDetailPreview(self, file_path: str, is_gif: bool):
         try:
@@ -1226,9 +1378,9 @@ class TGStickerInterface(QWidget):
                     scaled = pixmap.scaled(240, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.detailPreviewLabel.setPixmap(scaled)
                 else:
-                    self.detailPreviewLabel.setText("图片解析失败")
+                    self.detailPreviewLabel.setText(t("图片解析失败"))
         except Exception as e:
-            self.detailPreviewLabel.setText(f"展示失败: {e}")
+            self.detailPreviewLabel.setText(t("展示失败: {error}").format(error=e))
 
     # ==========================================
     # 导出到文件夹逻辑
@@ -1241,21 +1393,25 @@ class TGStickerInterface(QWidget):
 
         selected_items = self.previewListWidget.selectedItems()
         if not selected_items:
-            self.log("❌ 您尚未选择任何贴纸！请先在预览区选中贴纸后再导出。")
-            QMessageBox.warning(self, "提示", "请先在预览区选中贴纸后再导出！", QMessageBox.Ok)
+            self.log(t("❌ 您尚未选择任何贴纸！请先在预览区选中贴纸后再导出。"))
+            QMessageBox.warning(
+                self, t("提示"), t("请先在预览区选中贴纸后再导出！"), QMessageBox.Ok
+            )
             return
 
         selected_indices = [item.data(Qt.UserRole) for item in selected_items if item.data(Qt.UserRole) is not None]
 
         reply = QMessageBox.question(
             self,
-            "确认导出选中",
-            f"确定导出当前选中的 {len(selected_indices)} 个贴纸到文件夹？",
+            t("确认导出选中"),
+            t("确定导出当前选中的 {count} 个贴纸到文件夹？").format(
+                count=len(selected_indices)
+            ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
         if reply == QMessageBox.No:
-            self.log("💬 用户取消了导出操作")
+            self.log(t("💬 用户取消了导出操作"))
             return
 
         self._executeDownload(selected_indices)
@@ -1267,13 +1423,15 @@ class TGStickerInterface(QWidget):
 
         reply = QMessageBox.question(
             self,
-            "确认导出全部",
-            f"当前不管预览是否完全加载，将直接从服务器批量导出《{self.current_pack.title}》的全部 {self.current_pack.total_count} 个贴纸？",
+            t("确认导出全部"),
+            t("当前不管预览是否完全加载，将直接从服务器批量导出《{title}》的全部 {count} 个贴纸？").format(
+                title=self.current_pack.title, count=self.current_pack.total_count
+            ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
         if reply == QMessageBox.No:
-            self.log("💬 用户取消了导出操作")
+            self.log(t("💬 用户取消了导出操作"))
             return
 
         self._executeDownload(None)
@@ -1294,7 +1452,11 @@ class TGStickerInterface(QWidget):
         workers = 8
 
         count_desc = len(selected_indices) if selected_indices is not None else self.current_pack.total_count
-        self.log(f"🚀 开始批量导出: 目标目录 -> {output_dir} (共 {count_desc} 个贴纸, 格式: {str(fmt).upper()})")
+        self.log(
+            t("🚀 开始批量导出: 目标目录 -> {directory} (共 {count} 个贴纸, 格式: {format})").format(
+                directory=output_dir, count=count_desc, format=str(fmt).upper()
+            )
+        )
 
         self.parseButton.setEnabled(False)
         self.exportSelectedButton.setEnabled(False)
@@ -1323,7 +1485,9 @@ class TGStickerInterface(QWidget):
         if total > 0:
             val = int(done / total * 100)
             self.progressBar.setValue(val)
-        self.log(f"导出进度 [{done}/{total}]: {msg}")
+        self.log(t("导出进度 [{done}/{total}]: {message}").format(
+            done=done, total=total, message=msg
+        ))
 
     def _onDownloadFinished(self, result: Dict[str, Any]):
         self.parseButton.setEnabled(True)
@@ -1334,11 +1498,13 @@ class TGStickerInterface(QWidget):
         self.progressBar.setValue(100)
         self.last_download_result = result
 
-        msg = f"🎉 全部提取成功! 成功导出 {result['success_count']} 张, 失败 {result['fail_count']} 张。"
+        msg = t("🎉 全部提取成功! 成功导出 {success} 张, 失败 {failed} 张。").format(
+            success=result["success_count"], failed=result["fail_count"]
+        )
         self.log(f"✅ {msg}")
-        self.log(f"📁 导出文件夹: {result['output_dir']}")
+        self.log(t("📁 导出文件夹: {directory}").format(directory=result["output_dir"]))
         if result.get("zip_path"):
-            self.log(f"📦 ZIP压缩包: {result['zip_path']}")
+            self.log(t("📦 ZIP压缩包: {path}").format(path=result["zip_path"]))
 
         try:
             out_dir = result['output_dir']
@@ -1352,9 +1518,12 @@ class TGStickerInterface(QWidget):
             pass
 
         QMessageBox.information(
-            self, "导出完成",
-            f"{msg}\n\n保存目录:\n{result['output_dir']}" +
-            (f"\n\nZIP 压缩包:\n{result['zip_path']}" if result.get("zip_path") else ""),
+            self, t("导出完成"),
+            t("{message}\n\n保存目录:\n{directory}").format(
+                message=msg, directory=result["output_dir"]
+            ) +
+            (t("\n\nZIP 压缩包:\n{path}").format(path=result["zip_path"])
+             if result.get("zip_path") else ""),
             QMessageBox.Ok
         )
 
@@ -1364,8 +1533,10 @@ class TGStickerInterface(QWidget):
         self.exportAllButton.setEnabled(True)
         self.importSelectedButton.setEnabled(True)
         self.importAllButton.setEnabled(True)
-        self.log(f"❌ 导出过程中出现错误: {error_msg}")
-        QMessageBox.critical(self, "导出出错", f"导出失败:\n{error_msg}", QMessageBox.Ok)
+        self.log(t("❌ 导出过程中出现错误: {error}").format(error=error_msg))
+        QMessageBox.critical(
+            self, t("导出出错"), t("导出失败:\n{error}").format(error=error_msg), QMessageBox.Ok
+        )
 
     # ==========================================
     # 导入到 SuzuEmojy 资源库逻辑
@@ -1378,21 +1549,25 @@ class TGStickerInterface(QWidget):
 
         selected_items = self.previewListWidget.selectedItems()
         if not selected_items:
-            self.log("❌ 您尚未选择任何贴纸！请先在预览区选中贴纸后再导入。")
-            QMessageBox.warning(self, "提示", "请先在预览区选中贴纸后再导入！", QMessageBox.Ok)
+            self.log(t("❌ 您尚未选择任何贴纸！请先在预览区选中贴纸后再导入。"))
+            QMessageBox.warning(
+                self, t("提示"), t("请先在预览区选中贴纸后再导入！"), QMessageBox.Ok
+            )
             return
 
         selected_indices = [item.data(Qt.UserRole) for item in selected_items if item.data(Qt.UserRole) is not None]
 
         reply = QMessageBox.question(
             self,
-            "确认导入选中",
-            f"确定将当前选中的 {len(selected_indices)} 个贴纸导入到资源库？（自动转码为通用图片并去重）",
+            t("确认导入选中"),
+            t("确定将当前选中的 {count} 个贴纸导入到资源库？（自动转码为通用图片并去重）").format(
+                count=len(selected_indices)
+            ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
         if reply == QMessageBox.No:
-            self.log("💬 用户取消了导入操作")
+            self.log(t("💬 用户取消了导入操作"))
             return
 
         self._executeImport(selected_indices)
@@ -1404,13 +1579,15 @@ class TGStickerInterface(QWidget):
 
         reply = QMessageBox.question(
             self,
-            "确认导入全部",
-            f"确定将《{self.current_pack.title}》的全部 {self.current_pack.total_count} 个贴纸导入到资源库？（自动转码并去重）",
+            t("确认导入全部"),
+            t("确定将《{title}》的全部 {count} 个贴纸导入到资源库？（自动转码并去重）").format(
+                title=self.current_pack.title, count=self.current_pack.total_count
+            ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
         if reply == QMessageBox.No:
-            self.log("💬 用户取消了导入操作")
+            self.log(t("💬 用户取消了导入操作"))
             return
 
         self._executeImport(None)
@@ -1418,8 +1595,10 @@ class TGStickerInterface(QWidget):
     def _executeImport(self, selected_indices: Optional[List[int]]):
         main_win = self.window()
         if not hasattr(main_win, 'storage') or not main_win.storage:
-            self.log("❌ 导入失败，无法获取表情包资源库存储服务！")
-            QMessageBox.warning(self, "错误", "无法获取表情包资源库存储服务！", QMessageBox.Ok)
+            self.log(t("❌ 导入失败，无法获取表情包资源库存储服务！"))
+            QMessageBox.warning(
+                self, t("错误"), t("无法获取表情包资源库存储服务！"), QMessageBox.Ok
+            )
             return
 
         storage = main_win.storage
@@ -1447,7 +1626,11 @@ class TGStickerInterface(QWidget):
 
         self.progressBar.setMaximum(total_count)
         self.progressBar.setValue(0)
-        self.log(f"💬 开始异步并发导入贴纸到资源库，分类: [{category_name}]...")
+        self.log(
+            t("💬 开始异步并发导入贴纸到资源库，分类: [{category}]...").format(
+                category=category_name
+            )
+        )
 
         downloader = self._get_configured_downloader()
 
@@ -1478,11 +1661,17 @@ class TGStickerInterface(QWidget):
         self.importAllButton.setEnabled(True)
         self.progressBar.setValue(self.progressBar.maximum())
 
-        self.log(f"✅ 导入完成！成功入库 {imported} 张贴纸到 [{cat_name}]，重复合并 {dup} 张，失败 {failed} 张。")
+        self.log(
+            t("✅ 导入完成！成功入库 {imported} 张贴纸到 [{category}]，重复合并 {duplicated} 张，失败 {failed} 张。").format(
+                imported=imported, category=cat_name, duplicated=dup, failed=failed
+            )
+        )
         QMessageBox.information(
             self,
-            "导入完成",
-            f"Telegram 贴纸导入成功！\n分类: {cat_name}\n共成功入库: {imported} 个 (重复合并: {dup})\n失败: {failed} 个",
+            t("导入完成"),
+            t("Telegram 贴纸导入成功！\n分类: {category}\n共成功入库: {imported} 个 (重复合并: {duplicated})\n失败: {failed} 个").format(
+                category=cat_name, imported=imported, duplicated=dup, failed=failed
+            ),
             QMessageBox.Ok
         )
 
@@ -1492,5 +1681,7 @@ class TGStickerInterface(QWidget):
         self.exportAllButton.setEnabled(True)
         self.importSelectedButton.setEnabled(True)
         self.importAllButton.setEnabled(True)
-        self.log(f"❌ 导入过程中出现错误: {error_msg}")
-        QMessageBox.critical(self, "导入出错", f"导入失败:\n{error_msg}", QMessageBox.Ok)
+        self.log(t("❌ 导入过程中出现错误: {error}").format(error=error_msg))
+        QMessageBox.critical(
+            self, t("导入出错"), t("导入失败:\n{error}").format(error=error_msg), QMessageBox.Ok
+        )

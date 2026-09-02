@@ -1,11 +1,75 @@
 import os
 import subprocess
 import sys
+import shutil
+
+
+def find_csc():
+    """查找 Windows 自带的 C# 编译器。"""
+    candidates = [
+        os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+        os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
+    ]
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    return shutil.which("csc.exe")
+
+
+def build_launcher_stub(release_dir):
+    """编译带项目图标的极轻量 Windows GUI 启动器。"""
+    csc_path = find_csc()
+    if not csc_path:
+        raise RuntimeError(
+            "找不到 csc.exe，无法生成带图标的轻量启动器。"
+            "请安装 .NET Framework 4.x Developer Pack 或 Visual Studio Build Tools。"
+        )
+
+    source_path = os.path.abspath("launcher_stub.cs")
+    icon_path = os.path.abspath("ico.ico")
+    output_path = os.path.abspath(os.path.join(release_dir, "SuzuEmojy.exe"))
+
+    if not os.path.isfile(source_path):
+        raise FileNotFoundError(f"找不到启动器源码: {source_path}")
+    if not os.path.isfile(icon_path):
+        raise FileNotFoundError(f"找不到图标文件: {icon_path}")
+
+    compile_cmd = [
+        csc_path,
+        "/nologo",
+        "/target:winexe",
+        "/platform:x64",
+        f"/out:{output_path}",
+        f"/win32icon:{icon_path}",
+        source_path,
+        "/reference:System.dll",
+        "/reference:System.Windows.Forms.dll",
+    ]
+    print("Compiling lightweight launcher:", " ".join(compile_cmd))
+    result = subprocess.run(compile_cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        details = (result.stdout + "\n" + result.stderr).strip()
+        raise RuntimeError(f"轻量启动器编译失败:\n{details}")
+
+    if not os.path.isfile(output_path):
+        raise RuntimeError(f"启动器编译完成但未找到输出文件: {output_path}")
+
+    return output_path
+
 
 def main():
     print("====================================")
     print("Building SuzuEmojy with Nuitka")
     print("====================================")
+
+    # 清理 Nuitka 上一次的 standalone 产物，避免旧依赖残留到新发布包。
+    for path in ("dist/main.dist", "dist/main.build"):
+        if os.path.exists(path):
+            print(f"Removing stale build output: {path}")
+            shutil.rmtree(path)
 
     # Nuitka command
     cmd = [
@@ -19,16 +83,27 @@ def main():
         "--output-filename=SuzuEmojy.exe",
         "--assume-yes-for-downloads",
         "--include-package=qfluentwidgets",
-        "--include-package=services",
-        "--include-package=fluent_ui",
+        # services/fluent_ui 均通过入口和页面的显式导入自动跟踪，
+        # 不再强制递归包含，避免把未使用模块带入发布包。
         "--include-package=certifi",
         "--include-package-data=certifi",
-        "--include-package=imageio_ffmpeg",
-        "--include-package-data=imageio_ffmpeg",
-        "--include-data-dir=C:/Users/14915/miniconda3/Lib/site-packages/imageio_ffmpeg/binaries=imageio_ffmpeg/binaries",
+        "--nofollow-import-to=imageio_ffmpeg",
+        "--nofollow-import-to=cryptography",
+        "--nofollow-import-to=OpenSSL",
+        "--nofollow-import-to=PySide6.QtMultimedia",
+        "--nofollow-import-to=PySide6.QtMultimediaWidgets",
+        "--nofollow-import-to=PySide6.QtPdf",
+        "--nofollow-import-to=PySide6.QtPdfWidgets",
+        
+        # imageio-ffmpeg 只用于定位 FFmpeg；发布包仅携带实际需要的单个可执行文件。
+        "--include-data-file=" + os.path.join(
+            os.path.dirname(__import__("imageio_ffmpeg").get_ffmpeg_exe()),
+            "ffmpeg-win-x86_64-v7.1.exe",
+        ) + "=ffmpeg/ffmpeg.exe",
 
-        # ---- 体积优化：排除 imageio 可选依赖拖进来的科学计算库 ----
-        # numpy 先保留，因为 imageio 的帧数据本身就是 ndarray，硬排除大概率运行时崩溃
+        # ---- 体积优化：禁止无用的 OpenCV/NumPy 整套依赖进入发布包 ----
+        "--nofollow-import-to=cv2",
+        "--nofollow-import-to=numpy",
         "--nofollow-import-to=scipy",
         "--nofollow-import-to=matplotlib",
         "--nofollow-import-to=pandas",
@@ -83,8 +158,6 @@ def main():
         print("\n====================================")
         print("Nuitka Build Complete! Now preparing clean release folder...")
         
-        import shutil
-        
         release_dir = "dist/SuzuEmojy_Release"
         bin_dir = os.path.join(release_dir, "bin")
         
@@ -96,62 +169,45 @@ def main():
         
         # 2. 将 Nuitka 生成的 dist 移动为 bin 目录
         shutil.move("dist/main.dist", bin_dir)
+
+        # 项目不使用 PDF：qpdf 图片插件是 qt6pdf.dll 的唯一引入源。
+        # 仅移除 PDF 相关文件，保留其它 Qt 图片格式插件。
+        for relative_path in (
+            os.path.join("PySide6", "qt-plugins", "imageformats", "qpdf.dll"),
+            "qt6pdf.dll",
+        ):
+            optional_file = os.path.join(bin_dir, relative_path)
+            if os.path.isfile(optional_file):
+                print(f"Removing unused Qt PDF component: {optional_file}")
+                os.remove(optional_file)
         
-        # 3. 复制文档和数据
-        files_to_copy = ["README.md", "说明书.md"]
+        # 3. 复制文档、图标和数据
+        files_to_copy = ["README.md", "说明书.md", "ico.ico"]
         for f in files_to_copy:
             if os.path.exists(f):
                 shutil.copy2(f, release_dir)
-                
+
         if os.path.exists("data"):
             shutil.copytree("data", os.path.join(bin_dir, "data"))
-            
+
         if os.path.exists("translations"):
             shutil.copytree("translations", os.path.join(bin_dir, "translations"))
-            
-        # 4. 创建一个极小的 VBS 启动脚本并转换为 EXE (或者直接提供一个启动脚本)
-        # 为了不引入额外的 C++ 编译器依赖，我们写一个极小的 Python 脚本，用 PyInstaller 打包成单文件作为外壳
-        launcher_code = """import os
-import sys
-import subprocess
 
-def main():
-    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-    bin_exe = os.path.join(base_dir, "bin", "SuzuEmojy.exe")
-    
-    if os.path.exists(bin_exe):
-        # 注意：cwd 必须设置为 base_dir (即 SuzuEmojy_Release 根目录)，这样核心程序才能正确找到外面的 data 文件夹
-        subprocess.Popen([bin_exe], cwd=base_dir, creationflags=subprocess.CREATE_NO_WINDOW)
-    else:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("错误", f"找不到核心程序文件：\\n{bin_exe}\\n\\n请确保 bin 文件夹完整。")
+        # 4. 生成几 KB 的 Windows GUI 启动器。
+        # 启动器只负责调用 bin 内的 Nuitka 核心程序，不携带 Python runtime。
+        launcher_path = build_launcher_stub(release_dir)
+        print(f"Created lightweight launcher: {launcher_path}")
 
-if __name__ == "__main__":
-    main()
-"""
-        with open("mini_launcher.py", "w", encoding="utf-8") as f:
-            f.write(launcher_code)
-            
-        print("Building mini launcher wrapper...")
-        subprocess.run([
-            sys.executable, "-m", "PyInstaller", 
-            "--noconsole", "--onefile", 
-            "--icon=ico.ico", 
-            "--name=SuzuEmojy", 
-            "mini_launcher.py"
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # 移动生成的启动器到 release 目录
-        if os.path.exists("dist/SuzuEmojy.exe"):
-            shutil.move("dist/SuzuEmojy.exe", os.path.join(release_dir, "SuzuEmojy.exe"))
-            
-        # 清理临时文件
-        if os.path.exists("mini_launcher.py"): os.remove("mini_launcher.py")
-        if os.path.exists("SuzuEmojy.spec"): os.remove("SuzuEmojy.spec")
-        if os.path.exists("build"): shutil.rmtree("build")
+        # 清理可能遗留的旧版 PyInstaller 外壳及临时文件。
+        for stale_path in (
+            "dist/SuzuEmojy.exe",
+            "mini_launcher.py",
+            "SuzuEmojy.spec",
+        ):
+            if os.path.isfile(stale_path):
+                os.remove(stale_path)
+        if os.path.isdir("build"):
+            shutil.rmtree("build")
         
         print("\n====================================")
         print("Running AVX-512 verification...")
