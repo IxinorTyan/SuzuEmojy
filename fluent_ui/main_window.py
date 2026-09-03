@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QVBoxLayout
 from qfluentwidgets import MessageBox
 from qframelesswindow import FramelessWindow, StandardTitleBar
 
+from ctypes import wintypes
+
 from fluent_ui.views.gallery_view import GalleryInterface
 from fluent_ui.views.setting_view import SettingInterface
 from fluent_ui.views.exchange_view import ExchangeInterface
@@ -17,6 +19,20 @@ from fluent_ui.views.qq_scan_view import QQScanInterface
 from fluent_ui.views.tg_sticker_view import TGStickerInterface
 
 user32 = ctypes.windll.user32
+
+# 显式声明 Win32 API 的参数类型，避免 64 位冻结程序中 HWND 被截断。
+user32.IsWindow.argtypes = [wintypes.HWND]
+user32.IsWindow.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND,
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+user32.SetWindowPos.restype = wintypes.BOOL
 
 class HotkeySignal(QObject):
     """跨线程桥接信号"""
@@ -154,10 +170,19 @@ class MainWindow(FramelessWindow):
         super().showEvent(event)
         self._play_window_animation()
 
+        # qframelesswindow/Windows 可能在显示阶段重新调整 Z 序，
+        # 因此在窗口真正显示后再次应用置顶状态。
+        self.apply_window_flags()
+        QTimer.singleShot(0, self.apply_window_flags)
+        QTimer.singleShot(100, self.apply_window_flags)
+
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.WindowStateChange:
             self._play_window_animation()
+        elif event.type() == QEvent.ActivationChange:
+            # Windows/qframelesswindow 在激活切换时可能重排 Z 序，重新确认置顶状态。
+            QTimer.singleShot(0, self.apply_window_flags)
 
     def closeEvent(self, event):
         """保存窗口状态和布局比例"""
@@ -218,6 +243,8 @@ class MainWindow(FramelessWindow):
         self.stacked_widget.setCurrentWidget(self.setting_interface)
         self.showNormal()
         self.activateWindow()
+        self.raise_()
+        self._reapply_window_flags_after_show()
         
     def show_gallery(self, refresh=True):
         """切回主面板；快捷键唤醒时应使用 refresh=False 的轻量路径。"""
@@ -228,24 +255,40 @@ class MainWindow(FramelessWindow):
         self.stacked_widget.setCurrentWidget(self.gallery_interface)
         self.showNormal()
         self.activateWindow()
+        self.raise_()
+        self._reapply_window_flags_after_show()
 
     def show_exchange(self):
         """切换到导出导入界面"""
         self.stacked_widget.setCurrentWidget(self.exchange_interface)
         self.showNormal()
         self.activateWindow()
+        self.raise_()
+        self._reapply_window_flags_after_show()
 
     def show_qq_scan(self):
         """切换到QQ扫描界面"""
         self.stacked_widget.setCurrentWidget(self.qq_scan_interface)
         self.showNormal()
         self.activateWindow()
+        self.raise_()
+        self._reapply_window_flags_after_show()
 
     def show_tg_sticker(self):
         """切换到TG贴纸下载界面"""
         self.stacked_widget.setCurrentWidget(self.tg_sticker_interface)
         self.showNormal()
         self.activateWindow()
+        self.raise_()
+        self._reapply_window_flags_after_show()
+
+
+    def _reapply_window_flags_after_show(self):
+        """在窗口显示或被唤醒后重新应用 Windows 置顶状态。"""
+        self.apply_window_flags()
+        # 分多个时间点重试，覆盖 Windows 激活、无边框窗口调整 Z 序的异步过程。
+        for delay in (0, 100, 500, 1000):
+            QTimer.singleShot(delay, self.apply_window_flags)
 
 
     def _init_global_hotkey(self):
@@ -360,23 +403,39 @@ class MainWindow(FramelessWindow):
             
             # 在下一帧恢复滚动位置
             if hasattr(self, 'gallery_interface'):
+                # 卡片采用分帧懒加载，延迟恢复可避免布局尚未完成时被截断。
                 QTimer.singleShot(0, self.gallery_interface.restore_scroll_position)
+                QTimer.singleShot(100, self.gallery_interface.restore_scroll_position)
+                QTimer.singleShot(300, self.gallery_interface.restore_scroll_position)
 
     def apply_window_flags(self):
         """
         使用 user32.SetWindowPos 动态修改置顶状态，
-        避免使用 self.setWindowFlag 导致重新创建窗口句柄而破坏无边框缩放特性
+        避免使用 self.setWindowFlag 导致重新创建窗口句柄而破坏无边框缩放特性。
         """
-        always_on_top = self.config.get("always_on_top", True)
-        HWND_TOPMOST = ctypes.c_void_p(-1)
-        HWND_NOTOPMOST = ctypes.c_void_p(-2)
-        SWP_NOMOVE = 0x0002
-        SWP_NOSIZE = 0x0001
-        SWP_NOACTIVATE = 0x0010
-        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-        
-        insert_after = HWND_TOPMOST if always_on_top else HWND_NOTOPMOST
-        user32.SetWindowPos(ctypes.c_void_p(int(self.winId())), insert_after, 0, 0, 0, 0, flags)
+        try:
+            hwnd = int(self.winId())
+            if not hwnd or not user32.IsWindow(hwnd):
+                return False
+
+            always_on_top = bool(self.config.get("always_on_top", True))
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            HWND_NOTOPMOST = ctypes.c_void_p(-2)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+
+            insert_after = HWND_TOPMOST if always_on_top else HWND_NOTOPMOST
+            result = user32.SetWindowPos(
+                hwnd, insert_after, 0, 0, 0, 0, flags
+            )
+            if not result:
+                print(f"[WARNING] SetWindowPos failed, error={ctypes.get_last_error()}")
+            return bool(result)
+        except (AttributeError, TypeError, ValueError, OSError) as error:
+            print(f"[WARNING] Failed to apply window topmost state: {error}")
+            return False
 
     def on_settings_changed(self, changed_key=""):
         """当设置界面修改了配置时被调用，按需局部刷新"""
@@ -448,6 +507,7 @@ class MainWindow(FramelessWindow):
                 if msg.wParam == 0x0012 or msg.wParam == 0x0007:
                     # 延迟重新绑定快捷键，确保系统钩子机制已完全恢复
                     QTimer.singleShot(2000, self.bind_global_hotkey)
+                    QTimer.singleShot(500, self._reapply_window_flags_after_show)
             # WM_SETTINGCHANGE = 0x001A
             elif msg.message == 0x001A:
                 # 系统设置改变（包括深浅色模式切换）

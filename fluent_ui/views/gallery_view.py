@@ -894,6 +894,7 @@ class GalleryInterface(QWidget):
         self.filter_state = FilterState()
         self.last_active_window = None
         self.is_selection_mode = False
+        self._saved_scroll_position = 0
         self._inbox_scanning = False
         self._last_cleanup_time = 0
         
@@ -965,16 +966,28 @@ class GalleryInterface(QWidget):
         if hasattr(self, 'search_box'):
             self.search_box.setPlaceholderText(t("搜索表情关键词..."))
         
-        # 滚动位置记录
-        self._saved_scroll_position = 0
-
     def save_scroll_position(self):
-        if hasattr(self, 'scroll_area'):
-            self._saved_scroll_position = self.scroll_area.verticalScrollBar().value()
+        """保存当前滚动位置；窗口切换期间即使控件正在销毁也不应影响主流程。"""
+        try:
+            scrollbar = getattr(getattr(self, "scroll_area", None), "verticalScrollBar", lambda: None)()
+            if scrollbar is not None:
+                self._saved_scroll_position = max(0, int(scrollbar.value()))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            # Qt 对象可能已被销毁，保留上一次有效位置即可。
+            pass
 
     def restore_scroll_position(self):
-        if hasattr(self, 'scroll_area'):
-            self.scroll_area.verticalScrollBar().setValue(self._saved_scroll_position)
+        """恢复滚动位置，兼容旧版对象未初始化该字段的情况。"""
+        try:
+            scrollbar = getattr(getattr(self, "scroll_area", None), "verticalScrollBar", lambda: None)()
+            if scrollbar is None:
+                return
+
+            saved_position = max(0, int(getattr(self, "_saved_scroll_position", 0)))
+            scrollbar.setValue(min(saved_position, scrollbar.maximum()))
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            # 延迟恢复可能与页面重建或窗口销毁同时发生，不能让 Qt 回调抛出异常。
+            pass
 
     def _init_ui(self):
         self.main_layout = QHBoxLayout(self)
