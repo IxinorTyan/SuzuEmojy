@@ -9,6 +9,13 @@ import configparser
 from pathlib import Path
 from PIL import Image, ImageSequence
 
+from services.marketface_handler import (
+    get_recovered_gif_path,
+    is_marketface_candidate,
+    recover_marketface_data,
+)
+
+
 class QQExtractor:
     FILE_SIGNATURES = {
         'jpg': (b'\xff\xd8\xff', b'\xff\xd8\xff\xe0', b'\xff\xd8\xff\xe1'),
@@ -397,11 +404,51 @@ class QQExtractor:
             return []
 
     @staticmethod
+    def read_marketface_data(file_path):
+        """读取并恢复 marketface 文件，返回可用的 GIF 二进制数据。"""
+        recovered = recover_marketface_data(file_path)
+        return recovered[0] if recovered is not None else None
+
+    @staticmethod
+    def get_marketface_info(file_path):
+        """读取并恢复 marketface，返回 (GIF 数据, 帧数)。"""
+        return recover_marketface_data(file_path)
+
+    @staticmethod
+    def get_marketface_gif_path(file_path):
+        """获取恢复后的 marketface 临时 GIF 文件路径。"""
+        return get_recovered_gif_path(file_path)
+
+    @staticmethod
+    def scan_marketface(emoji_root_path):
+        """扫描 marketface 原图，只返回成功恢复并通过 GIF 校验的文件。"""
+        emoji_path = Path(emoji_root_path) if emoji_root_path else None
+        if not emoji_path or not emoji_path.exists():
+            return []
+
+        recovered_files = []
+        try:
+            for root, _, files in os.walk(str(emoji_path)):
+                for filename in files:
+                    file_path = os.path.join(root, filename)
+                    if not is_marketface_candidate(file_path):
+                        continue
+                    if recover_marketface_data(file_path) is not None:
+                        recovered_files.append(file_path)
+        except Exception:
+            return []
+
+        return sorted(recovered_files)
+
+    @staticmethod
     def scan_emojis(emoji_root_path, selected_folder=None):
         """
         针对不同 QQNT 表情分类，全量安全扫描并利用智能评分算法筛选出最优质的表情图片文件列表。
         自动剔除冗余子帧/切片，动图自动优选，且保证不会遗漏任何有效表情。
         """
+        if selected_folder and selected_folder.lower() == "marketface":
+            return QQExtractor.scan_marketface(emoji_root_path)
+
         emoji_path = Path(emoji_root_path) if emoji_root_path else None
         if not emoji_path or not emoji_path.exists():
             return []

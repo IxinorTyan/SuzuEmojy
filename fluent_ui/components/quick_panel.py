@@ -37,6 +37,12 @@ class QuickPanel(QWidget):
         
         self._all_card_widgets = []
         self._current_columns = 0
+        self._cached_query = None
+        self._cached_results = None
+        self._activation_guard = False
+        self._activation_guard_timer = QTimer(self)
+        self._activation_guard_timer.setSingleShot(True)
+        self._activation_guard_timer.timeout.connect(self._end_activation_guard)
         
         # 布局常量
         self.LAYOUT_TOP_MARGIN = 0
@@ -243,10 +249,14 @@ class QuickPanel(QWidget):
         if hasattr(self, 'empty_label'):
             self.empty_label.setText(t("没有找到匹配的表情") if keyword else t("暂无最近使用记录"))
 
-    def _perform_search(self):
+    def _perform_search(self, force=False):
         from services.i18n import t
         keyword = self.search_box.text().strip()
         limit = self.config.get("recent_limit", 30)
+        query_key = (keyword, limit)
+        
+        if not force and query_key == self._cached_query and self._cached_results is not None:
+            return
         
         if not keyword:
             # 初始状态或清空搜索框时，显示最近使用
@@ -256,6 +266,9 @@ class QuickPanel(QWidget):
             results = self.storage.search_images(keyword, "全部表情")
             # 限制结果数量，保证性能
             results = results[:30]
+        
+        self._cached_query = query_key
+        self._cached_results = tuple(results)
         
         # 清理旧结果
         while self.grid_layout.count():
@@ -383,6 +396,8 @@ class QuickPanel(QWidget):
         self.clipboard.copy_image_to_clipboard(path)
         limit = self.config.get("recent_limit", 30)
         self.storage.add_recent_image(path, limit)
+        self._cached_query = None
+        self._cached_results = None
         self.hide_panel()
         
         # 尝试恢复焦点并粘贴
@@ -437,6 +452,9 @@ class QuickPanel(QWidget):
         kw_str = self.storage.get_image_keywords(path) or "无"
         return cat_str, kw_str
 
+    def _end_activation_guard(self):
+        self._activation_guard = False
+
     def show_at_cursor(self):
         # 每次唤醒时读取最新的宽高配置
         w = self.config.get("quick_panel_width", 360)
@@ -446,8 +464,10 @@ class QuickPanel(QWidget):
             
         self._update_i18n_texts(None)
         self.update_theme()
-        self.search_box.clear()
-        self._perform_search()
+        if self.search_box.text():
+            self.search_box.clear()
+        else:
+            self._perform_search()
         
         # 计算位置
         cursor_pos = QCursor.pos()
@@ -467,6 +487,9 @@ class QuickPanel(QWidget):
             y = cursor_pos.y() - self.height() - 10
             
         self.move(x, y)
+        # show() 到 Windows 完成激活之间可能产生一次伪失焦事件，暂时忽略它。
+        self._activation_guard = True
+        self._activation_guard_timer.start(180)
         self.show()
         
         # 延迟触发布局计算，确保窗口已经显示且 viewport 宽度准确
@@ -489,6 +512,6 @@ class QuickPanel(QWidget):
 
     def changeEvent(self, event):
         if event.type() == QEvent.ActivationChange:
-            if not self.isActiveWindow():
+            if not self.isActiveWindow() and not self._activation_guard:
                 self.hide_panel()
         super().changeEvent(event)

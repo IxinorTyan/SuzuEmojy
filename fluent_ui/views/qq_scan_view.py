@@ -470,6 +470,19 @@ class QQScanInterface(QWidget):
             name = name.replace(char, '')
         return name.strip()
 
+    def _is_marketface(self):
+        folder = self.getSelectedFolder()
+        return bool(folder and folder.lower() == "marketface")
+
+    def _get_marketface_data(self, file_path):
+        """读取 marketface 恢复后的 GIF 数据及临时可读路径。"""
+        if not self._is_marketface():
+            return None, None
+        data = QQExtractor.read_marketface_data(file_path)
+        if data is None:
+            return None, None
+        return data, QQExtractor.get_marketface_gif_path(file_path)
+
     def onUserChanged(self):
         selected_qq = self.get_selected_qq()
         self.emojiFolderComboBox.clear()
@@ -525,10 +538,23 @@ class QQScanInterface(QWidget):
             current_count = start_idx + idx + 1
             self.progressBar.setValue(current_count)
             actual_ext = QQExtractor.get_actual_extension(file_path_str)
+            marketface_data = None
+            marketface_gif_path = None
+            marketface_frames = 0
+            if self._is_marketface():
+                marketface_info = QQExtractor.get_marketface_info(file_path_str)
+                if marketface_info is not None:
+                    marketface_data, marketface_frames = marketface_info
+                    marketface_gif_path = QQExtractor.get_marketface_gif_path(file_path_str)
+                    actual_ext = "gif"
+
             if actual_ext:
                 try:
-                    with open(file_path_str, 'rb') as f:
-                        file_data = f.read()
+                    if marketface_data is not None:
+                        file_data = marketface_data
+                    else:
+                        with open(file_path_str, 'rb') as f:
+                            file_data = f.read()
                     
                     pixmap = QPixmap()
                     if pixmap.loadFromData(file_data):
@@ -536,8 +562,13 @@ class QQScanInterface(QWidget):
                         is_animated = False
                         badge_text = "GIF"
                         
-                        # 1. 检查是否为 APNG
-                        if actual_ext.lower() == 'png' and QQExtractor.is_apng_file(file_path_str):
+                        # 1. marketface 已在内存中恢复为 GIF
+                        if marketface_data is not None:
+                            # marketface 可能是单帧 GIF；只有多帧时才标记为动图并显示 GIF 角标
+                            is_animated = marketface_frames > 1
+                            badge_text = "GIF" if is_animated else ""
+                        # 2. 检查是否为 APNG
+                        elif actual_ext.lower() == 'png' and QQExtractor.is_apng_file(file_path_str):
                             is_animated = True
                             badge_text = "APNG"
                         else:
@@ -581,7 +612,9 @@ class QQScanInterface(QWidget):
                         item.setData(Qt.UserRole, file_path_str)
                         item.setData(Qt.UserRole + 1, is_animated)
                         item.setData(Qt.UserRole + 2, icon)
-                        display_ext = "APNG" if badge_text == "APNG" else actual_ext.upper()
+                        display_ext = "GIF" if marketface_data is not None else (
+                            "APNG" if badge_text == "APNG" else actual_ext.upper()
+                        )
                         item.setToolTip(_tf(
                             "格式: {format}\n路径: {path}",
                             format=display_ext,
@@ -624,13 +657,16 @@ class QQScanInterface(QWidget):
             self.detailInfoLabel.setText(t("文件不存在"))
             return
             
+        marketface_data, marketface_gif_path = self._get_marketface_data(file_path_str)
         try:
             file_size_kb = os.path.getsize(file_path_str) / 1024
             actual_ext = QQExtractor.get_actual_extension(file_path_str)
             file_name = os.path.basename(file_path_str)
             
             format_display = actual_ext.upper() if actual_ext else t("未知")
-            if actual_ext and actual_ext.lower() == 'png' and QQExtractor.is_apng_file(file_path_str):
+            if marketface_data is not None:
+                format_display = "GIF"
+            elif actual_ext and actual_ext.lower() == 'png' and QQExtractor.is_apng_file(file_path_str):
                 format_display = t("APNG (动态图片)")
 
             info_text = _tf(
@@ -647,13 +683,16 @@ class QQScanInterface(QWidget):
             
         try:
             play_path = file_path_str
-            if is_animated:
+            if marketface_gif_path:
+                play_path = marketface_gif_path
+            elif is_animated:
                 # 若为 APNG 格式，转换为临时 GIF 播放
                 if QQExtractor.is_apng_file(file_path_str):
                     converted_gif = QQExtractor.convert_apng_to_gif(file_path_str)
                     if converted_gif:
                         play_path = converted_gif
 
+            if marketface_gif_path or is_animated:
                 self.detail_movie = QMovie(play_path)
                 reader = QImageReader(play_path)
                 orig_size = reader.size()
@@ -751,10 +790,23 @@ class QQScanInterface(QWidget):
                     continue
                 
                 actual_ext = QQExtractor.get_actual_extension(src_file)
+                marketface_data, marketface_gif_path = self._get_marketface_data(src_file)
                 filename_no_ext = os.path.splitext(os.path.basename(src_file))[0]
                 
+                # marketface 原始文件无扩展名且内容经过保护，导出恢复后的 GIF
+                if marketface_gif_path:
+                    dest_file = os.path.join(dst_dir, f"{filename_no_ext}.gif")
+                    shutil.copy2(marketface_gif_path, dest_file)
+                    copied_count += 1
+                    self.progressBar.setValue(copied_count)
+                    self.log(_tf(
+                        "导出(marketface恢复GIF) [{done}/{total}]: {source} -> {destination}",
+                        done=copied_count, total=total_files,
+                        source=os.path.basename(src_file),
+                        destination=os.path.basename(dest_file)
+                    ))
                 # 如果检测到是 APNG 格式的表情，将其转码为通用动图 GIF 导出
-                if actual_ext and actual_ext.lower() == 'png' and QQExtractor.is_apng_file(src_file):
+                elif actual_ext and actual_ext.lower() == 'png' and QQExtractor.is_apng_file(src_file):
                     dest_file = os.path.join(dst_dir, f"{filename_no_ext}.gif")
                     converted_path = QQExtractor.convert_apng_to_gif(src_file, dest_file)
                     if converted_path:
@@ -965,9 +1017,12 @@ class QQScanInterface(QWidget):
                     fail_count += 1
                     continue
                 
-                # 如果是 APNG 文件，先转为临时 GIF 进行入库，使其在资源库中完整支持动态效果
+                # marketface 先恢复为 GIF；APNG 也转为 GIF，确保入库内容可正常读取
                 target_file_to_save = src_file
-                if QQExtractor.is_apng_file(src_file):
+                _, marketface_gif_path = self._get_marketface_data(src_file)
+                if marketface_gif_path:
+                    target_file_to_save = marketface_gif_path
+                elif QQExtractor.is_apng_file(src_file):
                     temp_gif = QQExtractor.convert_apng_to_gif(src_file)
                     if temp_gif:
                         target_file_to_save = temp_gif

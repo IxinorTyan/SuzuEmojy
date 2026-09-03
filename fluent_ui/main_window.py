@@ -1,5 +1,6 @@
 import os
 import ctypes
+import time
 
 from PySide6.QtCore import Qt, QObject, Signal, QSize, QEvent, QTimer
 from PySide6.QtGui import QIcon, QShortcut, QKeySequence
@@ -35,11 +36,25 @@ class MainWindow(FramelessWindow):
         
         self.setTitleBar(StandardTitleBar(self))
         
+        self._last_window_animation_time = 0.0
+        self._animation_cooldown = 0.25
+
+        # 合并短时间内重复的全局快捷键事件，避免窗口动画和状态切换堆积
+        self._toggle_window_requests = 0
+        self._toggle_window_timer = QTimer(self)
+        self._toggle_window_timer.setSingleShot(True)
+        self._toggle_window_timer.timeout.connect(self._flush_toggle_window)
+        self._toggle_quick_panel_requests = 0
+        self._toggle_quick_panel_timer = QTimer(self)
+        self._toggle_quick_panel_timer.setSingleShot(True)
+        self._toggle_quick_panel_timer.timeout.connect(self._flush_toggle_quick_panel)
+
         self._init_window()
         self._init_ui()
         self._init_global_hotkey()
         self._init_paste_shortcut()
         self._update_background()
+        self.apply_window_flags()
 
     def _init_window(self):
         self.setWindowTitle("SuzuEmojy")
@@ -126,19 +141,23 @@ class MainWindow(FramelessWindow):
                 self.titleBar.closeBtn.setPressedColor(QColor(255, 255, 255))
                 self.titleBar.closeBtn.update()
 
-    def showEvent(self, event):
-        super().showEvent(event)
+    def _play_window_animation(self):
+        """限制窗口动画频率，避免快速切换时动画请求堆积。"""
+        now = time.monotonic()
+        if now - self._last_window_animation_time < self._animation_cooldown:
+            return
+        self._last_window_animation_time = now
         if hasattr(self, 'windowEffect'):
             self.windowEffect.addWindowAnimation(self.winId())
-            
-        self.apply_window_flags()
-        self._update_background()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._play_window_animation()
 
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.WindowStateChange:
-            if hasattr(self, 'windowEffect'):
-                self.windowEffect.addWindowAnimation(self.winId())
+            self._play_window_animation()
 
     def closeEvent(self, event):
         """保存窗口状态和布局比例"""
@@ -200,12 +219,10 @@ class MainWindow(FramelessWindow):
         self.showNormal()
         self.activateWindow()
         
-    def show_gallery(self):
-        """暴露给外部托盘图标调用的接口，用于切回主面板"""
-        if hasattr(self, 'gallery_interface'):
-            # 刷新侧边栏分类列表，并保持当前选择的分类
+    def show_gallery(self, refresh=True):
+        """切回主面板；快捷键唤醒时应使用 refresh=False 的轻量路径。"""
+        if hasattr(self, 'gallery_interface') and refresh:
             self.gallery_interface.sidebar.refresh_list(self.gallery_interface.current_category)
-            # 重新过滤图片并刷新网格中的表情缩略图
             self.gallery_interface.on_images_changed()
             
         self.stacked_widget.setCurrentWidget(self.gallery_interface)
@@ -233,8 +250,8 @@ class MainWindow(FramelessWindow):
 
     def _init_global_hotkey(self):
         self.hotkey_signal = HotkeySignal()
-        self.hotkey_signal.activated.connect(self.toggle_window)
-        self.hotkey_signal.quick_activated.connect(self.toggle_quick_panel)
+        self.hotkey_signal.activated.connect(self._request_toggle_window)
+        self.hotkey_signal.quick_activated.connect(self._request_toggle_quick_panel)
         self.hotkey_listener = None
         self.bind_global_hotkey()
 
@@ -284,6 +301,26 @@ class MainWindow(FramelessWindow):
         except Exception as e:
             print(f"Failed to bind pynput hotkey: {e}")
 
+    def _request_toggle_window(self):
+        self._toggle_window_requests += 1
+        self._toggle_window_timer.start(40)
+
+    def _flush_toggle_window(self):
+        requests = self._toggle_window_requests
+        self._toggle_window_requests = 0
+        if requests % 2:
+            self.toggle_window()
+
+    def _request_toggle_quick_panel(self):
+        self._toggle_quick_panel_requests += 1
+        self._toggle_quick_panel_timer.start(40)
+
+    def _flush_toggle_quick_panel(self):
+        requests = self._toggle_quick_panel_requests
+        self._toggle_quick_panel_requests = 0
+        if requests % 2:
+            self.toggle_quick_panel()
+
     def toggle_quick_panel(self):
         if self.quick_panel.isVisible():
             self.quick_panel.hide_panel()
@@ -308,8 +345,7 @@ class MainWindow(FramelessWindow):
                 
             self.hide()
         else:
-            self._update_background()
-            self.show_gallery()
+            self.show_gallery(refresh=False)
             
             # 唤醒时也重置一次，双重保险
             if hasattr(self, 'titleBar') and hasattr(self.titleBar, 'closeBtn'):
