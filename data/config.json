@@ -5,13 +5,15 @@
     "use_system_font": false,
     "convert_static_to_gif": true,
     "window_geometry": [
-        1131,
-        1591,
+        410,
+        201,
         1143,
         663
     ],
     "appearance_mode": "light",
     "quick_panel_width": 357,
     "language": "zh",
-    "quick_panel_height": 480
+    "quick_panel_height": 480,
+    "thumbnail_size": 210,
+    "render_batch_size": 1
 }

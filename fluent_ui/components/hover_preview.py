@@ -1,7 +1,7 @@
 import os
 from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QApplication, QHBoxLayout
 from PySide6.QtCore import Qt, QSize, QByteArray, QBuffer
-from PySide6.QtGui import QPixmap, QMovie
+from PySide6.QtGui import QPixmap, QMovie, QImageReader
 from qfluentwidgets import BodyLabel, CaptionLabel
 import darkdetect
 from services.i18n import t, i18n_engine
@@ -139,8 +139,7 @@ class HoverPreviewPopup(QWidget):
         total_height = display_size + metadata_height
         self.setFixedSize(display_size, total_height)
         
-        # 预读图片获取原始尺寸
-        from PySide6.QtGui import QImageReader
+        # 只读取图片尺寸，不载入原图像素数据。
         reader = QImageReader(image_path)
         original_size = reader.size()
         
@@ -195,17 +194,24 @@ class HoverPreviewPopup(QWidget):
         # 4. 根据文件格式渲染
         if image_path.lower().endswith(('.gif', '.webp')):
             self.current_movie = QMovie(image_path, parent=self)
-            self.current_movie.setCacheMode(QMovie.CacheAll)
+            # 预览动图时只保留当前/必要帧，避免 CacheAll 将整个动画
+            # 解码后常驻内存。显示尺寸和动画行为保持不变。
+            self.current_movie.setCacheMode(QMovie.CacheNone)
             
             self.current_movie.setScaledSize(target_size)
             
             self.image_label.setMovie(self.current_movie)
             self.current_movie.start()
         else:
-            pixmap = QPixmap(image_path)
-            if not pixmap.isNull():
-                scaled_pixmap = pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.image_label.setPixmap(scaled_pixmap)
+            # 直接按预览尺寸解码，避免 QPixmap(image_path) 先把超大原图
+            # 完整载入内存后再缩放。target_size 已按原图比例计算。
+            reader = QImageReader(image_path)
+            reader.setScaledSize(target_size)
+            image = reader.read()
+
+            if not image.isNull():
+                pixmap = QPixmap.fromImage(image)
+                self.image_label.setPixmap(pixmap)
 
     def hide_preview(self):
         """隐藏预览并清理资源释放文件锁"""
@@ -216,6 +222,9 @@ class HoverPreviewPopup(QWidget):
             self.current_movie = None
             
         self.image_label.clear()
+        # 显式替换 QLabel 内部的 pixmap 引用，避免静态预览在隐藏后
+        # 继续占用一块较大的图像内存。
+        self.image_label.setPixmap(QPixmap())
         self.hide()
         
     def calculate_scaled_size(self, original_size, target_square_size):

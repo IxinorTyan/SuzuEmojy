@@ -289,5 +289,20 @@
     "💬 正在加载预览图 {start} - {end} ...": "💬 Loading preview images {start} - {end}...",
     "全部表情": "All Emojis",
     "新建分类": "New Category",
-    "请输入分类名称：": "Enter category name:"
+    "请输入分类名称：": "Enter category name:",
+    "关于软件": "About",
+    "SuzuEmojy 表情包管理器": "SuzuEmojy Emoji Manager",
+    "作者": "Author",
+    "项目地址": "Project",
+    "反馈与建议": "Feedback & Suggestions",
+    "作者主页": "Author Profile",
+    "项目主页": "Project Page",
+    "查看软件信息、作者与项目详情": "View software, author, and project details",
+    "查看详情": "View Details",
+    "返回设置": "Back to Settings",
+    "软件信息": "Software Information",
+    "一个简洁、快速的本地表情包管理工具": "A simple and fast local emoji manager",
+    "开发与反馈": "Development & Feedback",
+    "主要功能": "Key Features",
+    "集中管理本地表情，支持分类、搜索、关键词、悬停预览、快捷面板以及 QQ 和 Telegram 资源导入": "Manage local emojis with categories, search, keywords, hover preview, quick panel, and QQ and Telegram imports"
 }

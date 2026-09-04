@@ -1,11 +1,12 @@
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread, QUrl
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap, QMouseEvent
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, SwitchSettingCard, OptionsSettingCard, RangeSettingCard,
     ScrollArea, ExpandLayout, InfoBar, FluentIcon as FIF, LineEdit, Action, Theme, SpinBox,
     ComboBoxSettingCard, TransparentToolButton, TitleLabel
 )
-from PySide6.QtGui import QKeySequence
+from qfluentwidgets import PushButton
 from services.i18n import t, i18n_engine, SUPPORTED_LANGUAGES
 
 class SpinBoxRangeSettingCard(RangeSettingCard):
@@ -94,11 +95,180 @@ class CustomHotkeySettingCard(SettingCard):
         return super().eventFilter(obj, event)
 
 
+class AvatarLoader(QThread):
+    """在后台加载 GitHub 头像，避免阻塞设置页面。"""
+
+    avatar_loaded = Signal(QPixmap)
+
+    def run(self):
+        try:
+            import requests
+
+            response = requests.get(
+                "https://github.com/IxinorTyan.png",
+                timeout=10,
+                headers={"User-Agent": "SuzuEmojy"}
+            )
+            response.raise_for_status()
+            pixmap = QPixmap()
+            if pixmap.loadFromData(response.content):
+                self.avatar_loaded.emit(pixmap)
+        except Exception as e:
+            print(f"[About] 加载 GitHub 头像失败: {e}")
+
+
+class AboutSoftwareCard(SettingCard):
+    """设置页中的关于入口卡片，不在卡片内堆叠详细信息。"""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(
+            FIF.INFO,
+            t("关于软件"),
+            t("查看软件信息、作者与项目详情"),
+            parent
+        )
+        self.setCursor(Qt.PointingHandCursor)
+        self.detailButton = PushButton(t("查看详情"), self)
+        self.detailButton.setFixedWidth(110)
+        self.detailButton.clicked.connect(self.clicked.emit)
+        self.hBoxLayout.addWidget(self.detailButton, 0, Qt.AlignRight)
+        self.hBoxLayout.addSpacing(16)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def update_texts(self):
+        self.setTitle(t("关于软件"))
+        self.setContent(t("查看软件信息、作者与项目详情"))
+        self.detailButton.setText(t("查看详情"))
+
+
+class AboutInterface(ScrollArea):
+    """关于软件详情页。"""
+
+    AUTHOR_URL = "https://github.com/IxinorTyan"
+    PROJECT_URL = "https://github.com/IxinorTyan/SuzuEmojy"
+    back_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setObjectName("AboutInterface")
+        self.scrollWidget = QWidget()
+        self.expandLayout = ExpandLayout(self.scrollWidget)
+        self.setWidget(self.scrollWidget)
+        self.setWidgetResizable(True)
+        self.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+        self.scrollWidget.setStyleSheet("QWidget { background-color: transparent; }")
+        self._init_ui()
+        i18n_engine.language_changed.connect(self.update_texts)
+
+    def _init_ui(self):
+        self.topBar = QWidget(self.scrollWidget)
+        self.topBarLayout = QHBoxLayout(self.topBar)
+        self.topBarLayout.setContentsMargins(0, 0, 0, 0)
+        self.topBarLayout.setSpacing(12)
+
+        self.btnBack = TransparentToolButton(FIF.LEFT_ARROW, self.topBar)
+        self.btnBack.setToolTip(t("返回设置"))
+        self.btnBack.clicked.connect(self.back_requested.emit)
+        self.titleLabel = TitleLabel(t("关于软件"), self.topBar)
+        self.topBarLayout.addWidget(self.btnBack)
+        self.topBarLayout.addWidget(self.titleLabel)
+        self.topBarLayout.addStretch()
+
+        self.introGroup = SettingCardGroup(t("软件信息"), self.scrollWidget)
+        self.introCard = SettingCard(
+            FIF.INFO,
+            t("SuzuEmojy 表情包管理器"),
+            t("一个简洁、快速的本地表情包管理工具"),
+            self.introGroup
+        )
+        self.introGroup.addSettingCard(self.introCard)
+
+        self.authorGroup = SettingCardGroup(t("开发与反馈"), self.scrollWidget)
+        self.authorCard = SettingCard(
+            FIF.PEOPLE,
+            t("作者"),
+            "IxinorTyan",
+            self.authorGroup
+        )
+        self.projectCard = SettingCard(
+            FIF.GITHUB,
+            t("项目地址"),
+            self.PROJECT_URL,
+            self.authorGroup
+        )
+        self.feedbackCard = SettingCard(
+            FIF.CHAT,
+            t("反馈与建议"),
+            "QQ群 834586488",
+            self.authorGroup
+        )
+        self.authorButton = PushButton(t("作者主页"), self.authorCard)
+        self.authorButton.setFixedWidth(110)
+        self.authorButton.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(self.AUTHOR_URL))
+        )
+        self.authorCard.hBoxLayout.addWidget(self.authorButton, 0, Qt.AlignRight)
+        self.authorCard.hBoxLayout.addSpacing(16)
+
+        self.projectButton = PushButton(t("项目主页"), self.projectCard)
+        self.projectButton.setFixedWidth(110)
+        self.projectButton.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(self.PROJECT_URL))
+        )
+        self.projectCard.hBoxLayout.addWidget(self.projectButton, 0, Qt.AlignRight)
+        self.projectCard.hBoxLayout.addSpacing(16)
+
+        self.authorGroup.addSettingCard(self.authorCard)
+        self.authorGroup.addSettingCard(self.projectCard)
+        self.authorGroup.addSettingCard(self.feedbackCard)
+
+        self.featureGroup = SettingCardGroup(t("主要功能"), self.scrollWidget)
+        self.featureCard = SettingCard(
+            FIF.EMOJI_TAB_SYMBOLS,
+            t("主要功能"),
+            t("集中管理本地表情，支持分类、搜索、关键词、悬停预览、快捷面板以及 QQ 和 Telegram 资源导入"),
+            self.featureGroup
+        )
+        self.featureGroup.addSettingCard(self.featureCard)
+
+        self.expandLayout.setSpacing(28)
+        self.expandLayout.setContentsMargins(36, 10, 36, 0)
+        self.expandLayout.addWidget(self.topBar)
+        self.expandLayout.addWidget(self.introGroup)
+        self.expandLayout.addWidget(self.authorGroup)
+        self.expandLayout.addWidget(self.featureGroup)
+
+    def update_texts(self, lang=None):
+        self.btnBack.setToolTip(t("返回设置"))
+        self.titleLabel.setText(t("关于软件"))
+        self.introGroup.titleLabel.setText(t("软件信息"))
+        self.introCard.setTitle(t("SuzuEmojy 表情包管理器"))
+        self.introCard.setContent(t("一个简洁、快速的本地表情包管理工具"))
+        self.authorGroup.titleLabel.setText(t("开发与反馈"))
+        self.authorCard.setTitle(t("作者"))
+        self.projectCard.setTitle(t("项目地址"))
+        self.feedbackCard.setTitle(t("反馈与建议"))
+        self.authorButton.setText(t("作者主页"))
+        self.projectButton.setText(t("项目主页"))
+        self.featureGroup.titleLabel.setText(t("主要功能"))
+        self.featureCard.setTitle(t("主要功能"))
+        self.featureCard.setContent(
+            t("集中管理本地表情，支持分类、搜索、关键词、悬停预览、快捷面板以及 QQ 和 Telegram 资源导入")
+        )
+
+
 class SettingInterface(ScrollArea):
     """设置界面 (View)"""
     
     settings_changed = Signal(str)
     back_requested = Signal()
+    about_requested = Signal()
 
     def __init__(self, config_service, parent=None):
         super().__init__(parent=parent)
@@ -306,7 +476,7 @@ class SettingInterface(ScrollArea):
         # 3.3 单次渲染上限
         self.batchSizeConfigItem = RangeConfigItem(
             "Advanced", "BatchSize", 50,
-            RangeValidator(10, 200)
+            RangeValidator(1, 200)
         )
         self.batchSizeConfigItem.value = self.config.get("render_batch_size", 50)
         
@@ -378,6 +548,12 @@ class SettingInterface(ScrollArea):
         self.advancedGroup.addSettingCard(self.sidebarTooltipCard)
         self.advancedGroup.addSettingCard(self.hotkeyCard)
         self.advancedGroup.addSettingCard(self.quickHotkeyCard)
+
+        # =================== 4. 关于软件 ===================
+        self.aboutGroup = SettingCardGroup(t("关于软件"), self.scrollWidget)
+        self.aboutCard = AboutSoftwareCard(self.aboutGroup)
+        self.aboutCard.clicked.connect(self.about_requested.emit)
+        self.aboutGroup.addSettingCard(self.aboutCard)
         
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
@@ -386,6 +562,7 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addWidget(self.windowGroup)
         self.expandLayout.addWidget(self.themeGroup)
         self.expandLayout.addWidget(self.advancedGroup)
+        self.expandLayout.addWidget(self.aboutGroup)
         
         # 绑定语言切换信号
         i18n_engine.language_changed.connect(self.update_texts)
@@ -446,6 +623,8 @@ class SettingInterface(ScrollArea):
         self.quickHotkeyCard.setContent(t("设置全局唤醒快速表情调用面板的快捷键"))
         self.quickHotkeyCard.hotkey_input.setPlaceholderText(t("点击输入框并按下快捷键"))
         self.quickHotkeyCard.btn_clear.setText(t("清除"))
+        self.aboutGroup.titleLabel.setText(t("关于软件"))
+        self.aboutCard.update_texts()
 
     def _connect_signals(self):
         self.alwaysTopCard.checkedChanged.connect(self._on_always_top_changed)
