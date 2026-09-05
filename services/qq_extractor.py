@@ -443,8 +443,10 @@ class QQExtractor:
     @staticmethod
     def scan_emojis(emoji_root_path, selected_folder=None):
         """
-        针对不同 QQNT 表情分类，全量安全扫描并利用智能评分算法筛选出最优质的表情图片文件列表。
-        自动剔除冗余子帧/切片，动图自动优选，且保证不会遗漏任何有效表情。
+        针对不同 QQNT 表情分类扫描并筛选图片。
+
+        personal_emoji 只读取 Ori 目录中的原始表情，避免把同一表情的
+        PNG 派生图和 JPG 原图同时纳入结果。其他分类保持递归扫描行为。
         """
         if selected_folder and selected_folder.lower() == "marketface":
             return QQExtractor.scan_marketface(emoji_root_path)
@@ -453,7 +455,14 @@ class QQExtractor:
         if not emoji_path or not emoji_path.exists():
             return []
 
-        # 1. 全量安全深度遍历，确保任何层级的文件都不会遗漏
+        # personal_emoji 的 Ori 才是需要导出的原始表情目录。
+        # Ori 不存在时不回退扫描上级目录，避免混入 PNG 派生文件。
+        if selected_folder and selected_folder.lower() == "personal_emoji":
+            emoji_path = emoji_path / "Ori"
+            if not emoji_path.is_dir():
+                return []
+
+        # 1. 安全遍历目标目录，确保只扫描允许的文件范围
         raw_files = []
         try:
             for root, _, files in os.walk(str(emoji_path)):

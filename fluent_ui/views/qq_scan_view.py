@@ -832,7 +832,15 @@ class QQScanInterface(QWidget):
                 else:
                     filename = os.path.basename(src_file)
                     if actual_ext:
-                        if not filename.lower().endswith(f".{actual_ext}"):
+                        filename_lower = filename.lower()
+                        # QQ personal_emoji/Ori 中部分 JPG 原图命名为 *.jpg.gif。
+                        # 文件内容虽识别为 JPG，但应保留这个原始文件名，
+                        # 避免导出为 *.jpg.gif.jpg。
+                        has_original_extension = (
+                            filename_lower.endswith(f".{actual_ext}") or
+                            filename_lower.endswith(f".{actual_ext}.gif")
+                        )
+                        if not has_original_extension:
                             dest_file = os.path.join(dst_dir, f"{filename}.{actual_ext}")
                         else:
                             dest_file = os.path.join(dst_dir, filename)
