@@ -503,6 +503,9 @@ class ImportPackThread(QThread):
 class TGStickerInterface(QWidget):
     """Telegram 贴纸包批量下载与入库工具界面 (View)"""
     back_requested = Signal()
+    DETAIL_PREVIEW_HIDE_WIDTH = 1000
+    CONTENT_STACK_WIDTH = 760
+    TOP_BAR_HEIGHT = 40
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -541,6 +544,8 @@ class TGStickerInterface(QWidget):
 
         # 顶部返回工具栏
         self.topBar = QWidget(self)
+        self.topBar.setFixedHeight(self.TOP_BAR_HEIGHT)
+        self.topBar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.topBarLayout = QHBoxLayout(self.topBar)
         self.topBarLayout.setContentsMargins(0, 0, 0, 0)
         self.topBarLayout.setSpacing(12)
@@ -873,11 +878,12 @@ class TGStickerInterface(QWidget):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
 
-        content_layout = QHBoxLayout()
-        content_layout.addWidget(self.splitter, stretch=1)
-        content_layout.addWidget(self.detailWidget)
+        self.contentLayout = QHBoxLayout()
+        self.contentLayout.addWidget(self.splitter, stretch=1)
+        self.contentLayout.addWidget(self.detailWidget)
 
-        self.mainLayout.addLayout(content_layout)
+        self.mainLayout.addLayout(self.contentLayout, 1)
+        self._update_responsive_layout()
 
         self.log(t("💬 Telegram 贴纸包批量下载工具已就绪"))
         self.log(t("💡 支持官方直连与智能路由回退，在上方输入贴纸包链接即可开始解析。"))
@@ -886,6 +892,40 @@ class TGStickerInterface(QWidget):
         self._register_i18n_widgets()
         i18n_engine.language_changed.connect(self.update_texts)
         self.update_texts()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_responsive_layout()
+
+    def _update_responsive_layout(self):
+        stacked = self.width() < self.CONTENT_STACK_WIDTH
+        orientation = Qt.Vertical if stacked else Qt.Horizontal
+
+        if self.splitter.orientation() != orientation:
+            self.splitter.setOrientation(orientation)
+            self.splitter.setSizes([420, 520] if stacked else [360, 740])
+
+        self._update_detail_preview_visibility()
+
+    def _update_detail_preview_visibility(self):
+        should_show = self.width() >= self.DETAIL_PREVIEW_HIDE_WIDTH
+        if self.detailWidget.isVisible() == should_show:
+            return
+
+        self.detailWidget.setVisible(should_show)
+
+        if not should_show:
+            if self._detail_thread and self._detail_thread.isRunning():
+                self._detail_thread.cancel()
+                self._detail_thread = None
+
+            if self.detail_movie:
+                self.detail_movie.stop()
+                self.detail_movie = None
+
+            self.detailPreviewLabel.clear()
+        else:
+            self.onItemSelectionChanged()
 
     # ==========================================
     # 日志输出与辅助函数
@@ -1277,6 +1317,9 @@ class TGStickerInterface(QWidget):
     # ==========================================
 
     def onItemSelectionChanged(self):
+        if not self.detailWidget.isVisible():
+            return
+
         current_item = self.previewListWidget.currentItem()
 
         if self.detail_movie:
@@ -1666,6 +1709,11 @@ class TGStickerInterface(QWidget):
                 imported=imported, category=cat_name, duplicated=dup, failed=failed
             )
         )
+
+        main_win = self.window()
+        refresh_library = getattr(main_win, "refresh_library", None)
+        if callable(refresh_library):
+            refresh_library()
         QMessageBox.information(
             self,
             t("导入完成"),

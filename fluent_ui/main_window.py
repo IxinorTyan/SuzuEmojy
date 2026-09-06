@@ -281,6 +281,10 @@ class MainWindow(FramelessWindow):
         
     def show_gallery(self, refresh=True):
         """切回主面板；快捷键唤醒时应使用 refresh=False 的轻量路径。"""
+        # 通过标题栏关闭后，按钮可能保留 pressed/hover 状态；
+        # 每次重新唤醒主面板时统一恢复为正常状态。
+        self._reset_close_button_state()
+        
         if hasattr(self, 'gallery_interface') and refresh:
             self.gallery_interface.sidebar.refresh_list(self.gallery_interface.current_category)
             self.gallery_interface.on_images_changed()

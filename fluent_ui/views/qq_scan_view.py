@@ -29,6 +29,9 @@ def _tf(text, **kwargs):
 class QQScanInterface(QWidget):
     """QQNT表情包批量提取工具界面 (View)"""
     back_requested = Signal()
+    DETAIL_PREVIEW_HIDE_WIDTH = 1000
+    CONTENT_STACK_WIDTH = 760
+    TOP_BAR_HEIGHT = 40
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -57,6 +60,8 @@ class QQScanInterface(QWidget):
 
         # 顶部返回工具栏
         self.topBar = QWidget(self)
+        self.topBar.setFixedHeight(self.TOP_BAR_HEIGHT)
+        self.topBar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.topBarLayout = QHBoxLayout(self.topBar)
         self.topBarLayout.setContentsMargins(0, 0, 0, 0)
         self.topBarLayout.setSpacing(12)
@@ -321,11 +326,12 @@ class QQScanInterface(QWidget):
         self.splitter.setStretchFactor(1, 1)
 
         # 合并到主水平内容布局
-        content_layout = QHBoxLayout()
-        content_layout.addWidget(self.splitter, stretch=1)
-        content_layout.addWidget(self.detailWidget)
-        
-        self.mainLayout.addLayout(content_layout)
+        self.contentLayout = QHBoxLayout()
+        self.contentLayout.addWidget(self.splitter, stretch=1)
+        self.contentLayout.addWidget(self.detailWidget)
+
+        self.mainLayout.addLayout(self.contentLayout, 1)
+        self._update_responsive_layout()
 
         # 槽函数绑定
         self.userComboBox.currentIndexChanged.connect(self.onUserChanged)
@@ -336,6 +342,34 @@ class QQScanInterface(QWidget):
         self.log(t("💬 QQNT表情包批量提取工具启动成功"))
         self.log(t("💡建议在使用前提前打开要提取表情包的账户，随便选择一个聊天窗口，将表情全部加载出来，这样提取的表情包更齐全。"))
         self.populateUserComboBox()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_responsive_layout()
+
+    def _update_responsive_layout(self):
+        stacked = self.width() < self.CONTENT_STACK_WIDTH
+        orientation = Qt.Vertical if stacked else Qt.Horizontal
+
+        if self.splitter.orientation() != orientation:
+            self.splitter.setOrientation(orientation)
+            self.splitter.setSizes([420, 520] if stacked else [360, 740])
+
+        self._update_detail_preview_visibility()
+
+    def _update_detail_preview_visibility(self):
+        should_show = self.width() >= self.DETAIL_PREVIEW_HIDE_WIDTH
+        if self.detailWidget.isVisible() == should_show:
+            return
+
+        self.detailWidget.setVisible(should_show)
+
+        if not should_show and self.detail_movie:
+            self.detail_movie.stop()
+            self.detail_movie = None
+            self.detailPreviewLabel.clear()
+        elif should_show:
+            self.onItemSelectionChanged()
 
     def _category_display_name(self, folder_name):
         mapping = {
@@ -645,7 +679,10 @@ class QQScanInterface(QWidget):
             self.detail_movie = None
             
         self.detailPreviewLabel.clear()
-        
+
+        if not self.detailWidget.isVisible():
+            return
+
         if not current_item or not current_item.isSelected():
             self.detailInfoLabel.setText(t("未选中表情"))
             return

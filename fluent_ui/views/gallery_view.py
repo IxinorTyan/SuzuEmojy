@@ -16,6 +16,7 @@ from qfluentwidgets import (
 from fluent_ui.components.emoji_card import EmojiCard
 from fluent_ui.components.hover_preview import HoverPreviewPopup
 from fluent_ui.components.hover_preview_controller import HoverPreviewController
+from fluent_ui.components.safe_round_menu import SafeRoundMenu
 
 user32 = ctypes.windll.user32
 
@@ -706,7 +707,7 @@ class CategorySidebar(QWidget):
 
         if cat_name in ("全部表情", "未分类", "新建分类"): return
 
-        menu = RoundMenu(title="设置", parent=self)
+        menu = SafeRoundMenu(title="设置", parent=self)
 
         action_rename = Action("重命名", parent=menu)
         action_rename.triggered.connect(lambda: QTimer.singleShot(50, lambda: self._rename_category(cat_name)))
@@ -916,7 +917,10 @@ class GalleryInterface(QWidget):
 
         self.download_threads = []
         self.import_thread = None
+        # 删除任务按顺序后台执行。后续删除会进入队列，不能因已有任务而被拒绝。
         self.delete_thread = None
+        self._delete_queue = []
+        self._active_delete_request = None
         self.exchange_import_thread = None
         self.exchange_export_thread = None
         self.setAcceptDrops(True)
@@ -1530,7 +1534,7 @@ class GalleryInterface(QWidget):
 
             if image_path in self._all_current_images:
                 self._all_current_images.remove(image_path)
-                self._loaded_count -= 1
+                self._loaded_count = max(0, self._loaded_count - 1)
 
             if image_path in self.selected_paths:
                 self.selected_paths.remove(image_path)
@@ -1553,6 +1557,11 @@ class GalleryInterface(QWidget):
             if getattr(widget, 'image_path', None) in paths_set:
                 widgets_to_remove.append(widget)
 
+        # 未渲染的图片也必须从数据源移除；否则滚动加载下一批时会重新出现。
+        self._all_current_images = [
+            path for path in self._all_current_images if path not in paths_set
+        ]
+
         if widgets_to_remove:
             self.grid_container.setUpdatesEnabled(False)
 
@@ -1567,13 +1576,12 @@ class GalleryInterface(QWidget):
                 if widget_to_remove in self._all_card_widgets:
                     self._all_card_widgets.remove(widget_to_remove)
 
-                if path in self._all_current_images:
-                    self._all_current_images.remove(path)
-                    self._loaded_count -= 1
-
                 if path in self.selected_paths:
                     self.selected_paths.remove(path)
 
+            self._loaded_count = min(
+                self._loaded_count, len(self._all_current_images)
+            )
             self.update_selection_count()
 
             columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
@@ -1837,8 +1845,11 @@ class GalleryInterface(QWidget):
             for widget in getattr(self, '_all_card_widgets', []):
                 if widget.image_path in paths:
                     widget.clear_resources()
-            QApplication.processEvents()
-            self._start_async_delete(paths, "批量删除成功", on_finished_callback=lambda: self.set_selection_mode(False))
+            self._start_async_delete(
+                paths,
+                "批量删除成功",
+                on_finished_callback=lambda: self.set_selection_mode(False),
+            )
 
     def _execute_batch_add(self, paths, cat_name):
         if not paths: return
@@ -2243,7 +2254,6 @@ class GalleryInterface(QWidget):
             self.preview_popup.hide_preview()
             if hasattr(widget, 'clear_resources'):
                 widget.clear_resources()
-            QApplication.processEvents()
             self._start_async_delete([image_path], "已删除")
 
     def show_context_menu(self, widget, position):
@@ -2256,13 +2266,13 @@ class GalleryInterface(QWidget):
 
     def _build_single_context_menu(self, widget):
         image_path = widget.image_path
-        menu = RoundMenu(parent=self)
+        menu = SafeRoundMenu(parent=self)
 
         categories = self.storage.get_all_categories()
         is_sub_category = self.current_category in categories
 
         # 1. 添加到分类...
-        add_to_cat_menu = RoundMenu(title="添加到分类...", parent=menu)
+        add_to_cat_menu = SafeRoundMenu(title="添加到分类...", parent=menu)
         menu.addMenu(add_to_cat_menu)
 
         has_valid_add_cat = False
@@ -2278,7 +2288,7 @@ class GalleryInterface(QWidget):
 
         # 2. 移动到分类... (仅在子分类下显示)
         if is_sub_category:
-            move_to_cat_menu = RoundMenu(title="移动到分类...", parent=menu)
+            move_to_cat_menu = SafeRoundMenu(title="移动到分类...", parent=menu)
             menu.addMenu(move_to_cat_menu)
 
             has_valid_move_cat = False
@@ -2324,13 +2334,13 @@ class GalleryInterface(QWidget):
         return menu
 
     def _build_batch_context_menu(self, paths):
-        menu = RoundMenu(parent=self)
+        menu = SafeRoundMenu(parent=self)
 
         categories = self.storage.get_all_categories()
         is_sub_category = self.current_category in categories
 
         # 1. 添加到分类...
-        add_to_cat_menu = RoundMenu(title="添加到分类...", parent=menu)
+        add_to_cat_menu = SafeRoundMenu(title="添加到分类...", parent=menu)
         menu.addMenu(add_to_cat_menu)
 
         has_valid_add_cat = False
@@ -2346,7 +2356,7 @@ class GalleryInterface(QWidget):
 
         # 2. 移动到分类... (仅在子分类下显示)
         if is_sub_category:
-            move_to_cat_menu = RoundMenu(title="移动到分类...", parent=menu)
+            move_to_cat_menu = SafeRoundMenu(title="移动到分类...", parent=menu)
             menu.addMenu(move_to_cat_menu)
 
             has_valid_move_cat = False
@@ -2368,7 +2378,7 @@ class GalleryInterface(QWidget):
 
         menu.addSeparator()
 
-        tags_menu = RoundMenu(title="标签", parent=menu)
+        tags_menu = SafeRoundMenu(title="标签", parent=menu)
         menu.addMenu(tags_menu)
 
         add_tags_action = Action("添加标签...", parent=tags_menu)
@@ -2492,55 +2502,72 @@ class GalleryInterface(QWidget):
             self.set_selection_mode(False)
 
     def _start_async_delete(self, filepaths, success_message="删除成功", on_finished_callback=None):
-        if not filepaths:
+        """提交删除请求；UI 立即移除卡片，磁盘与索引删除在后台队列串行完成。"""
+        unique_paths = list(dict.fromkeys(path for path in filepaths if path))
+        if not unique_paths:
             return
+
+        # 立即反馈并移除当前及尚未渲染的卡片，避免等待磁盘/SQLite 操作。
+        self.remove_cards_by_paths(unique_paths)
+        request = (unique_paths, success_message, on_finished_callback)
 
         if self.delete_thread and self.delete_thread.isRunning():
-            self.show_error("删除中", "当前有删除任务正在进行，请稍候...")
+            self._delete_queue.append(request)
+            self.show_success("删除已加入队列", f"已排队删除 {len(unique_paths)} 个表情")
             return
 
-        from services.i18n import t
+        self._run_next_delete(request)
 
-        # 1. 立即在 UI 上批量隐藏并销毁对应的卡片，并重新布局，防止并发交互崩溃
-        self.remove_cards_by_paths(filepaths)
+    def _run_next_delete(self, request=None):
+        """启动一个删除任务；同一 StorageService 的写操作保持串行，避免索引竞争。"""
+        if request is None:
+            if not self._delete_queue:
+                return
+            request = self._delete_queue.pop(0)
 
-        # 2. 弹出带有取消功能的进度对话框
-        progress_dialog = QProgressDialog(t("正在删除表情包..."), t("取消"), 0, len(filepaths), self.window())
-        progress_dialog.setWindowTitle(t("删除中"))
-        progress_dialog.setWindowModality(Qt.ApplicationModal)
-        progress_dialog.setMinimumDuration(0) # 立即显示
-
-        # 3. 启动后台线程
+        filepaths, success_message, on_finished_callback = request
+        self._active_delete_request = request
         self.delete_thread = DeleteThread(filepaths, self.storage, self)
 
-        # 4. 关联信号与槽
-        self.delete_thread.progress.connect(lambda cur, tot: progress_dialog.setValue(cur))
-        progress_dialog.canceled.connect(self.delete_thread.cancel)
-
         def on_thread_finished(result):
-            progress_dialog.close()
-            self.refresh_gallery()
+            from services.i18n import t
 
-            # 显示删除统计
-            deleted = result.get('deleted', 0)
-            missing = result.get('missing_cleaned', 0)
-            cancelled = result.get('cancelled', 0)
+            deleted = result.get("deleted", 0)
+            missing = result.get("missing_cleaned", 0)
+            failed = result.get("failed", 0)
+            cancelled = result.get("cancelled", 0)
 
             msg_parts = []
-            if deleted > 0:
+            if deleted:
                 msg_parts.append(f"成功物理删除 {deleted} 个表情")
-            if missing > 0:
+            if missing:
                 msg_parts.append(f"清理失效记录 {missing} 条")
-            if cancelled > 0:
+            if cancelled:
                 msg_parts.append(f"已取消余下 {cancelled} 个表情的删除")
 
-            self.show_success(t(success_message), "，".join(msg_parts))
+            # 先通知结果，不能让耗时的全量图库重建延迟成功提示。
+            if deleted or missing:
+                self.show_success(t(success_message), "，".join(msg_parts))
+            if failed:
+                self.show_error("部分删除失败", f"{failed} 个表情未能删除")
+            if cancelled and not (deleted or missing):
+                self.show_error("删除已取消", "未完成的表情未被删除")
+
+            # 仅在失败或取消时重建视图，以恢复被乐观隐藏但实际仍存在的卡片。
+            if failed or cancelled:
+                QTimer.singleShot(0, self.on_images_changed)
 
             if on_finished_callback:
                 on_finished_callback()
 
-            self.delete_thread.deleteLater()
+            thread = self.delete_thread
             self.delete_thread = None
+            self._active_delete_request = None
+            if thread:
+                thread.deleteLater()
+
+            # 让事件循环先处理本次通知，再启动下一项队列任务。
+            QTimer.singleShot(0, self._run_next_delete)
 
         self.delete_thread.finished.connect(on_thread_finished)
         self.delete_thread.start()
