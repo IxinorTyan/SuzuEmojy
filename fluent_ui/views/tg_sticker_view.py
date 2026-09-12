@@ -8,19 +8,24 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from PySide6.QtCore import Qt, QSize, Signal, QCoreApplication, QRect, QThread
+from PySide6.QtCore import (
+    Qt, QSize, Signal, QCoreApplication, QRect, QThread,
+    QEasingCurve, QPropertyAnimation
+)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QSplitter, QFrame,
     QFileDialog, QMessageBox, QLabel, QListWidget, QListWidgetItem, QSizePolicy,
     QDialog, QTabWidget, QTextBrowser, QApplication
 )
 from PySide6.QtGui import (
-    QIcon, QFont, QPixmap, QPainter, QColor, QMovie, QImageReader
+    QIcon, QFont, QPixmap, QPainter, QColor, QMovie, QImageReader, QTextCursor,
+    QGuiApplication
 )
 from qfluentwidgets import (
     LineEdit, PushButton, PrimaryPushButton, ComboBox, CheckBox, ProgressBar,
     TextEdit, FluentIcon as FIF, TransparentToolButton,
-    TitleLabel, BodyLabel, SubtitleLabel, ScrollArea, CardWidget, StrongBodyLabel
+    TitleLabel, BodyLabel, SubtitleLabel, ScrollArea, CardWidget, StrongBodyLabel,
+    MessageBoxBase
 )
 
 from services.tg_downloader import (
@@ -33,6 +38,9 @@ from services.tg_downloader import (
     TG_DIRECT_API
 )
 from services.i18n import t, i18n_engine
+from fluent_ui.views.setting_view import disable_wheel_scroll_adjustment
+from fluent_ui.components.rotating_chevron_button import RotatingChevronButton
+from fluent_ui.components.state_tool_tip_manager import StateToolTipManager
 
 # Cloudflare Worker 示例脚本
 CORS_WORKER_SAMPLE = """export default {
@@ -232,6 +240,55 @@ class TGHelpDialog(QDialog):
         )
 
 
+class TGLogDialog(MessageBoxBase):
+    """Telegram 下载页的操作日志查看弹窗。"""
+
+    def __init__(self, log_history, parent=None):
+        if parent is None:
+            parent = QApplication.activeWindow() or QWidget()
+        super().__init__(parent)
+
+        self.titleLabel = SubtitleLabel(t("操作日志"), self)
+        self.logTextEdit = TextEdit(self)
+        self.logTextEdit.setReadOnly(True)
+        self.logTextEdit.setMinimumSize(520, 340)
+        self.logTextEdit.setStyleSheet("""
+            TextEdit {
+                font-family: 'Segoe UI', 'Microsoft YaHei', Consolas;
+                font-size: 12px;
+                border-radius: 6px;
+            }
+        """)
+        self.logTextEdit.setPlainText("\n".join(log_history))
+        self.logTextEdit.moveCursor(QTextCursor.End)
+
+        button_layout = QHBoxLayout()
+        self.clearButton = PushButton(t("清空日志"), self)
+        self.copyButton = PushButton(t("复制日志"), self)
+        button_layout.addWidget(self.clearButton)
+        button_layout.addWidget(self.copyButton)
+        button_layout.addStretch()
+
+        self.clearButton.clicked.connect(self._on_clear)
+        self.copyButton.clicked.connect(self._on_copy)
+
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addLayout(button_layout)
+        self.viewLayout.addWidget(self.logTextEdit)
+        self.yesButton.setText(t("关闭"))
+        self.hideCancelButton()
+        self.widget.setMinimumWidth(560)
+        self.parent_view = parent
+
+    def _on_clear(self):
+        self.logTextEdit.clear()
+        if self.parent_view and hasattr(self.parent_view, "log_history"):
+            self.parent_view.log_history.clear()
+
+    def _on_copy(self):
+        QGuiApplication.clipboard().setText(self.logTextEdit.toPlainText())
+
+
 # ==================== 后台工作线程 ====================
 
 class ParsePackThread(QThread):
@@ -243,13 +300,22 @@ class ParsePackThread(QThread):
         super().__init__(parent)
         self.downloader = downloader
         self.link_or_name = link_or_name
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+        self.requestInterruption()
 
     def run(self):
         try:
+            if self._is_cancelled:
+                return
             pack = self.downloader.get_sticker_set(self.link_or_name)
-            self.success.emit(pack)
+            if not self._is_cancelled:
+                self.success.emit(pack)
         except Exception as e:
-            self.failed.emit(str(e))
+            if not self._is_cancelled:
+                self.failed.emit(str(e))
 
 
 class BatchThumbnailThread(QThread):
@@ -368,11 +434,21 @@ class DownloadPackThread(QThread):
         self.to_zip = to_zip
         self.selected_indices = selected_indices
         self.max_workers = max_workers
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+        self.requestInterruption()
 
     def run(self):
         try:
             def _cb(done, total, msg, extra=None):
+                if self._is_cancelled:
+                    raise InterruptedError("Telegram sticker download cancelled")
                 self.progress.emit(done, total, msg)
+
+            if self._is_cancelled:
+                return
 
             res = self.downloader.download_pack(
                 name_or_url=self.link_or_name,
@@ -383,9 +459,11 @@ class DownloadPackThread(QThread):
                 max_workers=self.max_workers,
                 progress_callback=_cb,
             )
-            self.finished_all.emit(res)
+            if not self._is_cancelled:
+                self.finished_all.emit(res)
         except Exception as e:
-            self.failed.emit(str(e))
+            if not self._is_cancelled:
+                self.failed.emit(str(e))
 
 
 class ImportPackThread(QThread):
@@ -537,283 +615,248 @@ class TGStickerInterface(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        # 主布局：垂直布局，顶栏 + 内容区 (与 QQ 扫描页面视觉风格完全一致)
-        self.mainLayout = QVBoxLayout(self)
-        self.mainLayout.setContentsMargins(36, 10, 36, 12)
-        self.mainLayout.setSpacing(12)
+        """构建与 QQ 扫描页一致的现代化上下结构。"""
+        self.log_history = []
+        self._config_anim = None
+        self._busy = False
 
-        # 顶部返回工具栏
+        self.mainLayout = QVBoxLayout(self)
+        self.mainLayout.setContentsMargins(32, 10, 32, 12)
+        self.mainLayout.setSpacing(10)
+
+        # 1. 顶栏
         self.topBar = QWidget(self)
         self.topBar.setFixedHeight(self.TOP_BAR_HEIGHT)
         self.topBar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.topBarLayout = QHBoxLayout(self.topBar)
         self.topBarLayout.setContentsMargins(0, 0, 0, 0)
-        self.topBarLayout.setSpacing(12)
+        self.topBarLayout.setSpacing(10)
 
         self.btnBack = TransparentToolButton(FIF.LEFT_ARROW, self.topBar)
         self.btnBack.setToolTip(t("返回主面板"))
-        self.btnBack.clicked.connect(self.back_requested.emit)
-
+        self.btnBack.clicked.connect(self._on_back_clicked)
         self.titleLabel = TitleLabel(t("下载TG贴纸"), self.topBar)
+        self.btnLog = TransparentToolButton(FIF.DOCUMENT, self.topBar)
+        self.btnLog.setFixedSize(32, 32)
+        self.btnLog.setToolTip(t("操作日志"))
+        self.btnLog.clicked.connect(self.show_log_dialog)
 
         self.topBarLayout.addWidget(self.btnBack)
         self.topBarLayout.addWidget(self.titleLabel)
         self.topBarLayout.addStretch()
-
+        self.topBarLayout.addWidget(self.btnLog)
         self.mainLayout.addWidget(self.topBar)
 
-        # 内容分割器 (左控制面板 + 右预览面板)
-        self.splitter = QSplitter(Qt.Horizontal, self)
-        self.splitter.setChildrenCollapsible(False)
+        # 2. 配置折叠后的摘要
+        self.summaryRow = QWidget(self)
+        summary_layout = QHBoxLayout(self.summaryRow)
+        summary_layout.setContentsMargins(12, 4, 12, 4)
+        summary_layout.setSpacing(8)
+        self.summaryLabel = BodyLabel("", self.summaryRow)
+        self.summaryLabel.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self.expandConfigButton = PushButton(t("展开配置"), self.summaryRow)
+        self.expandConfigButton.setIcon(FIF.CHEVRON_DOWN_MED)
+        self.expandConfigButton.clicked.connect(self.expand_config)
+        summary_layout.addWidget(self.summaryLabel)
+        summary_layout.addStretch()
+        summary_layout.addWidget(self.expandConfigButton)
+        self.summaryRow.hide()
+        self.mainLayout.addWidget(self.summaryRow)
 
-        # ====== 左侧控制面板 ======
-        self.leftScrollArea = ScrollArea(self.splitter)
-        self.leftScrollArea.setWidgetResizable(True)
-        self.leftScrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.leftScrollArea.enableTransparentBackground()
-        self.leftScrollArea.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
-        self.leftScrollArea.setMinimumWidth(330)
-
-        self.leftWidget = QWidget()
-        self.leftWidget.setStyleSheet("QWidget { background-color: transparent; }")
-        self.leftWidget.setMinimumWidth(320)
-        self.leftLayout = QVBoxLayout(self.leftWidget)
-        self.leftLayout.setContentsMargins(0, 0, 8, 0)
-        self.leftLayout.setSpacing(12)
-
-        # 1. 路径与配置卡片
-        self.configCard = CardWidget(self.leftWidget)
+        # 3. 全宽可折叠配置卡
+        self.configCard = CardWidget(self)
         config_layout = QVBoxLayout(self.configCard)
-        config_layout.setContentsMargins(14, 12, 14, 12)
+        config_layout.setContentsMargins(20, 14, 20, 14)
         config_layout.setSpacing(10)
 
-        card_title = StrongBodyLabel("Telegram 贴纸配置", self.configCard)
-        config_layout.addWidget(card_title)
+        config_header = QHBoxLayout()
+        self.configTitle = StrongBodyLabel(t("Telegram 贴纸配置"), self.configCard)
+        self.collapseConfigButton = RotatingChevronButton(self.configCard)
+        self.collapseConfigButton.set_direction(180, animated=False)
+        self.collapseConfigButton.setToolTip(t("收起配置面板"))
+        self.collapseConfigButton.clicked.connect(self.toggle_config)
+        config_header.addWidget(self.configTitle)
+        config_header.addStretch()
+        config_header.addWidget(self.collapseConfigButton)
+        config_layout.addLayout(config_header)
 
-        self.formLayout = QFormLayout()
-        self.formLayout.setSpacing(8)
-        self.formLayout.setLabelAlignment(Qt.AlignLeft)
+        def add_form_row(label_text, control, trailing=None):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            label = BodyLabel(t(label_text), self.configCard)
+            label.setFixedWidth(76)
+            row.addWidget(label)
+            row.addWidget(control, 1)
+            if trailing is not None:
+                row.addWidget(trailing)
+            config_layout.addLayout(row)
+            return label
 
-        # 贴纸链接/包名输入
-        url_layout = QHBoxLayout()
-        url_layout.setSpacing(6)
         self.urlInputEdit = LineEdit(self.configCard)
-        self.urlInputEdit.setPlaceholderText("贴纸链接或包名，如: animals 或 https://t.me/addstickers/xxx")
+        self.urlInputEdit.setPlaceholderText(
+            t("贴纸链接或包名，如: animals 或 https://t.me/addstickers/xxx")
+        )
         self.urlInputEdit.returnPressed.connect(self.startParsePack)
-
         self.helpButton = TransparentToolButton(FIF.HELP, self.configCard)
-        self.helpButton.setFixedSize(28, 28)
-        self.helpButton.setToolTip("使用帮助与教程")
+        self.helpButton.setFixedSize(32, 32)
+        self.helpButton.setToolTip(t("使用帮助与教程"))
         self.helpButton.clicked.connect(self.showHelpDialog)
+        self.urlLabel = add_form_row("贴纸链接:", self.urlInputEdit, self.helpButton)
 
-        url_layout.addWidget(self.urlInputEdit, 1)
-        url_layout.addWidget(self.helpButton)
-
-        url_label = BodyLabel("贴纸链接:", self.configCard)
-        self.formLayout.addRow(url_label, url_layout)
-
-        # 保存路径选择
-        save_path_layout = QHBoxLayout()
-        save_path_layout.setSpacing(6)
         self.savePathEdit = LineEdit(self.configCard)
         self.savePathEdit.setText(self.save_path)
-        self.savePathEdit.setPlaceholderText("请选择贴纸保存路径...")
-        self.selectDirButton = PushButton("浏览...", self.configCard)
-        self.selectDirButton.setFixedWidth(80)
+        self.savePathEdit.setPlaceholderText(t("请选择贴纸保存路径..."))
+        self.selectDirButton = PushButton(t("浏览..."), self.configCard)
+        self.selectDirButton.setFixedWidth(90)
         self.selectDirButton.clicked.connect(self.selectSavePath)
-        save_path_layout.addWidget(self.savePathEdit)
-        save_path_layout.addWidget(self.selectDirButton)
+        self.savePathLabel = add_form_row("保存路径:", self.savePathEdit, self.selectDirButton)
 
-        save_path_label = BodyLabel("保存路径:", self.configCard)
-        self.formLayout.addRow(save_path_label, save_path_layout)
-
-        # 导出格式选择
+        format_row = QHBoxLayout()
+        format_row.setSpacing(8)
+        self.formatLabel = BodyLabel(t("导出格式:"), self.configCard)
+        self.formatLabel.setFixedWidth(76)
         self.formatComboBox = ComboBox(self.configCard)
-        self.formatComboBox.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.formatComboBox.addItem("PNG (静态图片 / 动图首帧)", userData="png")
-        self.formatComboBox.addItem("GIF (动图 / 视频贴纸)", userData="gif")
-        self.formatComboBox.addItem("原始格式 (WebP / TGS / WebM)", userData="original")
-        self.formatComboBox.addItem("智能适配 (自动匹配最佳格式)", userData="auto")
-
-        format_label = BodyLabel("导出格式:", self.configCard)
-        self.formLayout.addRow(format_label, self.formatComboBox)
-
-        # 导出选项 (ZIP 勾选)
-        self.zipCheckBox = CheckBox("导出完成后打包为 ZIP 压缩文件", self.configCard)
+        self.formatComboBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.formatComboBox.addItem(t("PNG (静态图片 / 动图首帧)"), userData="png")
+        self.formatComboBox.addItem(t("GIF (动图 / 视频贴纸)"), userData="gif")
+        self.formatComboBox.addItem(t("原始格式 (WebP / TGS / WebM)"), userData="original")
+        self.formatComboBox.addItem(t("智能适配 (自动匹配最佳格式)"), userData="auto")
+        self.zipCheckBox = CheckBox(t("导出完成后打包为 ZIP 压缩文件"), self.configCard)
         self.zipCheckBox.setChecked(True)
-        zip_label = BodyLabel("ZIP 打包:", self.configCard)
-        self.formLayout.addRow(zip_label, self.zipCheckBox)
+        format_row.addWidget(self.formatLabel)
+        format_row.addWidget(self.formatComboBox, 1)
+        format_row.addWidget(self.zipCheckBox)
+        config_layout.addLayout(format_row)
 
-        config_layout.addLayout(self.formLayout)
-
-        # 高级配置折叠按钮与内嵌配置项
-        self.toggleAdvBtn = PushButton("▶ 展开高级设置 (Token / 网络代理)", self.configCard)
+        # 高级设置独立折叠
+        advanced_header = QHBoxLayout()
+        self.advancedTitle = BodyLabel(t("高级设置 (Token / 网络代理)"), self.configCard)
+        self.toggleAdvBtn = RotatingChevronButton(self.configCard)
+        self.toggleAdvBtn.set_direction(0, animated=False)
+        self.toggleAdvBtn.setToolTip(t("展开高级设置"))
         self.toggleAdvBtn.clicked.connect(self.toggleAdvancedSettings)
-        config_layout.addWidget(self.toggleAdvBtn)
+        advanced_header.addWidget(self.advancedTitle)
+        advanced_header.addStretch()
+        advanced_header.addWidget(self.toggleAdvBtn)
+        config_layout.addLayout(advanced_header)
 
         self.advWidget = QWidget(self.configCard)
-        adv_widget_layout = QVBoxLayout(self.advWidget)
-        adv_widget_layout.setContentsMargins(0, 4, 0, 0)
-        adv_widget_layout.setSpacing(6)
+        adv_layout = QVBoxLayout(self.advWidget)
+        adv_layout.setContentsMargins(0, 0, 0, 0)
+        adv_layout.setSpacing(8)
 
-        adv_form = QFormLayout()
-        adv_form.setSpacing(6)
-        adv_form.setLabelAlignment(Qt.AlignLeft)
+        def add_advanced_row(label_text, control, trailing=None):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            label = BodyLabel(t(label_text), self.advWidget)
+            label.setFixedWidth(76)
+            row.addWidget(label)
+            row.addWidget(control, 1)
+            if trailing is not None:
+                row.addWidget(trailing)
+            adv_layout.addLayout(row)
+            return label
 
-        # Bot Token
-        token_layout = QHBoxLayout()
-        token_layout.setSpacing(6)
         self.tokenEdit = LineEdit(self.advWidget)
         self.tokenEdit.setEchoMode(LineEdit.Password)
-        self.tokenEdit.setPlaceholderText("内置默认 Token，可填自定义 Token")
-
-        self.toggleTokenBtn = PushButton("👁️ 显示", self.advWidget)
-        self.toggleTokenBtn.setFixedWidth(65)
+        self.tokenEdit.setPlaceholderText(t("内置默认 Token，可填自定义 Token"))
+        self.toggleTokenBtn = PushButton(t("👁️ 显示"), self.advWidget)
+        self.toggleTokenBtn.setFixedWidth(76)
         self.toggleTokenBtn.clicked.connect(self.toggleTokenVisibility)
+        self.tokenLabel = add_advanced_row("Bot Token:", self.tokenEdit, self.toggleTokenBtn)
 
-        token_layout.addWidget(self.tokenEdit)
-        token_layout.addWidget(self.toggleTokenBtn)
-
-        lbl_token = BodyLabel("Bot Token:", self.advWidget)
-        adv_form.addRow(lbl_token, token_layout)
-
-        # CF 代理 URL
         self.cfProxyEdit = LineEdit(self.advWidget)
-        self.cfProxyEdit.setPlaceholderText(f"如: {DEF_CF_PROXY}")
-        lbl_cf = BodyLabel("CF 代理 URL:", self.advWidget)
-        adv_form.addRow(lbl_cf, self.cfProxyEdit)
+        self.cfProxyEdit.setPlaceholderText(t("如: {proxy}").format(proxy=DEF_CF_PROXY))
+        self.cfProxyLabel = add_advanced_row("CF 代理 URL:", self.cfProxyEdit)
 
-        # 本地代理
         self.proxyEdit = LineEdit(self.advWidget)
-        self.proxyEdit.setPlaceholderText("如 http://127.0.0.1:7890 (留空为官方直连/CF路由)")
-        lbl_proxy = BodyLabel("本地代理:", self.advWidget)
-        adv_form.addRow(lbl_proxy, self.proxyEdit)
+        self.proxyEdit.setPlaceholderText(
+            t("如 http://127.0.0.1:7890 (留空为官方直连/CF路由)")
+        )
+        self.proxyLabel = add_advanced_row("本地代理:", self.proxyEdit)
 
-        adv_widget_layout.addLayout(adv_form)
-
-        cfg_btns_layout = QHBoxLayout()
-        cfg_btns_layout.setSpacing(8)
-        self.testNetButton = PushButton(FIF.IOT, "测试连通性", self.advWidget)
-        self.testNetButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        advanced_buttons = QHBoxLayout()
+        advanced_buttons.addStretch()
+        self.testNetButton = PushButton(FIF.IOT, t("测试连通性"), self.advWidget)
+        self.resetCfgButton = PushButton(FIF.SYNC, t("恢复默认"), self.advWidget)
         self.testNetButton.clicked.connect(self.testNetworkConnection)
-
-        self.resetCfgButton = PushButton(FIF.SYNC, "恢复默认", self.advWidget)
-        self.resetCfgButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.resetCfgButton.clicked.connect(self.resetConfig)
-
-        cfg_btns_layout.addWidget(self.testNetButton, 1)
-        cfg_btns_layout.addWidget(self.resetCfgButton, 1)
-        adv_widget_layout.addLayout(cfg_btns_layout)
-
-        self.advWidget.setVisible(False)
+        advanced_buttons.addWidget(self.testNetButton)
+        advanced_buttons.addWidget(self.resetCfgButton)
+        adv_layout.addLayout(advanced_buttons)
+        self.advWidget.hide()
         config_layout.addWidget(self.advWidget)
 
-        self.leftLayout.addWidget(self.configCard)
-
-        # 2. 操作与提取卡片
-        self.actionsCard = CardWidget(self.leftWidget)
-        actions_layout = QVBoxLayout(self.actionsCard)
-        actions_layout.setContentsMargins(14, 12, 14, 12)
-        actions_layout.setSpacing(10)
-
-        actions_title = StrongBodyLabel("操作与提取", self.actionsCard)
-        actions_layout.addWidget(actions_title)
-
-        # 核心解析扫描按钮
-        self.parseButton = PrimaryPushButton(FIF.SEARCH, "解析贴纸包预览", self.actionsCard)
-        self.parseButton.setFixedHeight(34)
+        self.parseButton = PrimaryPushButton(
+            FIF.SEARCH, t("解析贴纸包预览"), self.configCard
+        )
+        self.parseButton.setFixedHeight(36)
         self.parseButton.clicked.connect(self.startParsePack)
-        actions_layout.addWidget(self.parseButton)
+        config_layout.addWidget(self.parseButton)
 
-        # 导出操作 (双列并排)
-        export_btn_layout = QHBoxLayout()
-        export_btn_layout.setSpacing(8)
-        self.exportSelectedButton = PushButton(FIF.DOWNLOAD, "导出选中", self.actionsCard)
-        self.exportSelectedButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.exportSelectedButton.setEnabled(False)
-        self.exportSelectedButton.clicked.connect(self.exportSelected)
-        self.exportAllButton = PushButton(FIF.FOLDER, "导出全部", self.actionsCard)
-        self.exportAllButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.exportAllButton.setEnabled(False)
-        self.exportAllButton.clicked.connect(self.exportAll)
-        export_btn_layout.addWidget(self.exportSelectedButton, 1)
-        export_btn_layout.addWidget(self.exportAllButton, 1)
-        actions_layout.addLayout(export_btn_layout)
+        export_row = QHBoxLayout()
+        export_row.setSpacing(8)
+        self.exportSelectedButton = PushButton(
+            FIF.DOWNLOAD, t("导出选中"), self.configCard
+        )
+        self.exportAllButton = PushButton(
+            FIF.FOLDER, t("导出全部"), self.configCard
+        )
+        self.exportSelectedButton.setFixedHeight(34)
+        self.exportAllButton.setFixedHeight(34)
+        export_row.addWidget(self.exportSelectedButton, 1)
+        export_row.addWidget(self.exportAllButton, 1)
+        config_layout.addLayout(export_row)
 
-        # 导入操作 (双列并排)
-        import_btn_layout = QHBoxLayout()
-        import_btn_layout.setSpacing(8)
-        self.importSelectedButton = PushButton(FIF.SAVE, "入库选中", self.actionsCard)
-        self.importSelectedButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.importSelectedButton.setEnabled(False)
+        self.mainLayout.addWidget(self.configCard)
+
+        # 4. 常驻操作栏
+        self.actionBar = QWidget(self)
+        action_layout = QHBoxLayout(self.actionBar)
+        action_layout.setContentsMargins(4, 2, 4, 2)
+        action_layout.setSpacing(8)
+
+        self.importSelectedButton = PrimaryPushButton(
+            FIF.SAVE, t("入库选中"), self.actionBar
+        )
+        self.importAllButton = PushButton(FIF.APPLICATION, t("入库全部"), self.actionBar)
+        self.selectAllButton = PushButton(t("全选已加载"), self.actionBar)
+        self.clearSelectionButton = PushButton(t("清空选择"), self.actionBar)
+        self.invertSelectionButton = PushButton(t("反选"), self.actionBar)
+
+        for button in (
+            self.importSelectedButton, self.importAllButton,
+            self.exportSelectedButton, self.exportAllButton,
+            self.selectAllButton, self.clearSelectionButton,
+            self.invertSelectionButton
+        ):
+            button.setFixedHeight(32)
+
         self.importSelectedButton.clicked.connect(self.importSelected)
-        self.importAllButton = PushButton(FIF.APPLICATION, "入库全部", self.actionsCard)
-        self.importAllButton.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.importAllButton.setEnabled(False)
         self.importAllButton.clicked.connect(self.importAll)
-        import_btn_layout.addWidget(self.importSelectedButton, 1)
-        import_btn_layout.addWidget(self.importAllButton, 1)
-        actions_layout.addLayout(import_btn_layout)
-
-        self.leftLayout.addWidget(self.actionsCard)
-
-        # 3. 进度条与状态
-        self.progressBar = ProgressBar(self.leftWidget)
-        self.leftLayout.addWidget(self.progressBar)
-
-        # 4. 日志输出框
-        self.logTextEdit = TextEdit(self.leftWidget)
-        self.logTextEdit.setReadOnly(True)
-        self.logTextEdit.setMinimumHeight(110)
-        self.logTextEdit.setStyleSheet("""
-            TextEdit {
-                font-family: 'Segoe UI', 'Microsoft YaHei', Consolas;
-                font-size: 12px;
-                border-radius: 6px;
-            }
-        """)
-        self.leftLayout.addWidget(self.logTextEdit)
-
-        # 状态及致谢声明
-        self.statusLabel = BodyLabel("", self.leftWidget)
-        self.statusLabel.setStyleSheet("color: #666666; font-size: 11px;")
-        self.leftLayout.addWidget(self.statusLabel)
-
-        self.thanksLabel = BodyLabel(self.leftWidget)
-        self.thanksLabel.setText('致谢：基于 <a href="https://github.com/Kiowx" style="color: #0078d4; text-decoration: underline;">Kiowx</a> 的项目二次开发')
-        self.thanksLabel.setOpenExternalLinks(True)
-        self.thanksLabel.setStyleSheet("color: #888888; font-size: 11px;")
-        self.leftLayout.addWidget(self.thanksLabel)
-
-        self.leftScrollArea.setWidget(self.leftWidget)
-
-        # ====== 右侧贴纸包预览区域 ======
-        self.rightWidget = QWidget(self.splitter)
-        self.rightWidget.setMinimumWidth(320)
-        self.rightLayout = QVBoxLayout(self.rightWidget)
-        self.rightLayout.setContentsMargins(0, 0, 0, 0)
-        self.rightLayout.setSpacing(10)
-
-        preview_header_layout = QHBoxLayout()
-        self.previewTitleLabel = SubtitleLabel("贴纸预览区 (未加载)", self.rightWidget)
-        preview_header_layout.addWidget(self.previewTitleLabel)
-        preview_header_layout.addStretch()
-
-        self.selectAllButton = PushButton("全选已加载", self.rightWidget)
+        self.exportSelectedButton.clicked.connect(self.exportSelected)
+        self.exportAllButton.clicked.connect(self.exportAll)
         self.selectAllButton.clicked.connect(self.selectAllLoaded)
-        preview_header_layout.addWidget(self.selectAllButton)
-
-        self.clearSelectionButton = PushButton("清空选择", self.rightWidget)
         self.clearSelectionButton.clicked.connect(self.clearSelection)
-        preview_header_layout.addWidget(self.clearSelectionButton)
-
-        self.invertSelectionButton = PushButton("反选", self.rightWidget)
         self.invertSelectionButton.clicked.connect(self.invertSelection)
-        preview_header_layout.addWidget(self.invertSelectionButton)
 
-        self.rightLayout.addLayout(preview_header_layout)
+        action_layout.addWidget(self.importSelectedButton)
+        action_layout.addWidget(self.importAllButton)
+        action_layout.addStretch()
+        action_layout.addWidget(self.selectAllButton)
+        action_layout.addWidget(self.clearSelectionButton)
+        action_layout.addWidget(self.invertSelectionButton)
+        self.mainLayout.addWidget(self.actionBar)
 
-        self.previewListWidget = QListWidget(self.rightWidget)
+        # 5. 贴纸包轻量标题
+        self.previewTitleLabel = SubtitleLabel(t("贴纸预览区 (未加载)"), self)
+        self.mainLayout.addWidget(self.previewTitleLabel)
+
+        # 6. 主内容区：预览网格 + 详情卡
+        self.contentLayout = QHBoxLayout()
+        self.contentLayout.setSpacing(14)
+
+        self.previewListWidget = QListWidget(self)
         self.previewListWidget.setViewMode(QListWidget.IconMode)
         self.previewListWidget.setResizeMode(QListWidget.Adjust)
         self.previewListWidget.setIconSize(QSize(100, 100))
@@ -832,58 +875,72 @@ class TGStickerInterface(QWidget):
                 border: 2px solid transparent;
                 border-radius: 6px;
                 margin: 4px;
-                padding: 0px;
+                padding: 0;
             }
-            QListWidget::item:hover {
-                background-color: rgba(0, 0, 0, 10);
-            }
+            QListWidget::item:hover { background-color: rgba(0, 0, 0, 10); }
             QListWidget::item:selected {
                 background-color: rgba(0, 120, 212, 30);
                 border: 2px solid #0078d4;
             }
         """)
-        self.previewListWidget.verticalScrollBar().valueChanged.connect(self.onScrollBarMoved)
-        self.previewListWidget.itemSelectionChanged.connect(self.onItemSelectionChanged)
-        self.rightLayout.addWidget(self.previewListWidget)
+        self.previewListWidget.verticalScrollBar().valueChanged.connect(
+            self.onScrollBarMoved
+        )
+        self.previewListWidget.itemSelectionChanged.connect(
+            self.onItemSelectionChanged
+        )
+        self.contentLayout.addWidget(self.previewListWidget, 1)
 
-        # ====== 最右侧单个贴纸详细预览区域 ======
         self.detailWidget = QWidget(self)
-        self.detailLayout = QVBoxLayout(self.detailWidget)
-        self.detailLayout.setContentsMargins(10, 0, 0, 0)
-        self.detailLayout.setSpacing(10)
+        self.detailWidget.setObjectName("detailWidget")
         self.detailWidget.setFixedWidth(280)
+        self.detailWidget.setStyleSheet("""
+            QWidget#detailWidget {
+                background-color: rgba(255, 255, 255, 15);
+                border: 1px solid rgba(0, 0, 0, 15);
+                border-radius: 8px;
+            }
+        """)
+        self.detailLayout = QVBoxLayout(self.detailWidget)
+        self.detailLayout.setContentsMargins(14, 14, 14, 14)
+        self.detailLayout.setSpacing(10)
 
-        detail_title = SubtitleLabel("贴纸详细预览", self.detailWidget)
-        self.detailLayout.addWidget(detail_title)
-
+        self.detailTitle = SubtitleLabel(t("贴纸详细预览"), self.detailWidget)
         self.detailPreviewLabel = QLabel(self.detailWidget)
         self.detailPreviewLabel.setAlignment(Qt.AlignCenter)
         self.detailPreviewLabel.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
         self.detailPreviewLabel.setFixedSize(250, 250)
-        self.detailPreviewLabel.setStyleSheet("background-color: rgba(0, 0, 0, 5); border: 1px solid rgba(0, 0, 0, 15); border-radius: 5px;")
-        self.detailLayout.addWidget(self.detailPreviewLabel, alignment=Qt.AlignCenter)
-
-        self.detailInfoLabel = BodyLabel("未选中贴纸", self.detailWidget)
+        self.detailPreviewLabel.setStyleSheet(
+            "background-color: rgba(0, 0, 0, 5); "
+            "border: 1px solid rgba(0, 0, 0, 15); border-radius: 8px;"
+        )
+        self.detailInfoLabel = BodyLabel(t("未选中贴纸"), self.detailWidget)
         self.detailInfoLabel.setWordWrap(True)
         self.detailInfoLabel.setFixedWidth(250)
         self.detailInfoLabel.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.thanksLabel = BodyLabel(self.detailWidget)
+        self.thanksLabel.setText(
+            t('致谢：基于 <a href="https://github.com/Kiowx" '
+              'style="color: #0078d4; text-decoration: underline;">Kiowx</a> '
+              '的项目二次开发')
+        )
+        self.thanksLabel.setOpenExternalLinks(True)
+        self.thanksLabel.setStyleSheet("color: #888888; font-size: 11px;")
+
+        self.detailLayout.addWidget(self.detailTitle)
+        self.detailLayout.addWidget(self.detailPreviewLabel, alignment=Qt.AlignCenter)
         self.detailLayout.addWidget(self.detailInfoLabel)
-
         self.detailLayout.addStretch()
-
-        # 分割器大小配置
-        self.splitter.addWidget(self.leftScrollArea)
-        self.splitter.addWidget(self.rightWidget)
-        self.splitter.setSizes([360, 740])
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-
-        self.contentLayout = QHBoxLayout()
-        self.contentLayout.addWidget(self.splitter, stretch=1)
+        self.detailLayout.addWidget(self.thanksLabel)
         self.contentLayout.addWidget(self.detailWidget)
-
         self.mainLayout.addLayout(self.contentLayout, 1)
-        self._update_responsive_layout()
+
+        self.tooltip = StateToolTipManager(self)
+        self.tooltip.closed.connect(self._on_tooltip_closed)
+
+        self._set_pack_actions_enabled(False)
+        self._update_summary_label()
+        self._update_detail_preview_visibility()
 
         self.log(t("💬 Telegram 贴纸包批量下载工具已就绪"))
         self.log(t("💡 支持官方直连与智能路由回退，在上方输入贴纸包链接即可开始解析。"))
@@ -892,24 +949,19 @@ class TGStickerInterface(QWidget):
         self._register_i18n_widgets()
         i18n_engine.language_changed.connect(self.update_texts)
         self.update_texts()
+        disable_wheel_scroll_adjustment(self)
+
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._update_responsive_layout()
-
-    def _update_responsive_layout(self):
-        stacked = self.width() < self.CONTENT_STACK_WIDTH
-        orientation = Qt.Vertical if stacked else Qt.Horizontal
-
-        if self.splitter.orientation() != orientation:
-            self.splitter.setOrientation(orientation)
-            self.splitter.setSizes([420, 520] if stacked else [360, 740])
-
         self._update_detail_preview_visibility()
+        self.tooltip.reposition()
 
     def _update_detail_preview_visibility(self):
         should_show = self.width() >= self.DETAIL_PREVIEW_HIDE_WIDTH
-        if self.detailWidget.isVisible() == should_show:
+        # isVisible() 会受尚未显示的父窗口影响；isHidden() 才能反映控件自身状态。
+        currently_shown = not self.detailWidget.isHidden()
+        if currently_shown == should_show:
             return
 
         self.detailWidget.setVisible(should_show)
@@ -930,6 +982,174 @@ class TGStickerInterface(QWidget):
     # ==========================================
     # 日志输出与辅助函数
     # ==========================================
+
+    def _set_pack_actions_enabled(self, enabled: bool):
+        """统一设置依赖贴纸包解析结果的操作按钮状态。"""
+        self.exportSelectedButton.setEnabled(enabled)
+        self.exportAllButton.setEnabled(enabled)
+        self.importSelectedButton.setEnabled(enabled)
+        self.importAllButton.setEnabled(enabled)
+        self.selectAllButton.setEnabled(enabled)
+        self.clearSelectionButton.setEnabled(enabled)
+        self.invertSelectionButton.setEnabled(enabled)
+
+    def _set_busy(self, busy: bool):
+        """统一设置后台操作期间的控件状态，避免重复提交。"""
+        self._busy = busy
+        self.parseButton.setEnabled(not busy)
+        self.selectDirButton.setEnabled(not busy)
+        self.testNetButton.setEnabled(not busy)
+        self.resetCfgButton.setEnabled(not busy)
+        self.urlInputEdit.setEnabled(not busy)
+        self.formatComboBox.setEnabled(not busy)
+        self.zipCheckBox.setEnabled(not busy)
+        self._set_pack_actions_enabled(bool(self.current_pack) and not busy)
+
+    def _has_running_task(self):
+        return any(
+            thread is not None and thread.isRunning()
+            for thread in (
+                self._parse_thread,
+                self._download_thread,
+                self._import_thread,
+            )
+        )
+
+    def _on_back_clicked(self):
+        """后台任务运行时确认中断，否则直接返回。"""
+        if not self._has_running_task():
+            self.back_requested.emit()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            t("确认中断并返回"),
+            t("当前正在处理 Telegram 贴纸，确定要中断当前任务并返回吗？"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self.log(t("💬 用户确认中断任务并返回"))
+        self._cancelActiveThreads()
+        self.tooltip.cancel()
+        self._set_busy(False)
+        self.back_requested.emit()
+
+    def _on_tooltip_closed(self):
+        """仅在任务进行中响应主动关闭，忽略完成态气泡的自动销毁。"""
+        if not self._busy:
+            return
+
+        self.log(t("💬 用户关闭了任务状态提示"))
+        self._cancelActiveThreads()
+        self._set_busy(False)
+
+    def shutdown(self):
+        """应用退出时取消任务并等待线程收尾，避免销毁运行中的 QThread。"""
+        threads = tuple(
+            thread
+            for thread in (
+                self._parse_thread,
+                self._download_thread,
+                self._import_thread,
+                self._batch_thread,
+                self._detail_thread,
+            )
+            if thread is not None
+        )
+
+        for thread in threads:
+            if thread.isRunning():
+                cancel = getattr(thread, "cancel", None)
+                if callable(cancel):
+                    cancel()
+
+        for thread in threads:
+            if thread.isRunning():
+                thread.wait(2000)
+
+        if self.detail_movie:
+            self.detail_movie.stop()
+            self.detail_movie = None
+        self.tooltip.cancel()
+        self._busy = False
+
+    def show_log_dialog(self):
+        """弹出操作日志窗口。"""
+        TGLogDialog(self.log_history, self).exec()
+
+    def _update_summary_label(self):
+        link = self.urlInputEdit.text().strip()
+        link_text = link if link else t("未填写贴纸链接")
+        format_text = self.formatComboBox.currentText()
+        self.summaryLabel.setText(
+            t("📌 当前配置：{link}  /  {format}").format(
+                link=link_text, format=format_text
+            )
+        )
+
+    def toggle_config(self):
+        if self.configCard.isVisible():
+            self.collapse_config()
+        else:
+            self.expand_config()
+
+    def collapse_config(self, animated=True):
+        if not self.configCard.isVisible() and self.summaryRow.isVisible():
+            return
+        self._update_summary_label()
+        self.summaryRow.setVisible(True)
+        self.collapseConfigButton.set_direction(0, animated=animated)
+        self.collapseConfigButton.setToolTip(t("展开配置面板"))
+
+        if not animated:
+            self.configCard.setVisible(False)
+            return
+
+        self._animate_config(
+            self.configCard.height(),
+            0,
+            lambda: self.configCard.setVisible(False),
+        )
+
+    def expand_config(self, animated=True):
+        if self.configCard.isVisible() and not self.summaryRow.isVisible():
+            return
+        self.configCard.setVisible(True)
+        self.summaryRow.setVisible(False)
+        self.collapseConfigButton.set_direction(180, animated=animated)
+        self.collapseConfigButton.setToolTip(t("收起配置面板"))
+
+        if not animated:
+            self.configCard.setMaximumHeight(16777215)
+            return
+
+        self._animate_config(
+            0,
+            self.configCard.sizeHint().height(),
+            lambda: self.configCard.setMaximumHeight(16777215),
+        )
+
+    def _animate_config(self, height_from, height_to, on_finish=None):
+        if self._config_anim is not None:
+            self._config_anim.stop()
+        self._config_anim = QPropertyAnimation(
+            self.configCard, b"maximumHeight", self
+        )
+        self._config_anim.setDuration(260)
+        self._config_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._config_anim.setStartValue(height_from)
+        self._config_anim.setEndValue(height_to)
+
+        def _finish():
+            if on_finish:
+                on_finish()
+            self._config_anim = None
+
+        self._config_anim.finished.connect(_finish)
+        self._config_anim.start()
 
     def _register_i18n_widgets(self):
         for widget in self.findChildren(QWidget):
@@ -968,11 +1188,10 @@ class TGStickerInterface(QWidget):
                 combo.setItemText(index, t(source))
 
     def log(self, message: str):
-        self.logTextEdit.append(message)
-        self.statusLabel.setText(message)
-        scrollbar = self.logTextEdit.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-        self.logTextEdit.ensureCursorVisible()
+        """将日志保存在内存中，通过顶栏日志按钮按需查看。"""
+        self.log_history.append(str(message))
+        if len(self.log_history) > 2000:
+            self.log_history = self.log_history[-1000:]
 
     def showHelpDialog(self):
         """弹出说明书与高级配置教程弹窗"""
@@ -980,13 +1199,13 @@ class TGStickerInterface(QWidget):
         dlg.exec()
 
     def toggleAdvancedSettings(self):
-        """切换高级配置面板的展开与折叠"""
-        is_visible = self.advWidget.isVisible()
-        self.advWidget.setVisible(not is_visible)
-        if not is_visible:
-            self.toggleAdvBtn.setText(t("▼ 收起高级设置 (Token / 网络代理)"))
-        else:
-            self.toggleAdvBtn.setText(t("▶ 展开高级设置 (Token / 网络代理)"))
+        """切换高级配置面板并同步旋转箭头状态。"""
+        will_show = not self.advWidget.isVisible()
+        self.advWidget.setVisible(will_show)
+        self.toggleAdvBtn.set_direction(180 if will_show else 0)
+        self.toggleAdvBtn.setToolTip(
+            t("收起高级设置") if will_show else t("展开高级设置")
+        )
 
     def toggleTokenVisibility(self):
         """切换 Token 输入框密码显隐"""
@@ -1086,11 +1305,8 @@ class TGStickerInterface(QWidget):
 
         self._cancelActiveThreads()
 
-        self.parseButton.setEnabled(False)
-        self.exportSelectedButton.setEnabled(False)
-        self.exportAllButton.setEnabled(False)
-        self.importSelectedButton.setEnabled(False)
-        self.importAllButton.setEnabled(False)
+        self.current_pack = None
+        self._set_busy(True)
         self.previewListWidget.clear()
         self._thumb_pixmaps.clear()
         self._detail_cache.clear()
@@ -1101,8 +1317,9 @@ class TGStickerInterface(QWidget):
         self.detailPreviewLabel.clear()
         self.detailInfoLabel.setText(t("未选中贴纸"))
 
-        self.log(t("💬 正在解析贴纸包 [{link}] ...").format(link=link))
-        self.progressBar.setMaximum(0)
+        parse_message = t("正在解析贴纸包 [{link}] ...").format(link=link)
+        self.log(t("💬 {message}").format(message=parse_message))
+        self.tooltip.show(t("正在解析 Telegram 贴纸包..."), parse_message)
 
         self.downloader = self._get_configured_downloader()
         self._parse_thread = ParsePackThread(self.downloader, link, self)
@@ -1111,7 +1328,15 @@ class TGStickerInterface(QWidget):
         self._parse_thread.start()
 
     def _cancelActiveThreads(self):
-        """安全取消后台进行中的缩略图与大图加载线程"""
+        """协作式取消当前页面的全部后台任务。"""
+        if self._parse_thread and self._parse_thread.isRunning():
+            self._parse_thread.cancel()
+            self._parse_thread.wait(200)
+
+        if self._download_thread and self._download_thread.isRunning():
+            self._download_thread.cancel()
+            self._download_thread.wait(200)
+
         if self._batch_thread and self._batch_thread.isRunning():
             self._batch_thread.cancel()
             self._batch_thread.wait(200)
@@ -1135,10 +1360,8 @@ class TGStickerInterface(QWidget):
             self.detail_movie = None
 
     def _onParseSuccess(self, pack: StickerPackInfo):
-        self.parseButton.setEnabled(True)
-        self.progressBar.setMaximum(100)
-        self.progressBar.setValue(100)
         self.current_pack = pack
+        self._set_busy(False)
         self.all_stickers = pack.stickers
 
         self.previewTitleLabel.setText(
@@ -1158,19 +1381,21 @@ class TGStickerInterface(QWidget):
         else:
             self.formatComboBox.setCurrentIndex(0)
 
-        self.exportSelectedButton.setEnabled(True)
-        self.exportAllButton.setEnabled(True)
-        self.importSelectedButton.setEnabled(True)
-        self.importAllButton.setEnabled(True)
-
+        self.tooltip.finish(
+            t("解析完成"),
+            t("已加载《{title}》，共 {total} 张贴纸").format(
+                title=pack.title, total=pack.total_count
+            ),
+        )
+        self.collapse_config()
         self.loadMoreThumbnails()
 
     def _onParseFailed(self, error_msg: str):
-        self.parseButton.setEnabled(True)
-        self.progressBar.setMaximum(100)
-        self.progressBar.setValue(0)
+        self.current_pack = None
+        self._set_busy(False)
         self.previewTitleLabel.setText(t("贴纸预览区 (解析失败)"))
         self.log(t("❌ 解析贴纸包失败: {error}").format(error=error_msg))
+        self.tooltip.finish(t("解析失败"), str(error_msg))
         QMessageBox.critical(
             self,
             t("解析失败"),
@@ -1501,12 +1726,11 @@ class TGStickerInterface(QWidget):
             )
         )
 
-        self.parseButton.setEnabled(False)
-        self.exportSelectedButton.setEnabled(False)
-        self.exportAllButton.setEnabled(False)
-        self.importSelectedButton.setEnabled(False)
-        self.importAllButton.setEnabled(False)
-        self.progressBar.setValue(0)
+        self._set_busy(True)
+        self.tooltip.show(
+            t("正在导出 Telegram 贴纸..."),
+            t("准备导出 {count} 张贴纸").format(count=count_desc),
+        )
 
         downloader = self._get_configured_downloader()
         self._download_thread = DownloadPackThread(
@@ -1525,26 +1749,21 @@ class TGStickerInterface(QWidget):
         self._download_thread.start()
 
     def _onDownloadProgress(self, done: int, total: int, msg: str):
-        if total > 0:
-            val = int(done / total * 100)
-            self.progressBar.setValue(val)
-        self.log(t("导出进度 [{done}/{total}]: {message}").format(
+        progress_message = t("导出进度 [{done}/{total}]: {message}").format(
             done=done, total=total, message=msg
-        ))
+        )
+        self.log(progress_message)
+        self.tooltip.update(progress_message)
 
     def _onDownloadFinished(self, result: Dict[str, Any]):
-        self.parseButton.setEnabled(True)
-        self.exportSelectedButton.setEnabled(True)
-        self.exportAllButton.setEnabled(True)
-        self.importSelectedButton.setEnabled(True)
-        self.importAllButton.setEnabled(True)
-        self.progressBar.setValue(100)
+        self._set_busy(False)
         self.last_download_result = result
 
         msg = t("🎉 全部提取成功! 成功导出 {success} 张, 失败 {failed} 张。").format(
             success=result["success_count"], failed=result["fail_count"]
         )
         self.log(f"✅ {msg}")
+        self.tooltip.finish(t("导出完成"), msg)
         self.log(t("📁 导出文件夹: {directory}").format(directory=result["output_dir"]))
         if result.get("zip_path"):
             self.log(t("📦 ZIP压缩包: {path}").format(path=result["zip_path"]))
@@ -1571,12 +1790,9 @@ class TGStickerInterface(QWidget):
         )
 
     def _onDownloadFailed(self, error_msg: str):
-        self.parseButton.setEnabled(True)
-        self.exportSelectedButton.setEnabled(True)
-        self.exportAllButton.setEnabled(True)
-        self.importSelectedButton.setEnabled(True)
-        self.importAllButton.setEnabled(True)
+        self._set_busy(False)
         self.log(t("❌ 导出过程中出现错误: {error}").format(error=error_msg))
+        self.tooltip.finish(t("导出失败"), str(error_msg))
         QMessageBox.critical(
             self, t("导出出错"), t("导出失败:\n{error}").format(error=error_msg), QMessageBox.Ok
         )
@@ -1661,20 +1877,19 @@ class TGStickerInterface(QWidget):
         if total_count == 0:
             return
 
-        self.parseButton.setEnabled(False)
-        self.exportSelectedButton.setEnabled(False)
-        self.exportAllButton.setEnabled(False)
-        self.importSelectedButton.setEnabled(False)
-        self.importAllButton.setEnabled(False)
-
-        self.progressBar.setMaximum(total_count)
-        self.progressBar.setValue(0)
+        self._set_busy(True)
         self.log(
             t("💬 开始异步并发导入贴纸到资源库，分类: [{category}]...").format(
                 category=category_name
             )
         )
 
+        self.tooltip.show(
+            t("正在导入 Telegram 贴纸..."),
+            t("准备入库 {count} 张贴纸至 [{category}]").format(
+                count=total_count, category=category_name
+            ),
+        )
         downloader = self._get_configured_downloader()
 
         self._import_thread = ImportPackThread(
@@ -1691,23 +1906,27 @@ class TGStickerInterface(QWidget):
         self._import_thread.start()
 
     def _onImportProgress(self, done: int, total: int, msg: str):
-        if total > 0:
-            val = int(done / total * 100)
-            self.progressBar.setValue(done)
         self.log(msg)
+        self.tooltip.update(
+            t("入库进度 [{done}/{total}]: {message}").format(
+                done=done, total=total, message=msg
+            )
+        )
 
     def _onImportFinished(self, imported: int, dup: int, failed: int, cat_name: str):
-        self.parseButton.setEnabled(True)
-        self.exportSelectedButton.setEnabled(True)
-        self.exportAllButton.setEnabled(True)
-        self.importSelectedButton.setEnabled(True)
-        self.importAllButton.setEnabled(True)
-        self.progressBar.setValue(self.progressBar.maximum())
+        self._set_busy(False)
 
         self.log(
             t("✅ 导入完成！成功入库 {imported} 张贴纸到 [{category}]，重复合并 {duplicated} 张，失败 {failed} 张。").format(
                 imported=imported, category=cat_name, duplicated=dup, failed=failed
             )
+        )
+
+        self.tooltip.finish(
+            t("导入完成"),
+            t("成功 {imported} 张，重复 {duplicated} 张，失败 {failed} 张").format(
+                imported=imported, duplicated=dup, failed=failed
+            ),
         )
 
         main_win = self.window()
@@ -1724,12 +1943,9 @@ class TGStickerInterface(QWidget):
         )
 
     def _onImportFailed(self, error_msg: str):
-        self.parseButton.setEnabled(True)
-        self.exportSelectedButton.setEnabled(True)
-        self.exportAllButton.setEnabled(True)
-        self.importSelectedButton.setEnabled(True)
-        self.importAllButton.setEnabled(True)
+        self._set_busy(False)
         self.log(t("❌ 导入过程中出现错误: {error}").format(error=error_msg))
+        self.tooltip.finish(t("导入失败"), str(error_msg))
         QMessageBox.critical(
             self, t("导入出错"), t("导入失败:\n{error}").format(error=error_msg), QMessageBox.Ok
         )

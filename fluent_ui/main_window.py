@@ -215,6 +215,10 @@ class MainWindow(FramelessWindow):
         """保存窗口状态和布局比例"""
         geo = self.geometry()
         self.config.set("window_geometry", [geo.x(), geo.y(), geo.width(), geo.height()])
+        if hasattr(self, 'qq_scan_interface') and hasattr(self.qq_scan_interface, 'shutdown'):
+            self.qq_scan_interface.shutdown()
+        if hasattr(self, 'tg_sticker_interface') and hasattr(self.tg_sticker_interface, 'shutdown'):
+            self.tg_sticker_interface.shutdown()
         super().closeEvent(event)
 
     def _init_ui(self):
@@ -254,7 +258,7 @@ class MainWindow(FramelessWindow):
         self.stacked_widget.addWidget(self.exchange_interface)
 
         # QQ扫描页面
-        self.qq_scan_interface = QQScanInterface(self)
+        self.qq_scan_interface = QQScanInterface(self, self.config)
         self.qq_scan_interface.back_requested.connect(self.show_exchange)
         self.stacked_widget.addWidget(self.qq_scan_interface)
 

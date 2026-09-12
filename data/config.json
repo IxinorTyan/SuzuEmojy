@@ -1,19 +1,23 @@
 {
     "always_on_top": true,
-    "preview_delay": 500,
-    "preview_size": 320,
+    "preview_delay": 496,
+    "preview_size": 316,
     "use_system_font": false,
     "convert_static_to_gif": true,
     "window_geometry": [
-        613,
-        177,
-        1074,
-        701
+        251,
+        121,
+        1259,
+        711
     ],
     "appearance_mode": "light",
-    "quick_panel_width": 357,
+    "quick_panel_width": 353,
     "language": "zh",
-    "quick_panel_height": 480,
+    "quick_panel_height": 476,
     "thumbnail_size": 130,
-    "render_batch_size": 1
+    "render_batch_size": 1,
+    "sidebar_icon_size": 16,
+    "recent_limit": 26,
+    "qq_save_path": "D:/14915/Videos",
+    "qq_data_path": "D:\\14915\\Videos\\Tencent Files"
 }

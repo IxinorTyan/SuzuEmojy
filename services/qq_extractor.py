@@ -201,8 +201,9 @@ class QQExtractor:
         clean_name = re.sub(r'_\d+$', '', file_base)
 
         # 过滤掉通用的子目录名称 (如 apng, png, ori, thumb 等)
-        normalized_dir = re.sub(r'[\\/](apng|png|ori|raw|thumb|preview)$', '', rel_dir, flags=re.IGNORECASE)
-        if normalized_dir in ['.', 'apng', 'png', 'ori', 'raw', 'thumb', 'preview']:
+        # 兼容两种结构：{emoji_id}/Ori  与  Ori/{emoji_id}，以及单独的 Ori 目录名
+        normalized_dir = re.sub(r'(?:[\\/]|^)(apng|png|ori|raw|thumb|preview)$', '', rel_dir, flags=re.IGNORECASE)
+        if normalized_dir.lower() in ['.', 'apng', 'png', 'ori', 'raw', 'thumb', 'preview']:
             normalized_dir = ''
 
         # 组合分组键
@@ -441,6 +442,52 @@ class QQExtractor:
         return sorted(recovered_files)
 
     @staticmethod
+    def get_emoji_root(userdata_save_path, qq_number):
+        """返回某用户 Emoji 根目录 Path"""
+        return Path(userdata_save_path) / str(qq_number) / "nt_qq" / "nt_data" / "Emoji"
+
+    @staticmethod
+    def get_pic_root(userdata_save_path, qq_number):
+        """返回某用户 Pic 收藏图片根目录 Path（内含日期命名的子文件夹，如 2026-02）"""
+        return Path(userdata_save_path) / str(qq_number) / "nt_qq" / "nt_data" / "Pic"
+
+    @staticmethod
+    def get_category_path(userdata_save_path, qq_number, folder_key):
+        """返回某分类的表情目录 Path；收藏图片分类指向 Pic 根目录而非 Emoji 目录"""
+        if folder_key and folder_key.lower() == 'pic':
+            return QQExtractor.get_pic_root(userdata_save_path, qq_number)
+        return QQExtractor.get_emoji_root(userdata_save_path, qq_number) / folder_key
+
+    @staticmethod
+    def scan_pic_folder(pic_root_path):
+        """
+        扫描 QQ 收藏图片目录（Pic/日期命名文件夹/Ori 下的原图）。
+
+        只收集位于 Ori 目录下的真实图片文件（魔数校验），
+        排除 Thumb 缩略图与 ThumbTemp 临时文件。
+        """
+        pic_root = Path(pic_root_path) if pic_root_path else None
+        if not pic_root or not pic_root.exists():
+            return []
+
+        candidates = []
+        try:
+            for root, _, files in os.walk(str(pic_root)):
+                if os.path.basename(root).lower() != 'ori':
+                    continue
+                for filename in files:
+                    candidates.append(os.path.join(root, filename))
+        except Exception:
+            return []
+
+        images = []
+        for file_path in candidates:
+            if QQExtractor.get_actual_extension(file_path):
+                images.append(file_path)
+
+        return sorted(images)
+
+    @staticmethod
     def scan_emojis(emoji_root_path, selected_folder=None):
         """
         针对不同 QQNT 表情分类扫描并筛选图片。
@@ -450,6 +497,8 @@ class QQExtractor:
         """
         if selected_folder and selected_folder.lower() == "marketface":
             return QQExtractor.scan_marketface(emoji_root_path)
+        if selected_folder and selected_folder.lower() == "pic":
+            return QQExtractor.scan_pic_folder(emoji_root_path)
 
         emoji_path = Path(emoji_root_path) if emoji_root_path else None
         if not emoji_path or not emoji_path.exists():

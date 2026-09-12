@@ -1113,7 +1113,26 @@ class StorageService:
                 raise RuntimeError(f"APNG 转 GIF 异常: {e}")
 
         # 4. 普通 GIF / PNG / JPEG / BMP / TIFF
-        return data_bytes, fmt, (fmt == "gif")
+        # GIF 不能仅依据文件格式判定为动图：剪贴板发送静态图片时，
+        # services.clipboard 会将 PNG 转换为单帧 GIF。单帧 GIF 应先还原为
+        # 静态 PNG，使其进入现有的 RGBA 清理与像素哈希去重流程。
+        if fmt == "gif":
+            try:
+                with Image.open(io.BytesIO(data_bytes)) as img:
+                    n_frames = getattr(img, "n_frames", 1)
+                    if n_frames <= 1:
+                        img.seek(0)
+                        rgba_img = img.convert("RGBA").copy()
+                        output_io = io.BytesIO()
+                        rgba_img.save(output_io, format="PNG", optimize=True)
+                        return output_io.getvalue(), "png", False
+            except Exception as e:
+                raise RuntimeError(f"解析单帧 GIF 失败: {e}")
+
+            # 多帧 GIF 保留原始数据，继续走动态资源流程。
+            return data_bytes, "gif", True
+
+        return data_bytes, fmt, False
 
     def _standardize_and_save(self, data_bytes, original_ext, source_path=None):
         try:

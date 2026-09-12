@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QWidget, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
 from PySide6.QtGui import QMouseEvent
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, ScrollArea, ExpandLayout,
@@ -7,6 +7,7 @@ from qfluentwidgets import (
     PushButton
 )
 from services.i18n import t, i18n_engine
+from fluent_ui.views.setting_view import disable_wheel_scroll_adjustment
 
 
 class ActionSettingCard(SettingCard):
@@ -33,7 +34,7 @@ class ActionSettingCard(SettingCard):
             self.clicked.emit()
 
 
-class ExchangeInterface(ScrollArea):
+class ExchangeInterface(QWidget):
     """导出导入数据交换界面 (View)"""
     back_requested = Signal()
     import_requested = Signal()
@@ -45,22 +46,19 @@ class ExchangeInterface(ScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName("ExchangeInterface")
-        self.scrollWidget = QWidget()
-        self.expandLayout = ExpandLayout(self.scrollWidget)
-
-        self.setWidget(self.scrollWidget)
-        self.setWidgetResizable(True)
-        self.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
-        self.scrollWidget.setStyleSheet("QWidget { background-color: transparent; }")
         
         self._init_ui()
         self._connect_signals()
 
     def _init_ui(self):
-        # 顶部返回工具栏
-        self.topBar = QWidget(self.scrollWidget)
+        self.mainLayout = QVBoxLayout(self)
+        self.mainLayout.setContentsMargins(0, 0, 0, 0)
+        self.mainLayout.setSpacing(0)
+
+        # 顶部返回工具栏（固定在页面顶端）
+        self.topBar = QWidget(self)
         self.topBarLayout = QHBoxLayout(self.topBar)
-        self.topBarLayout.setContentsMargins(0, 0, 0, 0)
+        self.topBarLayout.setContentsMargins(36, 10, 36, 12)
         self.topBarLayout.setSpacing(12)
 
         self.btnBack = TransparentToolButton(FIF.LEFT_ARROW, self.topBar)
@@ -73,6 +71,19 @@ class ExchangeInterface(ScrollArea):
         self.topBarLayout.addWidget(self.titleLabel)
         self.topBarLayout.addStretch()
 
+        self.mainLayout.addWidget(self.topBar)
+
+        # 独立滚动区域
+        self.scrollArea = ScrollArea(self)
+        self.scrollWidget = QWidget()
+        self.expandLayout = ExpandLayout(self.scrollWidget)
+
+        self.scrollArea.setWidget(self.scrollWidget)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.enableTransparentBackground()
+        self.scrollArea.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+        self.scrollWidget.setStyleSheet("QWidget { background-color: transparent; }")
+        
         # =================== 1. 表情资源包卡片组 ===================
         self.resourceGroup = SettingCardGroup(t("表情资源包"), self.scrollWidget)
 
@@ -138,11 +149,13 @@ class ExchangeInterface(ScrollArea):
 
         # 布局排列
         self.expandLayout.setSpacing(28)
-        self.expandLayout.setContentsMargins(36, 10, 36, 0)
+        self.expandLayout.setContentsMargins(36, 0, 36, 20)
         
-        self.expandLayout.addWidget(self.topBar)
         self.expandLayout.addWidget(self.resourceGroup)
         self.expandLayout.addWidget(self.thirdPartyGroup)
+
+        self.mainLayout.addWidget(self.scrollArea)
+        disable_wheel_scroll_adjustment(self)
 
     def _connect_signals(self):
         # 绑定多语言切换
