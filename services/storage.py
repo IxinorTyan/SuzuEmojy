@@ -66,23 +66,140 @@ class StorageService:
         
         self._recent_cache = None
         self._sync_key_index = None
+        self._sync_index_lock = threading.RLock()
+        self._sync_index_event = threading.Event()
+        self._sync_index_event.set()
+        self._sync_index_building = False
 
         self._repair_orphaned_resources()
 
+    def _persist_sync_key(self, filename, sync_key, file_size, mtime_ns, md5_val=None):
+        """持久化 sync_key 及其文件状态校验字段到 SQLite features.db"""
+        try:
+            with sqlite3.connect(self.features_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO image_features (image_path, sync_key, file_size, mtime_ns, md5)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(image_path) DO UPDATE SET
+                        sync_key = excluded.sync_key,
+                        file_size = excluded.file_size,
+                        mtime_ns = excluded.mtime_ns,
+                        md5 = COALESCE(excluded.md5, image_features.md5)
+                """, (os.path.basename(filename), sync_key, file_size, mtime_ns, md5_val))
+                conn.commit()
+        except Exception as e:
+            print(f"[WARNING] 持久化 sync_key 失败: {e}")
+
+    def _remove_feature_record(self, filename):
+        """从 features.db 移除失效文件的特征记录"""
+        try:
+            with sqlite3.connect(self.features_db_path) as conn:
+                conn.execute("DELETE FROM image_features WHERE image_path = ?", (os.path.basename(filename),))
+                conn.commit()
+        except Exception as e:
+            print(f"[WARNING] 从 features.db 移除记录失败: {e}")
+
     def _get_sync_key_index(self):
-        if self._sync_key_index is not None:
-            return self._sync_key_index
-        
-        self._sync_key_index = {}
-        if os.path.exists(self.images_dir):
+        """
+        线程安全、Single-Flight、持久化与增量维护的 sync_key 索引获取函数
+        - 仅允许单任务构建，并发线程等待同一结果
+        - 全程使用局部字典构建完成后原子发布，禁止暴露半成品
+        - 优先从 features.db 批量读取持久化数据，校验 size+mtime_ns，避免全库重复解码
+        """
+        # 1. 快速检查内存缓存 / 状态同步
+        with self._sync_index_lock:
+            if self._sync_key_index is not None:
+                return self._sync_key_index
+
+            if self._sync_index_building:
+                event_to_wait = self._sync_index_event
+            else:
+                self._sync_index_building = True
+                self._sync_index_event.clear()
+                event_to_wait = None
+
+        # 并发线程等待构建完成
+        if event_to_wait is not None:
+            event_to_wait.wait()
+            with self._sync_index_lock:
+                return self._sync_key_index if self._sync_key_index is not None else {}
+
+        # 2. 当前构建者在局部字典中装配
+        local_index = {}
+        try:
+            if not os.path.exists(self.images_dir):
+                with self._sync_index_lock:
+                    self._sync_key_index = local_index
+                return self._sync_key_index
+
             from services.hasher import compute_sync_key
+
+            # A. 批量从 features.db 读取持久化数据
+            db_records = {}
+            try:
+                with sqlite3.connect(self.features_db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT image_path, sync_key, file_size, mtime_ns FROM image_features WHERE sync_key IS NOT NULL")
+                    for row in cursor.fetchall():
+                        db_records[row[0]] = (row[1], row[2], row[3])
+            except Exception as e:
+                print(f"[WARNING] 从 features.db 批量读取 sync_key 失败: {e}")
+
             filenames = sorted(os.listdir(self.images_dir))
+            missing_or_dirty = []
+
             for filename in filenames:
-                if filename.lower().endswith(self.SUPPORTED_FORMATS):
-                    abspath = self._to_abspath(filename)
+                if not filename.lower().endswith(self.SUPPORTED_FORMATS):
+                    continue
+                abspath = self._to_abspath(filename)
+                try:
+                    stat_res = os.stat(abspath)
+                    cur_size = stat_res.st_size
+                    cur_mtime_ns = getattr(stat_res, 'st_mtime_ns', int(stat_res.st_mtime * 1e9))
+                except Exception:
+                    continue
+
+                cached = db_records.get(filename)
+                # 状态校验: size 与 mtime_ns 均一致时安全命中持久化数据
+                if cached and cached[0] and cached[1] == cur_size and cached[2] == cur_mtime_ns:
+                    local_index.setdefault(cached[0], filename)
+                else:
+                    missing_or_dirty.append((filename, abspath, cur_size, cur_mtime_ns))
+
+            # B. 对缺失或外部修改的文件增量计算并回填数据库
+            if missing_or_dirty:
+                records_to_update = []
+                for filename, abspath, cur_size, cur_mtime_ns in missing_or_dirty:
                     skey = compute_sync_key(abspath)
                     if skey:
-                        self._sync_key_index.setdefault(skey, filename)
+                        local_index.setdefault(skey, filename)
+                        records_to_update.append((filename, skey, cur_size, cur_mtime_ns))
+
+                if records_to_update:
+                    try:
+                        with sqlite3.connect(self.features_db_path) as conn:
+                            cursor = conn.cursor()
+                            cursor.executemany("""
+                                INSERT INTO image_features (image_path, sync_key, file_size, mtime_ns)
+                                VALUES (?, ?, ?, ?)
+                                ON CONFLICT(image_path) DO UPDATE SET
+                                    sync_key = excluded.sync_key,
+                                    file_size = excluded.file_size,
+                                    mtime_ns = excluded.mtime_ns
+                            """, records_to_update)
+                            conn.commit()
+                    except Exception as e:
+                        print(f"[WARNING] 批量回填 sync_key 到 DB 失败: {e}")
+
+        except Exception as e:
+            print(f"[ERROR] 构建 sync_key 索引失败: {e}")
+        finally:
+            with self._sync_index_lock:
+                self._sync_key_index = local_index
+                self._sync_index_building = False
+                self._sync_index_event.set()
+
         return self._sync_key_index
 
     def _atomic_save_json(self, target_file, data, indent=4):
@@ -119,6 +236,16 @@ class StorageService:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(image_features)")
+                columns = [row[1] for row in cursor.fetchall()]
+                if "sync_key" not in columns:
+                    cursor.execute("ALTER TABLE image_features ADD COLUMN sync_key TEXT")
+                if "file_size" not in columns:
+                    cursor.execute("ALTER TABLE image_features ADD COLUMN file_size INTEGER")
+                if "mtime_ns" not in columns:
+                    cursor.execute("ALTER TABLE image_features ADD COLUMN mtime_ns INTEGER")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_features_sync_key ON image_features(sync_key)")
                 conn.commit()
 
             # 2. metadata.db
@@ -150,6 +277,8 @@ class StorageService:
                         PRIMARY KEY (category_name, image_path)
                     )
                 """)
+                conn.execute("DELETE FROM categories WHERE name IN ('全部表情', '未分类', '新建分类')")
+                conn.execute("DELETE FROM category_images WHERE category_name IN ('全部表情', '未分类', '新建分类')")
                 conn.commit()
 
             # 4. order.db
@@ -252,7 +381,11 @@ class StorageService:
                 print(f"[ERROR] 保存到 features.db 失败: {e}")
 
     def _repair_orphaned_resources(self):
-        """自愈孤儿资源：检查本地图片文件是否缺失索引记录，缺失时自动补齐"""
+        """自愈孤儿资源：检查本地图片文件是否缺失 order 记录，缺失时仅做轻量补录。
+
+        优化说明：启动期不再全量读取文件字节计算 MD5（大库时极慢）。
+        孤儿文件的 MD5/phash/dhash 将由后台 run_full_deduplication 线程异步补全。
+        """
         with self.lock:
             if not os.path.exists(self.images_dir):
                 return
@@ -261,30 +394,21 @@ class StorageService:
                 return
 
             all_saved = set(self.get_all_images())
-            saved_hashes_filenames = set(os.path.basename(p) for p in self._hashes_cache.values())
-            
-            repaired = False
+            repaired_order = False
+
             for fname in actual_filenames:
                 abspath = self._to_abspath(fname)
-                if abspath not in all_saved or fname not in saved_hashes_filenames:
-                    try:
-                        with open(abspath, 'rb') as f:
-                            data_bytes = f.read()
-                        _, ext = os.path.splitext(fname)
-                        # 计算哈希并补齐 _hashes_cache
-                        file_hash = self._calculate_bytes_hash(data_bytes)
-                        if file_hash:
-                            self._hashes_cache[file_hash] = fname
-                        repaired = True
-                    except Exception as e:
-                        print(f"[WARNING] 自愈孤儿文件 {fname} 失败: {e}")
-            if repaired:
+                # 仅检查 order 中是否存在，不检查哈希（哈希由后台补全）
+                if abspath not in all_saved:
+                    repaired_order = True
+
+            if repaired_order:
                 try:
-                    self._save_hashes()
+                    # 以磁盘文件为权威，重建 order（不触发文件读取）
                     self._images_dirty = True
-                    # 重新生成并保存 order
                     all_imgs = self.get_all_images()
                     self.save_order(all_imgs)
+                    print(f"[INFO] 自愈孤儿资源：已将孤儿文件补录到 order（哈希将由后台补全）")
                 except Exception as e:
                     print(f"[WARNING] 保存自愈数据失败: {e}")
 
@@ -468,6 +592,8 @@ class StorageService:
             reverse_map = {}
             
             for category, paths in data.items():
+                if category in ("全部表情", "未分类", "新建分类"):
+                    continue
                 abs_paths = [self._to_abspath(p) for p in paths]
                 valid_paths = [p for p in abs_paths if p in all_real_images]
                 cleaned_data[category] = valid_paths
@@ -531,6 +657,8 @@ class StorageService:
 
     def add_category(self, category_name):
         """新建一个分类"""
+        if not category_name or category_name in ("全部表情", "未分类", "新建分类"):
+            return False
         categories = self.get_all_categories()
         if category_name not in categories:
             categories[category_name] = []
@@ -540,6 +668,8 @@ class StorageService:
 
     def rename_category(self, old_name, new_name):
         """重命名分类 (同步更新 categories.json、category_icons.json 及 SQLite 数据库事务)"""
+        if not new_name or new_name in ("全部表情", "未分类", "新建分类"):
+            return False
         categories = self.get_all_categories()
         if old_name not in categories or new_name in categories:
             return False
@@ -1134,22 +1264,26 @@ class StorageService:
 
         return data_bytes, fmt, False
 
-    def _standardize_and_save(self, data_bytes, original_ext, source_path=None):
+    def _standardize_and_save(self, data_bytes, original_ext, source_path=None, pil_source=None):
         try:
-            # 步骤 1：格式归一化预处理（魔数识别、动态 WebM/动态 WebP/APNG 转为标准 GIF）
-            norm_bytes, norm_fmt, is_norm_animated = self._convert_source_to_standard_bytes(data_bytes, source_path)
-
-            img = Image.open(io.BytesIO(norm_bytes))
-            is_animated = getattr(img, "is_animated", False) or is_norm_animated
+            # 步骤 1：格式归一化预处理
+            if pil_source is not None:
+                img = pil_source
+                is_animated = False
+                final_ext = '.png'
+            else:
+                norm_bytes, norm_fmt, is_norm_animated = self._convert_source_to_standard_bytes(data_bytes, source_path)
+                img = Image.open(io.BytesIO(norm_bytes))
+                is_animated = getattr(img, "is_animated", False) or is_norm_animated
+                final_ext = '.gif' if is_animated else '.png'
 
             # 步骤 2：清洗与编码
             if is_animated:
                 # 动态资源（GIF）保留原始帧与透明通道，对转换后的最终 GIF 执行哈希
                 final_bytes = norm_bytes
-                final_ext = '.gif'
                 file_hash = self._calculate_bytes_hash(final_bytes)
             else:
-                # 静态资源（静态 WebP/PNG/JPG/BMP 等）现有处理方式一律不改
+                # 静态资源（静态 WebP/PNG/JPG/BMP 等）
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
 
@@ -1177,7 +1311,7 @@ class StorageService:
 
             # L2 像素路径：快路径未命中且为静态图时，与本地 images 目录的 sync_key 索引比对
             if not is_animated:
-                pixel_hash = self._calculate_pixel_hash(img)
+                pixel_hash = self._calculate_pixel_hash(clean_img)
                 if pixel_hash:
                     skey = f"p:{pixel_hash}"
                     sync_index = self._get_sync_key_index()
@@ -1189,6 +1323,11 @@ class StorageService:
                             self._save_hashes()
                             self.move_image_to_front(existing_path)
                             return existing_path, True
+                        else:
+                            # 死链自动驱逐：外部已删除该文件，立即从内存索引与 DB 剔除
+                            with self._sync_index_lock:
+                                sync_index.pop(skey, None)
+                            self._remove_feature_record(existing_filename)
 
             # 步骤 4：正式写入磁盘
             filename = self.generate_new_filename(final_ext)
@@ -1201,15 +1340,28 @@ class StorageService:
                 self._hashes_cache[file_hash] = filename
                 self._save_hashes()
 
-            # 同步维护内存中的 sync_key 索引
+            # 获取落盘后的准确文件状态
+            try:
+                stat_res = os.stat(filepath)
+                cur_size = stat_res.st_size
+                cur_mtime_ns = getattr(stat_res, 'st_mtime_ns', int(stat_res.st_mtime * 1e9))
+            except Exception:
+                cur_size = len(final_bytes)
+                cur_mtime_ns = 0
+
+            # 同步维护内存中的 sync_key 索引并持久化（强制覆盖，防止被失效旧键阻挡）
             if not is_animated:
-                pixel_hash = self._calculate_pixel_hash(img)
+                pixel_hash = self._calculate_pixel_hash(clean_img)
                 if pixel_hash:
                     skey = f"p:{pixel_hash}"
-                    self._get_sync_key_index().setdefault(skey, filename)
+                    with self._sync_index_lock:
+                        self._get_sync_key_index()[skey] = filename
+                    self._persist_sync_key(filename, skey, cur_size, cur_mtime_ns, md5_val=file_hash)
             else:
                 skey = f"f:{file_hash}"
-                self._get_sync_key_index().setdefault(skey, filename)
+                with self._sync_index_lock:
+                    self._get_sync_key_index()[skey] = filename
+                self._persist_sync_key(filename, skey, cur_size, cur_mtime_ns, md5_val=file_hash)
 
             self._images_dirty = True
             return self._to_abspath(filename), False
@@ -1219,15 +1371,28 @@ class StorageService:
             return None, False
 
     def save_image(self, qimage):
-        from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+        """
+        保存剪贴板或传入的 QImage 对象
+        针对静态位图在内存中直接转换为 RGBA PIL Image，消除多余的 Qt PNG 压缩与 PIL 二进制解码
+        """
+        from PySide6.QtGui import QImage
+        if not isinstance(qimage, QImage) or qimage.isNull():
+            return None, False
 
-        byte_array = QByteArray()
-        buffer = QBuffer(byte_array)
-        buffer.open(QIODevice.WriteOnly)
-        qimage.save(buffer, "PNG")
-        image_bytes = byte_array.data()
-
-        return self._standardize_and_save(image_bytes, ".png")
+        try:
+            qimg_rgba = qimage.convertToFormat(QImage.Format.Format_RGBA8888)
+            w, h = qimg_rgba.width(), qimg_rgba.height()
+            ptr = qimg_rgba.constBits()
+            pil_img = Image.frombuffer("RGBA", (w, h), bytes(ptr), "raw", "RGBA", 0, 1)
+            return self._standardize_and_save(None, ".png", pil_source=pil_img)
+        except Exception as e:
+            print(f"[WARNING] QImage 快速转 PIL 失败，回退至兼容模式: {e}")
+            from PySide6.QtCore import QByteArray, QBuffer, QIODevice
+            byte_array = QByteArray()
+            buffer = QBuffer(byte_array)
+            buffer.open(QIODevice.WriteOnly)
+            qimage.save(buffer, "PNG")
+            return self._standardize_and_save(byte_array.data(), ".png")
 
     def save_file(self, source_path):
         if not os.path.exists(source_path):
@@ -1467,50 +1632,51 @@ class StorageService:
         
         all_items_to_clean = []
 
-        with self.lock:
-            for chunk_idx in range(0, total_valid, CHUNK_SIZE):
+        # 物理删除过程移出全局大锁，仅做文件 I/O，避免阻塞主线程 UI 与其他非冲突查询
+        for chunk_idx in range(0, total_valid, CHUNK_SIZE):
+            if cancel_check and cancel_check():
+                result['cancelled'] += len(valid_paths) - chunk_idx
+                result['unprocessed'] = len(valid_paths) - chunk_idx
+                break
+
+            chunk = valid_paths[chunk_idx:chunk_idx + CHUNK_SIZE]
+
+            deleted_in_chunk = []
+            missing_in_chunk = []
+            failed_in_chunk = []
+
+            for p in chunk:
                 if cancel_check and cancel_check():
-                    result['cancelled'] += len(valid_paths) - chunk_idx
-                    result['unprocessed'] = len(valid_paths) - chunk_idx
                     break
 
-                chunk = valid_paths[chunk_idx:chunk_idx + CHUNK_SIZE]
+                if not os.path.exists(p):
+                    missing_in_chunk.append(p)
+                else:
+                    try:
+                        os.remove(p)
+                        deleted_in_chunk.append(p)
+                    except Exception as e:
+                        failed_in_chunk.append(p)
+                        result['failure_details'][p] = f"物理删除失败: {str(e)}"
 
-                deleted_in_chunk = []
-                missing_in_chunk = []
-                failed_in_chunk = []
+            items_to_clean = deleted_in_chunk + missing_in_chunk
+            if items_to_clean:
+                all_items_to_clean.extend(items_to_clean)
 
-                for p in chunk:
-                    if cancel_check and cancel_check():
-                        break
+            result['deleted'] += len(deleted_in_chunk)
+            result['missing_cleaned'] += len(missing_in_chunk)
+            result['failed'] += len(failed_in_chunk)
 
-                    if not os.path.exists(p):
-                        missing_in_chunk.append(p)
-                    else:
-                        try:
-                            os.remove(p)
-                            deleted_in_chunk.append(p)
-                        except Exception as e:
-                            failed_in_chunk.append(p)
-                            result['failure_details'][p] = f"物理删除失败: {str(e)}"
+            if progress_callback:
+                progress_callback(result['deleted'] + result['missing_cleaned'] + result['failed'], total_valid)
 
-                items_to_clean = deleted_in_chunk + missing_in_chunk
-                if items_to_clean:
-                    all_items_to_clean.extend(items_to_clean)
+        # 循环全部结束后，快速更新内存缓存及数据，极大提高大批量删除效率并保证内存状态一致性
+        if all_items_to_clean:
+            filenames_to_clean = [self._to_filename(p) for p in all_items_to_clean]
+            filenames_set = set(filenames_to_clean)
+            filepaths_set = set(all_items_to_clean)
 
-                result['deleted'] += len(deleted_in_chunk)
-                result['missing_cleaned'] += len(missing_in_chunk)
-                result['failed'] += len(failed_in_chunk)
-
-                if progress_callback:
-                    progress_callback(result['deleted'] + result['missing_cleaned'] + result['failed'], total_valid)
-
-            # 循环全部结束后，一次性写入 JSON 文件并清空数据库记录，极大地提高大批量删除效率
-            if all_items_to_clean:
-                filenames_to_clean = [self._to_filename(p) for p in all_items_to_clean]
-                filenames_set = set(filenames_to_clean)
-                filepaths_set = set(all_items_to_clean)
-
+            with self.lock:
                 # 1. 批量清理并保存分类 JSON
                 categories = self.get_all_categories()
                 changed_cats = False
@@ -1555,23 +1721,28 @@ class StorageService:
                 if changed_hashes:
                     self._save_hashes()
 
-                # 5. 批量清理并重建同步键索引缓存
-                if self._sync_key_index is not None:
-                    keys_to_del = [k for k, v in self._sync_key_index.items() if v in filenames_set]
-                    for k in keys_to_del:
-                        del self._sync_key_index[k]
+                # 5. 批量清理并维护同步键索引缓存（避免昂贵的全库重新解码）
+                with self._sync_index_lock:
+                    if self._sync_key_index is not None:
+                        keys_to_del = [k for k, v in self._sync_key_index.items() if v in filenames_set]
+                        for k in keys_to_del:
+                            del self._sync_key_index[k]
 
-                    if keys_to_del:
-                        from services.hasher import compute_sync_key
-                        all_images_remaining = []
-                        if os.path.exists(self.images_dir):
-                            all_images_remaining = sorted(os.listdir(self.images_dir))
-                        for other_name in all_images_remaining:
-                            if other_name not in filenames_set and other_name.lower().endswith(self.SUPPORTED_FORMATS):
-                                other_path = self._to_abspath(other_name)
-                                other_skey = compute_sync_key(other_path)
-                                if other_skey in keys_to_del:
-                                    self._sync_key_index[other_skey] = other_name
+                        # 若需补充同 sync_key 的其它剩余图片，直接从 DB 极速反查，严禁全盘重新解码
+                        if keys_to_del and os.path.exists(self.features_db_path):
+                            try:
+                                with sqlite3.connect(self.features_db_path) as conn:
+                                    cursor = conn.cursor()
+                                    placeholders = ','.join('?' * len(keys_to_del))
+                                    cursor.execute(
+                                        f"SELECT sync_key, image_path FROM image_features WHERE sync_key IN ({placeholders})",
+                                        keys_to_del
+                                    )
+                                    for skey, img_name in cursor.fetchall():
+                                        if img_name not in filenames_set and skey not in self._sync_key_index:
+                                            self._sync_key_index[skey] = img_name
+                            except Exception as e:
+                                print(f"[WARNING] 维护 sync_key 索引替补记录失败: {e}")
 
                 # 6. 批量清理并保存全局列表顺序 JSON
                 all_images = self.get_all_images()
@@ -1579,29 +1750,30 @@ class StorageService:
                 if len(new_all_images) != len(all_images):
                     self.save_order(new_all_images)
 
-                # 7. 批量提交 SQLite 数据库删除事务
-                try:
-                    for db_name, db_path in db_paths.items():
-                        if os.path.exists(db_path):
-                            with sqlite3.connect(db_path) as conn:
-                                if db_name == 'features':
-                                    conn.executemany("DELETE FROM image_features WHERE image_path = ?", [(f,) for f in filenames_to_clean])
-                                elif db_name == 'metadata':
-                                    conn.executemany("DELETE FROM image_metadata WHERE image_path = ?", [(f,) for f in filenames_to_clean])
-                                elif db_name == 'categories':
-                                    conn.executemany("DELETE FROM category_images WHERE image_path = ?", [(f,) for f in filenames_to_clean])
-                                elif db_name == 'order':
-                                    conn.executemany("DELETE FROM item_orders WHERE image_path = ?", [(f,) for f in filenames_to_clean])
-                                elif db_name == 'recent':
-                                    conn.executemany("DELETE FROM recent_history WHERE image_path = ?", [(f,) for f in filenames_to_clean])
-                                conn.commit()
-                except Exception as e:
-                    print(f"[FATAL] 数据库批量删除事务失败: {e}")
-                    raise e
+                self._images_dirty = True
+                self._categories_dirty = True
+                self._metadata_dirty = True
 
-        self._images_dirty = True
-        self._categories_dirty = True
-        self._metadata_dirty = True
+            # 7. 批量提交 SQLite 数据库删除事务
+            try:
+                for db_name, db_path in db_paths.items():
+                    if os.path.exists(db_path):
+                        with sqlite3.connect(db_path) as conn:
+                            if db_name == 'features':
+                                conn.executemany("DELETE FROM image_features WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                            elif db_name == 'metadata':
+                                conn.executemany("DELETE FROM image_metadata WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                            elif db_name == 'categories':
+                                conn.executemany("DELETE FROM category_images WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                            elif db_name == 'order':
+                                conn.executemany("DELETE FROM item_orders WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                            elif db_name == 'recent':
+                                conn.executemany("DELETE FROM recent_history WHERE image_path = ?", [(f,) for f in filenames_to_clean])
+                            conn.commit()
+            except Exception as e:
+                print(f"[FATAL] 数据库批量删除事务失败: {e}")
+                raise e
+
         return result
 
     def delete_image(self, filepath):

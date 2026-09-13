@@ -35,6 +35,13 @@ user32.SetWindowPos.argtypes = [
 ]
 user32.SetWindowPos.restype = wintypes.BOOL
 
+# SetCursor / LoadCursorW：用于修复 resize 光标残留问题。
+# 显式声明类型，避免 64 位冻结程序中 HCURSOR 句柄被截断为 32 位。
+user32.LoadCursorW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR]
+user32.LoadCursorW.restype = ctypes.c_void_p
+user32.SetCursor.argtypes = [ctypes.c_void_p]
+user32.SetCursor.restype = ctypes.c_void_p
+
 dwmapi.DwmSetWindowAttribute.argtypes = [
     wintypes.HWND,
     wintypes.DWORD,
@@ -592,6 +599,14 @@ class MainWindow(FramelessWindow):
                 if appearance_mode == "system":
                     # 延迟一点点执行，确保 qfluentwidgets 已经处理完系统主题切换
                     QTimer.singleShot(100, lambda: self.on_settings_changed("appearance_mode"))
+            # WM_SETCURSOR = 0x0020
+            # 修复：鼠标从窗口边缘缩放区域移入内容区域时，resize 光标可能残留。
+            # WM_SETCURSOR 的 wParam 低 16 位是 hit-test 码；HTCLIENT = 1 表示普通客户区。
+            # 当 hit-test 码为 HTCLIENT 时，主动恢复箭头光标，覆盖 Windows 可能保留的 resize 光标。
+            elif msg.message == 0x0020:
+                hit_test = msg.wParam & 0xFFFF
+                if hit_test == 1:  # HTCLIENT
+                    user32.SetCursor(user32.LoadCursorW(None, ctypes.c_wchar_p(32512)))  # IDC_ARROW = 32512
         except Exception:
             pass
         return super().nativeEvent(eventType, message)

@@ -41,7 +41,7 @@ class FeatureDB:
         return conn
 
     def _init_db(self):
-        """初始化数据库表 image_features"""
+        """初始化数据库表 image_features 并平滑升级结构"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
@@ -55,8 +55,17 @@ class FeatureDB:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                cursor.execute("PRAGMA table_info(image_features)")
+                columns = [row[1] for row in cursor.fetchall()]
+                if "sync_key" not in columns:
+                    cursor.execute("ALTER TABLE image_features ADD COLUMN sync_key TEXT")
+                if "file_size" not in columns:
+                    cursor.execute("ALTER TABLE image_features ADD COLUMN file_size INTEGER")
+                if "mtime_ns" not in columns:
+                    cursor.execute("ALTER TABLE image_features ADD COLUMN mtime_ns INTEGER")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_features_sync_key ON image_features(sync_key)")
                 conn.commit()
-                logger.info(f"[FeatureDB] 数据库初始化成功: {self.db_path}")
+                logger.info(f"[FeatureDB] 数据库初始化/升级成功: {self.db_path}")
         except Exception as e:
             logger.error(f"[FeatureDB] 数据库初始化失败: {e}")
             print(f"[ERROR] [FeatureDB] 数据库初始化失败: {e}")

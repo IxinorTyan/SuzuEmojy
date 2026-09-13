@@ -96,10 +96,7 @@ def main():
         "--nofollow-import-to=PySide6.QtPdfWidgets",
         
         # imageio-ffmpeg 只用于定位 FFmpeg；发布包仅携带实际需要的单个可执行文件。
-        "--include-data-file=" + os.path.join(
-            os.path.dirname(__import__("imageio_ffmpeg").get_ffmpeg_exe()),
-            "ffmpeg-win-x86_64-v7.1.exe",
-        ) + "=ffmpeg/ffmpeg.exe",
+        "--include-data-file=" + __import__("imageio_ffmpeg").get_ffmpeg_exe() + "=ffmpeg/ffmpeg.exe",
 
         # ---- 体积优化：禁止无用的 OpenCV/NumPy 整套依赖进入发布包 ----
         "--nofollow-import-to=cv2",
@@ -187,8 +184,10 @@ def main():
             if os.path.exists(f):
                 shutil.copy2(f, release_dir)
 
-        if os.path.exists("data"):
-            shutil.copytree("data", os.path.join(bin_dir, "data"))
+        # 创建干净的数据目录结构，不打包本地用户数据（数据库、表情图片、缓存、个人配置等）
+        data_dir = os.path.join(bin_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(os.path.join(data_dir, "inbox"), exist_ok=True)
 
         if os.path.exists("translations"):
             shutil.copytree("translations", os.path.join(bin_dir, "translations"))
@@ -232,6 +231,11 @@ def main():
         print("\n====================================")
         print("Build failed with return code", process.returncode)
         print("====================================")
+        sys.exit(process.returncode or 1)
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print("Usage: python build_nuitka.py")
+        print("Builds standalone SuzuEmojy release package using Nuitka.")
+        sys.exit(0)
     main()

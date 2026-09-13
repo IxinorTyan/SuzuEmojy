@@ -13,7 +13,7 @@ from PySide6.QtCore import (
     QEasingCurve, QPropertyAnimation
 )
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QSplitter, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QSplitter, QFrame, QLayout,
     QFileDialog, QMessageBox, QLabel, QListWidget, QListWidgetItem, QSizePolicy,
     QDialog, QTabWidget, QTextBrowser, QApplication
 )
@@ -665,9 +665,10 @@ class TGStickerInterface(QWidget):
 
         # 3. 全宽可折叠配置卡
         self.configCard = CardWidget(self)
-        config_layout = QVBoxLayout(self.configCard)
-        config_layout.setContentsMargins(20, 14, 20, 14)
-        config_layout.setSpacing(10)
+        self.configCard.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.configCardLayout = QVBoxLayout(self.configCard)
+        self.configCardLayout.setContentsMargins(20, 14, 20, 14)
+        self.configCardLayout.setSpacing(10)
 
         config_header = QHBoxLayout()
         self.configTitle = StrongBodyLabel(t("Telegram 贴纸配置"), self.configCard)
@@ -678,12 +679,26 @@ class TGStickerInterface(QWidget):
         config_header.addWidget(self.configTitle)
         config_header.addStretch()
         config_header.addWidget(self.collapseConfigButton)
-        config_layout.addLayout(config_header)
+        self.configCardLayout.addLayout(config_header)
+
+        # 滚动区域包装表单内容，防止高度不够时挤压堆叠
+        self.configScrollArea = ScrollArea(self.configCard)
+        self.configScrollArea.setWidgetResizable(True)
+        self.configScrollArea.enableTransparentBackground()
+        self.configScrollArea.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.configScrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.configFormWidget = QWidget()
+        self.configFormWidget.setStyleSheet("background: transparent;")
+        config_layout = QVBoxLayout(self.configFormWidget)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(10)
+        config_layout.setSizeConstraint(QLayout.SetMinimumSize)
 
         def add_form_row(label_text, control, trailing=None):
             row = QHBoxLayout()
             row.setSpacing(8)
-            label = BodyLabel(t(label_text), self.configCard)
+            label = BodyLabel(t(label_text), self.configFormWidget)
             label.setFixedWidth(76)
             row.addWidget(label)
             row.addWidget(control, 1)
@@ -692,36 +707,36 @@ class TGStickerInterface(QWidget):
             config_layout.addLayout(row)
             return label
 
-        self.urlInputEdit = LineEdit(self.configCard)
+        self.urlInputEdit = LineEdit(self.configFormWidget)
         self.urlInputEdit.setPlaceholderText(
             t("贴纸链接或包名，如: animals 或 https://t.me/addstickers/xxx")
         )
         self.urlInputEdit.returnPressed.connect(self.startParsePack)
-        self.helpButton = TransparentToolButton(FIF.HELP, self.configCard)
+        self.helpButton = TransparentToolButton(FIF.HELP, self.configFormWidget)
         self.helpButton.setFixedSize(32, 32)
         self.helpButton.setToolTip(t("使用帮助与教程"))
         self.helpButton.clicked.connect(self.showHelpDialog)
         self.urlLabel = add_form_row("贴纸链接:", self.urlInputEdit, self.helpButton)
 
-        self.savePathEdit = LineEdit(self.configCard)
+        self.savePathEdit = LineEdit(self.configFormWidget)
         self.savePathEdit.setText(self.save_path)
         self.savePathEdit.setPlaceholderText(t("请选择贴纸保存路径..."))
-        self.selectDirButton = PushButton(t("浏览..."), self.configCard)
+        self.selectDirButton = PushButton(t("浏览..."), self.configFormWidget)
         self.selectDirButton.setFixedWidth(90)
         self.selectDirButton.clicked.connect(self.selectSavePath)
         self.savePathLabel = add_form_row("保存路径:", self.savePathEdit, self.selectDirButton)
 
         format_row = QHBoxLayout()
         format_row.setSpacing(8)
-        self.formatLabel = BodyLabel(t("导出格式:"), self.configCard)
+        self.formatLabel = BodyLabel(t("导出格式:"), self.configFormWidget)
         self.formatLabel.setFixedWidth(76)
-        self.formatComboBox = ComboBox(self.configCard)
+        self.formatComboBox = ComboBox(self.configFormWidget)
         self.formatComboBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.formatComboBox.addItem(t("PNG (静态图片 / 动图首帧)"), userData="png")
         self.formatComboBox.addItem(t("GIF (动图 / 视频贴纸)"), userData="gif")
         self.formatComboBox.addItem(t("原始格式 (WebP / TGS / WebM)"), userData="original")
         self.formatComboBox.addItem(t("智能适配 (自动匹配最佳格式)"), userData="auto")
-        self.zipCheckBox = CheckBox(t("导出完成后打包为 ZIP 压缩文件"), self.configCard)
+        self.zipCheckBox = CheckBox(t("导出完成后打包为 ZIP 压缩文件"), self.configFormWidget)
         self.zipCheckBox.setChecked(True)
         format_row.addWidget(self.formatLabel)
         format_row.addWidget(self.formatComboBox, 1)
@@ -730,8 +745,8 @@ class TGStickerInterface(QWidget):
 
         # 高级设置独立折叠
         advanced_header = QHBoxLayout()
-        self.advancedTitle = BodyLabel(t("高级设置 (Token / 网络代理)"), self.configCard)
-        self.toggleAdvBtn = RotatingChevronButton(self.configCard)
+        self.advancedTitle = BodyLabel(t("高级设置 (Token / 网络代理)"), self.configFormWidget)
+        self.toggleAdvBtn = RotatingChevronButton(self.configFormWidget)
         self.toggleAdvBtn.set_direction(0, animated=False)
         self.toggleAdvBtn.setToolTip(t("展开高级设置"))
         self.toggleAdvBtn.clicked.connect(self.toggleAdvancedSettings)
@@ -740,7 +755,7 @@ class TGStickerInterface(QWidget):
         advanced_header.addWidget(self.toggleAdvBtn)
         config_layout.addLayout(advanced_header)
 
-        self.advWidget = QWidget(self.configCard)
+        self.advWidget = QWidget(self.configFormWidget)
         adv_layout = QVBoxLayout(self.advWidget)
         adv_layout.setContentsMargins(0, 0, 0, 0)
         adv_layout.setSpacing(8)
@@ -788,7 +803,7 @@ class TGStickerInterface(QWidget):
         config_layout.addWidget(self.advWidget)
 
         self.parseButton = PrimaryPushButton(
-            FIF.SEARCH, t("解析贴纸包预览"), self.configCard
+            FIF.SEARCH, t("解析贴纸包预览"), self.configFormWidget
         )
         self.parseButton.setFixedHeight(36)
         self.parseButton.clicked.connect(self.startParsePack)
@@ -797,10 +812,10 @@ class TGStickerInterface(QWidget):
         export_row = QHBoxLayout()
         export_row.setSpacing(8)
         self.exportSelectedButton = PushButton(
-            FIF.DOWNLOAD, t("导出选中"), self.configCard
+            FIF.DOWNLOAD, t("导出选中"), self.configFormWidget
         )
         self.exportAllButton = PushButton(
-            FIF.FOLDER, t("导出全部"), self.configCard
+            FIF.FOLDER, t("导出全部"), self.configFormWidget
         )
         self.exportSelectedButton.setFixedHeight(34)
         self.exportAllButton.setFixedHeight(34)
@@ -808,6 +823,9 @@ class TGStickerInterface(QWidget):
         export_row.addWidget(self.exportAllButton, 1)
         config_layout.addLayout(export_row)
 
+        self.configScrollArea.setWidget(self.configFormWidget)
+        self.configCardLayout.addWidget(self.configScrollArea, 1)
+        self.configCard.setMinimumHeight(120)
         self.mainLayout.addWidget(self.configCard)
 
         # 4. 常驻操作栏
@@ -905,11 +923,14 @@ class TGStickerInterface(QWidget):
         self.detailLayout.setContentsMargins(14, 14, 14, 14)
         self.detailLayout.setSpacing(10)
 
+        self.detailWidget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.detailTitle = SubtitleLabel(t("贴纸详细预览"), self.detailWidget)
         self.detailPreviewLabel = QLabel(self.detailWidget)
         self.detailPreviewLabel.setAlignment(Qt.AlignCenter)
         self.detailPreviewLabel.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
-        self.detailPreviewLabel.setFixedSize(250, 250)
+        self.detailPreviewLabel.setMaximumSize(250, 250)
+        self.detailPreviewLabel.setMinimumSize(80, 80)
+        self.detailPreviewLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.detailPreviewLabel.setStyleSheet(
             "background-color: rgba(0, 0, 0, 5); "
             "border: 1px solid rgba(0, 0, 0, 15); border-radius: 8px;"
@@ -1104,6 +1125,7 @@ class TGStickerInterface(QWidget):
         self.collapseConfigButton.set_direction(0, animated=animated)
         self.collapseConfigButton.setToolTip(t("展开配置面板"))
 
+        self.configCard.setMinimumHeight(0)
         if not animated:
             self.configCard.setVisible(False)
             return
@@ -1122,14 +1144,20 @@ class TGStickerInterface(QWidget):
         self.collapseConfigButton.set_direction(180, animated=animated)
         self.collapseConfigButton.setToolTip(t("收起配置面板"))
 
+        target_h = self.configCard.sizeHint().height()
         if not animated:
             self.configCard.setMaximumHeight(16777215)
+            self.configCard.setMinimumHeight(120)
             return
+
+        def _on_expand_finish():
+            self.configCard.setMaximumHeight(16777215)
+            self.configCard.setMinimumHeight(120)
 
         self._animate_config(
             0,
-            self.configCard.sizeHint().height(),
-            lambda: self.configCard.setMaximumHeight(16777215),
+            target_h,
+            _on_expand_finish,
         )
 
     def _animate_config(self, height_from, height_to, on_finish=None):

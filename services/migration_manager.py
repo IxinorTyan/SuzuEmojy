@@ -222,13 +222,14 @@ class MigrationManager:
                 """)
 
                 all_cats = []
+                reserved_names = ("全部表情", "未分类", "新建分类")
                 if isinstance(cat_data, dict):
                     for k in cat_data.keys():
-                        if k not in all_cats:
+                        if k not in reserved_names and k not in all_cats:
                             all_cats.append(k)
                 if isinstance(icon_data, dict):
                     for k in icon_data.keys():
-                        if k not in all_cats:
+                        if k not in reserved_names and k not in all_cats:
                             all_cats.append(k)
 
                 for idx, cat_name in enumerate(all_cats):

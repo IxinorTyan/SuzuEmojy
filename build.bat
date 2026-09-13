@@ -1,5 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 echo ====================================
 echo Building SuzuEmojy Launcher with PyInstaller
@@ -70,7 +71,9 @@ call :copy_required_file "requirements.txt" "dist\SuzuEmojy_Release\"
 call :copy_required_file "ico.ico" "dist\SuzuEmojy_Release\"
 call :copy_required_file "README.md" "dist\SuzuEmojy_Release\"
 call :copy_required_file "说明书.md" "dist\SuzuEmojy_Release\"
-call :copy_required_file "依赖装不上,没招了你就试试点这个吧,记得附上报错日志.bat" "dist\SuzuEmojy_Release\"
+if exist "依赖装不上,没招了你就试试点这个吧,记得附上报错日志.bat" (
+    call :copy_required_file "依赖装不上,没招了你就试试点这个吧,记得附上报错日志.bat" "dist\SuzuEmojy_Release\"
+)
 
 if !BUILD_FAILED! equ 1 goto :fail
 
@@ -80,15 +83,14 @@ call :copy_required_dir "translations" "dist\SuzuEmojy_Release\translations"
 
 if !BUILD_FAILED! equ 1 goto :fail
 
-if exist "data" (
-    xcopy /E /I /Y "data" "dist\SuzuEmojy_Release\data" >nul
-    if errorlevel 1 (
-        echo ERROR: Failed to copy data folder.
-        goto :fail
-    )
-) else (
-    echo WARNING: "data" folder not found, skipping ^(this may be fine if not required^).
-)
+REM Create clean data directory structure, do NOT copy local user data
+echo Creating clean data directory structure...
+if not exist "dist\SuzuEmojy_Release\data" mkdir "dist\SuzuEmojy_Release\data"
+if not exist "dist\SuzuEmojy_Release\data\inbox" mkdir "dist\SuzuEmojy_Release\data\inbox"
+
+REM Clean up __pycache__ folders from release directory
+echo Cleaning __pycache__ from release folder...
+for /d /r "dist\SuzuEmojy_Release" %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d"
 
 echo.
 echo ====================================

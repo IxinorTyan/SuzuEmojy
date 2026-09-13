@@ -71,6 +71,25 @@ class DownloadThread(QThread):
         except Exception as e:
             self.finished.emit(False, "", str(e), self.url)
 
+class ImageSaveThread(QThread):
+    """后台异步保存剪贴板/位图图像的线程，防止主线程冻结"""
+    finished = Signal(object, bool, str) # saved_path, is_duplicate, target_category
+
+    def __init__(self, qimage, storage, target_category, parent=None):
+        super().__init__(parent)
+        self.qimage = qimage
+        self.storage = storage
+        self.target_category = target_category
+
+    def run(self):
+        try:
+            saved_path, is_duplicate = self.storage.save_image(self.qimage)
+            self.finished.emit(saved_path, is_duplicate, self.target_category)
+        except Exception as e:
+            print(f"[ERROR] 后台异步保存图片失败: {e}")
+            self.finished.emit(None, False, self.target_category)
+
+
 class DeleteThread(QThread):
     """后台批量删除文件的线程，防止批量删除时主线程卡死"""
     progress = Signal(int, int) # current, total
@@ -916,6 +935,7 @@ class GalleryInterface(QWidget):
         self.focus_timer.start(500)
 
         self.download_threads = []
+        self.image_save_threads = []
         self.import_thread = None
         # 删除任务按顺序后台执行。后续删除会进入队列，不能因已有任务而被拒绝。
         self.delete_thread = None
@@ -1562,22 +1582,23 @@ class GalleryInterface(QWidget):
             path for path in self._all_current_images if path not in paths_set
         ]
 
+        # 彻底从 selected_paths 中移除所有被删除路径（包含尚未渲染的）
+        self.selected_paths.difference_update(paths_set)
+
         if widgets_to_remove:
             self.grid_container.setUpdatesEnabled(False)
 
+            remove_set = set(widgets_to_remove)
             for widget_to_remove in widgets_to_remove:
-                path = widget_to_remove.image_path
                 self.gallery_layout.removeWidget(widget_to_remove)
                 widget_to_remove.hide()
                 widget_to_remove.clear_resources()
                 widget_to_remove.setParent(None)
                 widget_to_remove.deleteLater()
 
-                if widget_to_remove in self._all_card_widgets:
-                    self._all_card_widgets.remove(widget_to_remove)
-
-                if path in self.selected_paths:
-                    self.selected_paths.remove(path)
+            self._all_card_widgets = [
+                w for w in getattr(self, '_all_card_widgets', []) if w not in remove_set
+            ]
 
             self._loaded_count = min(
                 self._loaded_count, len(self._all_current_images)
@@ -1589,6 +1610,11 @@ class GalleryInterface(QWidget):
 
             self.grid_container.setUpdatesEnabled(True)
             self.grid_container.update()
+        else:
+            self._loaded_count = min(
+                self._loaded_count, len(self._all_current_images)
+            )
+            self.update_selection_count()
 
     def clear_gallery(self):
         """清空所有卡片并强制垃圾回收，释放内存"""
@@ -1842,13 +1868,11 @@ class GalleryInterface(QWidget):
         from qfluentwidgets import MessageBox
         dialog = MessageBox("批量删除确认", f"确定要彻底删除选中的 {len(paths)} 个表情包吗？", self.window())
         if dialog.exec():
-            for widget in getattr(self, '_all_card_widgets', []):
-                if widget.image_path in paths:
-                    widget.clear_resources()
+            # 立即退出多选模式并重置当前选择，让用户可即时恢复正常交互或随时再次选择删除
+            self.set_selection_mode(False)
             self._start_async_delete(
                 paths,
                 "批量删除成功",
-                on_finished_callback=lambda: self.set_selection_mode(False),
             )
 
     def _execute_batch_add(self, paths, cat_name):
@@ -2269,14 +2293,22 @@ class GalleryInterface(QWidget):
         menu = SafeRoundMenu(parent=self)
 
         categories = self.storage.get_all_categories()
-        is_sub_category = self.current_category in categories
+        is_sub_category = (
+            bool(self.current_category)
+            and self.current_category not in ("全部表情", "未分类", "新建分类")
+            and self.current_category in categories
+        )
+        valid_categories = [
+            cat_name for cat_name in categories.keys()
+            if cat_name not in ("全部表情", "未分类", "新建分类")
+        ]
 
         # 1. 添加到分类...
         add_to_cat_menu = SafeRoundMenu(title="添加到分类...", parent=menu)
         menu.addMenu(add_to_cat_menu)
 
         has_valid_add_cat = False
-        for cat_name in categories.keys():
+        for cat_name in valid_categories:
             if cat_name != self.current_category:
                 has_valid_add_cat = True
                 action = Action(cat_name, parent=menu)
@@ -2286,13 +2318,13 @@ class GalleryInterface(QWidget):
         if not has_valid_add_cat:
             add_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
 
-        # 2. 移动到分类... (仅在子分类下显示)
+        # 2. 移动到分类... (仅在具体子分类下显示，全部表情等非子分类视图绝不显示)
         if is_sub_category:
             move_to_cat_menu = SafeRoundMenu(title="移动到分类...", parent=menu)
             menu.addMenu(move_to_cat_menu)
 
             has_valid_move_cat = False
-            for cat_name in categories.keys():
+            for cat_name in valid_categories:
                 if cat_name != self.current_category:
                     has_valid_move_cat = True
                     action = Action(cat_name, parent=menu)
@@ -2337,14 +2369,22 @@ class GalleryInterface(QWidget):
         menu = SafeRoundMenu(parent=self)
 
         categories = self.storage.get_all_categories()
-        is_sub_category = self.current_category in categories
+        is_sub_category = (
+            bool(self.current_category)
+            and self.current_category not in ("全部表情", "未分类", "新建分类")
+            and self.current_category in categories
+        )
+        valid_categories = [
+            cat_name for cat_name in categories.keys()
+            if cat_name not in ("全部表情", "未分类", "新建分类")
+        ]
 
         # 1. 添加到分类...
         add_to_cat_menu = SafeRoundMenu(title="添加到分类...", parent=menu)
         menu.addMenu(add_to_cat_menu)
 
         has_valid_add_cat = False
-        for cat_name in categories.keys():
+        for cat_name in valid_categories:
             if cat_name != self.current_category:
                 has_valid_add_cat = True
                 action = Action(cat_name, parent=menu)
@@ -2354,13 +2394,13 @@ class GalleryInterface(QWidget):
         if not has_valid_add_cat:
             add_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
 
-        # 2. 移动到分类... (仅在子分类下显示)
+        # 2. 移动到分类... (仅在具体子分类下显示，全部表情等非子分类视图绝不显示)
         if is_sub_category:
             move_to_cat_menu = SafeRoundMenu(title="移动到分类...", parent=menu)
             menu.addMenu(move_to_cat_menu)
 
             has_valid_move_cat = False
-            for cat_name in categories.keys():
+            for cat_name in valid_categories:
                 if cat_name != self.current_category:
                     has_valid_move_cat = True
                     action = Action(cat_name, parent=menu)
@@ -2370,7 +2410,7 @@ class GalleryInterface(QWidget):
             if not has_valid_move_cat:
                 move_to_cat_menu.addAction(Action("(无可用分类)", parent=menu))
 
-        # 3. 从当前分类移出 (仅在子分类下显示)
+        # 3. 从当前分类移出 (仅在具体子分类下显示)
         if is_sub_category:
             remove_action = Action(f"从分类 '{self.current_category}' 移出", parent=menu)
             remove_action.triggered.connect(lambda checked=False, p=paths: self._execute_batch_remove(p))
@@ -2642,17 +2682,10 @@ class GalleryInterface(QWidget):
         if data_type == 'file':
             self._start_background_import(data)
         elif data_type == 'image':
-            saved_path, is_duplicate = self.storage.save_image(data)
-            if saved_path:
-                if is_duplicate:
-                    self.storage.move_image_to_front(saved_path, self.current_category)
-                elif self.current_category not in ("全部表情", "未分类"):
-                    self.storage.add_image_to_category(saved_path, self.current_category)
-                self.on_images_changed()
-                if is_duplicate:
-                    self.show_success("导入完成", "该图片已存在，已排至最前")
-                else:
-                    self.show_success("保存成功", "静态图片已保存")
+            thread = ImageSaveThread(data, self.storage, self.current_category, self)
+            self.image_save_threads.append(thread)
+            thread.finished.connect(self._on_image_save_finished)
+            thread.start()
         elif data_type == 'network_url':
             url = data
             self.show_success("正在下载", "正在从网络获取图片，请稍候...")
@@ -2660,6 +2693,25 @@ class GalleryInterface(QWidget):
             self.download_threads.append(thread)
             thread.finished.connect(self._on_download_finished)
             thread.start()
+
+    def _on_image_save_finished(self, saved_path, is_duplicate, target_category):
+        sender = self.sender()
+        if sender in self.image_save_threads:
+            self.image_save_threads.remove(sender)
+            sender.deleteLater()
+
+        if saved_path:
+            if is_duplicate:
+                self.storage.move_image_to_front(saved_path, target_category)
+            elif target_category not in ("全部表情", "未分类"):
+                self.storage.add_image_to_category(saved_path, target_category)
+            self.on_images_changed()
+            if is_duplicate:
+                self.show_success("导入完成", "该图片已存在，已排至最前")
+            else:
+                self.show_success("保存成功", "静态图片已保存")
+        else:
+            self.show_error("保存失败", "未能解析或保存该图像数据")
 
     def _show_exchange_menu(self):
         menu = RoundMenu(parent=self)

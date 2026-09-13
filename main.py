@@ -75,7 +75,6 @@ def main():
     
     from PySide6.QtWidgets import QProgressDialog
     from services.migration_manager import MigrationManager
-    from services.deduplication_pipeline import DeduplicationPipeline
     from fluent_ui.main_window import MainWindow
 
     # ----------------------------------------------------
@@ -99,17 +98,42 @@ def main():
         progress_dialog.close()
 
     # ----------------------------------------------------
-    # 2. 检查并建立全库表情包特征索引
+    # 2. 初始化存储服务（轻量，不做全量扫描）
     # ----------------------------------------------------
-    dedup_pipeline = DeduplicationPipeline()
-    dedup_pipeline.run_full_deduplication()
-
     storage_service = StorageService()
-    try:
-        storage_service.cleanup_dead_links()
-    except Exception as e:
-        print(f"[ERROR] 启动时执行死链自愈失败: {e}")
     clipboard_service = ClipboardService(config_service)
+
+    # 启动旧图库后台异步补全 sync_key 索引迁移
+    try:
+        from services.sync_migration import SyncKeyMigrationManager
+        sync_migration_mgr = SyncKeyMigrationManager(storage_service)
+        sync_migration_mgr.start_async_migration()
+    except Exception as e:
+        print(f"[WARNING] 启动后台 sync_key 迁移失败: {e}")
+
+    # ----------------------------------------------------
+    # 3. 重型维护任务放到后台守护线程，不阻塞 UI 显示
+    #    - cleanup_dead_links：清除失效文件的残留记录
+    #    - run_full_deduplication：全库哈希补全 + 去重索引
+    # ----------------------------------------------------
+    import threading
+    from services.deduplication_pipeline import DeduplicationPipeline
+
+    def _background_startup_tasks():
+        try:
+            storage_service.cleanup_dead_links()
+            print("[INFO] 后台死链自愈完成")
+        except Exception as e:
+            print(f"[ERROR] 后台死链自愈失败: {e}")
+        try:
+            dedup_pipeline = DeduplicationPipeline()
+            dedup_pipeline.run_full_deduplication()
+            print("[INFO] 后台去重索引建立完成")
+        except Exception as e:
+            print(f"[ERROR] 后台去重索引失败: {e}")
+
+    _bg_thread = threading.Thread(target=_background_startup_tasks, daemon=True, name="startup-maintenance")
+    _bg_thread.start()
     
     # 初始化多语言引擎
     i18n_engine.init(config_service)

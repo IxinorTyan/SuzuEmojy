@@ -15,9 +15,15 @@ def check_avx512(exe_path):
     try:
         # We use objdump from the system or zig cc if available
         # Since we know zig is used for compilation, we can try to use it
-        zig_path = r"C:\Users\14915\AppData\Local\Nuitka\Nuitka\Cache\downloads\pip\private-8c1f6f32\Lib\site-packages\ziglang\zig.exe"
+        zig_path = None
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if local_appdata:
+            import glob
+            matches = glob.glob(os.path.join(local_appdata, "Nuitka", "Nuitka", "Cache", "**", "zig.exe"), recursive=True)
+            if matches:
+                zig_path = matches[0]
         
-        if os.path.exists(zig_path):
+        if zig_path and os.path.exists(zig_path):
             cmd = [zig_path, "objdump", "-d", exe_path]
         else:
             cmd = ["objdump", "-d", exe_path]

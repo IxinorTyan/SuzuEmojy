@@ -1,6 +1,8 @@
-from PySide6.QtCore import Qt, Signal
+import os
+import sys
+from PySide6.QtCore import Qt, Signal, QUrl, QSize
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QMouseEvent, QDesktopServices, QIcon
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, ScrollArea, ExpandLayout,
     FluentIcon as FIF, TransparentToolButton, TitleLabel,
@@ -36,6 +38,8 @@ class ActionSettingCard(SettingCard):
 
 class ExchangeInterface(QWidget):
     """导出导入数据交换界面 (View)"""
+    RESOURCE_SITE_URL = "https://suzuemojy-share.pages.dev/"
+
     back_requested = Signal()
     import_requested = Signal()
     export_all_requested = Signal()
@@ -49,6 +53,23 @@ class ExchangeInterface(QWidget):
         
         self._init_ui()
         self._connect_signals()
+
+    def _get_resource_icon(self):
+        """获取资源站按钮图标 (优先 ico.ico，兜底使用 FluentIcon.SHARE)"""
+        candidates = []
+        if getattr(sys, "frozen", False):
+            if hasattr(sys, "_MEIPASS"):
+                candidates.append(os.path.join(sys._MEIPASS, "ico.ico"))
+            candidates.append(os.path.join(os.path.dirname(sys.executable), "ico.ico"))
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidates.append(os.path.join(base_dir, "ico.ico"))
+        candidates.append(os.path.abspath("ico.ico"))
+
+        for path in candidates:
+            if os.path.exists(path):
+                return QIcon(path)
+        return FIF.SHARE.icon()
 
     def _init_ui(self):
         self.mainLayout = QVBoxLayout(self)
@@ -70,6 +91,12 @@ class ExchangeInterface(QWidget):
         self.topBarLayout.addWidget(self.btnBack)
         self.topBarLayout.addWidget(self.titleLabel)
         self.topBarLayout.addStretch()
+
+        self.btnResourceSite = TransparentToolButton(self._get_resource_icon(), self.topBar)
+        self.btnResourceSite.setIconSize(QSize(20, 20))
+        self.btnResourceSite.setToolTip(t("前往资源站"))
+        self.btnResourceSite.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.RESOURCE_SITE_URL)))
+        self.topBarLayout.addWidget(self.btnResourceSite)
 
         self.mainLayout.addWidget(self.topBar)
 
@@ -165,6 +192,7 @@ class ExchangeInterface(QWidget):
         """动态刷新界面文本"""
         self.titleLabel.setText(t("导入导出"))
         self.btnBack.setToolTip(t("返回主面板"))
+        self.btnResourceSite.setToolTip(t("前往资源站"))
 
         self.resourceGroup.titleLabel.setText(t("表情资源包"))
         self.importCard.setTitle(t("导入资源包"))

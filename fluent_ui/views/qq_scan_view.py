@@ -3,7 +3,7 @@ from PySide6.QtCore import (
     QEasingCurve, QPropertyAnimation, QTimer, QEventLoop, QThread
 )
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLayout,
     QFileDialog, QMessageBox, QLabel, QListWidget, QSizePolicy
 )
 from PySide6.QtGui import (
@@ -13,7 +13,7 @@ from qfluentwidgets import (
     LineEdit, PushButton, PrimaryPushButton, ComboBox,
     TextEdit, FluentIcon as FIF, TransparentToolButton,
     TitleLabel, BodyLabel, SubtitleLabel, CardWidget, StrongBodyLabel,
-    MessageBoxBase, InfoBar
+    ScrollArea, MessageBoxBase, InfoBar
 )
 
 import os
@@ -340,9 +340,10 @@ class QQScanInterface(QWidget):
 
         # 3. QQ 数据配置卡片 (可折叠)
         self.configCard = CardWidget(self)
-        config_layout = QVBoxLayout(self.configCard)
-        config_layout.setContentsMargins(20, 14, 20, 14)
-        config_layout.setSpacing(10)
+        self.configCard.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.configCardLayout = QVBoxLayout(self.configCard)
+        self.configCardLayout.setContentsMargins(20, 14, 20, 14)
+        self.configCardLayout.setSpacing(10)
 
         # 头部：标题与折叠按钮
         config_header = QHBoxLayout()
@@ -355,21 +356,31 @@ class QQScanInterface(QWidget):
         self.collapseConfigButton.set_direction(180, animated=False)
         self.collapseConfigButton.clicked.connect(self.toggle_config)
         config_header.addWidget(self.collapseConfigButton)
-        config_layout.addLayout(config_header)
+        self.configCardLayout.addLayout(config_header)
 
-        # 表单布局：一行一项，舒展大方
-        form_layout = QVBoxLayout()
+        # 滚动区域包装表单内容，防止高度不够时挤压堆叠
+        self.configScrollArea = ScrollArea(self.configCard)
+        self.configScrollArea.setWidgetResizable(True)
+        self.configScrollArea.enableTransparentBackground()
+        self.configScrollArea.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.configScrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.configFormWidget = QWidget()
+        self.configFormWidget.setStyleSheet("background: transparent;")
+        form_layout = QVBoxLayout(self.configFormWidget)
+        form_layout.setContentsMargins(0, 0, 0, 0)
         form_layout.setSpacing(10)
+        form_layout.setSizeConstraint(QLayout.SetMinimumSize)
 
         # 行 1: 数据路径
         row1 = QHBoxLayout()
         row1.setSpacing(8)
-        self.readPathLabel = BodyLabel(t("数据路径:"), self.configCard)
+        self.readPathLabel = BodyLabel(t("数据路径:"), self.configFormWidget)
         self.readPathLabel.setFixedWidth(70)
-        self.readPathEdit = LineEdit(self.configCard)
+        self.readPathEdit = LineEdit(self.configFormWidget)
         self.readPathEdit.setReadOnly(True)
         self.readPathEdit.setPlaceholderText(t("自动定位中，或手动选择..."))
-        self.selectReadDirButton = PushButton(t("定位目录"), self.configCard)
+        self.selectReadDirButton = PushButton(t("定位目录"), self.configFormWidget)
         self.selectReadDirButton.setFixedWidth(90)
         self.selectReadDirButton.clicked.connect(self.selectReadPath)
         row1.addWidget(self.readPathLabel)
@@ -380,13 +391,13 @@ class QQScanInterface(QWidget):
         # 行 2: 保存路径
         row2 = QHBoxLayout()
         row2.setSpacing(8)
-        self.savePathLabel = BodyLabel(t("保存路径:"), self.configCard)
+        self.savePathLabel = BodyLabel(t("保存路径:"), self.configFormWidget)
         self.savePathLabel.setFixedWidth(70)
-        self.savePathEdit = LineEdit(self.configCard)
+        self.savePathEdit = LineEdit(self.configFormWidget)
         self.savePathEdit.setPlaceholderText(t("请选择表情包保存路径..."))
         if self.savePath:
             self.savePathEdit.setText(self.savePath)
-        self.selectDirButton = PushButton(t("浏览..."), self.configCard)
+        self.selectDirButton = PushButton(t("浏览..."), self.configFormWidget)
         self.selectDirButton.setFixedWidth(90)
         self.selectDirButton.clicked.connect(self.selectSavePath)
         row2.addWidget(self.savePathLabel)
@@ -397,11 +408,11 @@ class QQScanInterface(QWidget):
         # 行 3: 选择账号
         row3 = QHBoxLayout()
         row3.setSpacing(8)
-        self.userLabel = BodyLabel(t("选择账号:"), self.configCard)
+        self.userLabel = BodyLabel(t("选择账号:"), self.configFormWidget)
         self.userLabel.setFixedWidth(70)
-        self.userComboBox = ComboBox(self.configCard)
+        self.userComboBox = ComboBox(self.configFormWidget)
         self.userComboBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.helpButton = TransparentToolButton(FIF.HELP, self.configCard)
+        self.helpButton = TransparentToolButton(FIF.HELP, self.configFormWidget)
         self.helpButton.setFixedSize(32, 32)
         self.helpButton.setToolTip(t("使用帮助"))
         self.helpButton.clicked.connect(self.showHelp)
@@ -413,16 +424,16 @@ class QQScanInterface(QWidget):
         # 行 4: 选择分类
         row4 = QHBoxLayout()
         row4.setSpacing(8)
-        self.emojiFolderLabel = BodyLabel(t("选择分类:"), self.configCard)
+        self.emojiFolderLabel = BodyLabel(t("选择分类:"), self.configFormWidget)
         self.emojiFolderLabel.setFixedWidth(70)
-        self.emojiFolderComboBox = ComboBox(self.configCard)
+        self.emojiFolderComboBox = ComboBox(self.configFormWidget)
         self.emojiFolderComboBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         row4.addWidget(self.emojiFolderLabel)
         row4.addWidget(self.emojiFolderComboBox, 1)
         form_layout.addLayout(row4)
 
         # 行 5: 扫描表情包预览 (主按钮)
-        self.scanButton = PrimaryPushButton(FIF.SEARCH, t("扫描表情包预览"), self.configCard)
+        self.scanButton = PrimaryPushButton(FIF.SEARCH, t("扫描表情包预览"), self.configFormWidget)
         self.scanButton.setFixedHeight(36)
         self.scanButton.clicked.connect(self.scanEmojis)
         form_layout.addWidget(self.scanButton)
@@ -430,17 +441,19 @@ class QQScanInterface(QWidget):
         # 行 6: [导出选中] [导出全部] (两按钮合并并排在一行)
         export_btn_layout = QHBoxLayout()
         export_btn_layout.setSpacing(10)
-        self.exportSelectedButton = PushButton(FIF.DOWNLOAD, t("导出选中"), self.configCard)
+        self.exportSelectedButton = PushButton(FIF.DOWNLOAD, t("导出选中"), self.configFormWidget)
         self.exportSelectedButton.setFixedHeight(34)
         self.exportSelectedButton.clicked.connect(self.exportSelected)
-        self.exportAllButton = PushButton(FIF.FOLDER, t("导出全部"), self.configCard)
+        self.exportAllButton = PushButton(FIF.FOLDER, t("导出全部"), self.configFormWidget)
         self.exportAllButton.setFixedHeight(34)
         self.exportAllButton.clicked.connect(self.exportAll)
         export_btn_layout.addWidget(self.exportSelectedButton, 1)
         export_btn_layout.addWidget(self.exportAllButton, 1)
         form_layout.addLayout(export_btn_layout)
 
-        config_layout.addLayout(form_layout)
+        self.configScrollArea.setWidget(self.configFormWidget)
+        self.configCardLayout.addWidget(self.configScrollArea, 1)
+        self.configCard.setMinimumHeight(120)
         self.mainLayout.addWidget(self.configCard)
 
         # 4. 常驻操作工具条：[入库选中] [入库全部]   ...   [全选已加载] [清空选择]
@@ -525,13 +538,16 @@ class QQScanInterface(QWidget):
         detail_layout.setContentsMargins(14, 14, 14, 14)
         detail_layout.setSpacing(10)
 
+        self.detailWidget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.detailTitle = SubtitleLabel(t("表情详细预览"), self.detailWidget)
         detail_layout.addWidget(self.detailTitle)
 
         self.detailPreviewLabel = QLabel(self.detailWidget)
         self.detailPreviewLabel.setAlignment(Qt.AlignCenter)
         self.detailPreviewLabel.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
-        self.detailPreviewLabel.setFixedSize(250, 250)
+        self.detailPreviewLabel.setMaximumSize(250, 250)
+        self.detailPreviewLabel.setMinimumSize(80, 80)
+        self.detailPreviewLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.detailPreviewLabel.setStyleSheet(
             "background-color: rgba(0, 0, 0, 5); border: 1px solid rgba(0, 0, 0, 15); border-radius: 8px;"
         )
@@ -640,6 +656,7 @@ class QQScanInterface(QWidget):
         self.collapseConfigButton.set_direction(0, animated=animated)
         self.collapseConfigButton.setToolTip(t("展开配置面板"))
 
+        self.configCard.setMinimumHeight(0)
         if not animated:
             self.configCard.setVisible(False)
             return
@@ -660,15 +677,20 @@ class QQScanInterface(QWidget):
         self.collapseConfigButton.set_direction(180, animated=animated)
         self.collapseConfigButton.setToolTip(t("收起配置面板"))
 
+        target_h = self.configCard.sizeHint().height()
         if not animated:
             self.configCard.setMaximumHeight(16777215)
+            self.configCard.setMinimumHeight(120)
             return
 
-        target_h = self.configCard.sizeHint().height()
+        def _on_finish():
+            self.configCard.setMaximumHeight(16777215)
+            self.configCard.setMinimumHeight(120)
+
         self._animate_config(
             height_from=0,
             height_to=target_h,
-            on_finish=lambda: self.configCard.setMaximumHeight(16777215)
+            on_finish=_on_finish
         )
 
     def _animate_config(self, height_from, height_to, on_finish=None):
