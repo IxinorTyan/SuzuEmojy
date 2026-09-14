@@ -50,6 +50,10 @@ def _make_storage(tmp_path: Path) -> StorageService:
     storage._metadata_dirty = True
     storage._recent_cache = None
     storage._sync_key_index = None
+    storage._sync_index_lock = threading.RLock()
+    storage._sync_index_event = threading.Event()
+    storage._sync_index_event.set()
+    storage._sync_index_building = False
     return storage
 
 

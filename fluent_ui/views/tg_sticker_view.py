@@ -15,7 +15,7 @@ from PySide6.QtCore import (
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QSplitter, QFrame, QLayout,
     QFileDialog, QMessageBox, QLabel, QListWidget, QListWidgetItem, QSizePolicy,
-    QDialog, QTabWidget, QTextBrowser, QApplication
+    QDialog, QTabWidget, QTextBrowser, QApplication, QInputDialog
 )
 from PySide6.QtGui import (
     QIcon, QFont, QPixmap, QPainter, QColor, QMovie, QImageReader, QTextCursor,
@@ -484,10 +484,12 @@ class ImportPackThread(QThread):
         category_name: str,
         max_workers: int = 4,
         parent=None,
+        export_path: Optional[str] = None,
     ):
         super().__init__(parent)
         self.downloader = downloader
         self.storage = storage_service
+        self.export_path = export_path
         self.target_stickers = target_stickers
         self.category_name = category_name
         self.max_workers = max_workers
@@ -502,46 +504,52 @@ class ImportPackThread(QThread):
         imported_count = 0
         dup_count = 0
         fail_count = 0
+        failures = []
 
         try:
             # 创建/确保分类存在
             self.storage.add_category(self.category_name)
 
-            def _process_single(sticker: StickerItem):
+            def _download_single(sticker: StickerItem):
                 if self._is_cancelled:
                     return None
-                src_file = None
                 try:
                     file_path = self.downloader.get_file_path(sticker.file_id)
-                    raw_ext = file_path.split(".")[-1] if "." in file_path else "webp"
                     raw_bytes = self.downloader.download_file_bytes(file_path)
-
-                    src_file = os.path.join(temp_dir, f"{sticker.index + 1:03d}.{raw_ext}")
+                    src_file = os.path.join(temp_dir, f"{sticker.index + 1:03d}.download")
                     with open(src_file, "wb") as f:
                         f.write(raw_bytes)
-
-                    dest_path, is_dup = self.storage.save_file(src_file)
-                    if dest_path:
-                        self.storage.add_image_to_category(dest_path, self.category_name)
-                        return True, is_dup, sticker.index, None
-                    return False, False, sticker.index, "保存文件失败"
+                    return src_file
                 except Exception as exc:
-                    return False, False, sticker.index, str(exc)
-                finally:
-                    if src_file and os.path.exists(src_file):
-                        try:
-                            os.remove(src_file)
-                        except Exception:
-                            pass
+                    raise RuntimeError(f"下载失败: {exc}") from exc
 
-            # 使用可控并发线程池并发下载与存储
+            # 网络下载并发；清洗、索引保存和归类在当前后台线程逐张执行。
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {executor.submit(_process_single, s): s for s in self.target_stickers}
+                futures = {executor.submit(_download_single, s): s for s in self.target_stickers}
                 done_count = 0
                 for future in as_completed(futures):
                     if self._is_cancelled:
                         break
-                    res = future.result()
+                    sticker = futures[future]
+                    try:
+                        src_file = future.result()
+                        if self._is_cancelled:
+                            break
+                        dest_path, is_dup = self.storage.save_file(src_file, strict=True)
+                        if not dest_path:
+                            raise RuntimeError("清洗入库失败")
+                        try:
+                            result = self.storage.add_image_to_category(
+                                dest_path, self.category_name, strict=True,
+                            )
+                            if result not in ("success", "already_exists"):
+                                raise RuntimeError("收藏夹关联未保存")
+                        except Exception as exc:
+                            raise RuntimeError(f"加入收藏夹失败: {exc}") from exc
+                        res = True, is_dup, sticker.index, None
+                    except Exception as exc:
+                        failures.append(f"贴纸 #{sticker.index + 1}: {exc}")
+                        res = False, False, sticker.index, str(exc)
                     done_count += 1
                     if res:
                         ok, is_dup, idx, err = res
@@ -568,12 +576,41 @@ class ImportPackThread(QThread):
                     else:
                         fail_count += 1
 
+            if not self._is_cancelled and self.export_path:
+                if fail_count or not imported_count:
+                    raise ValueError(t("贴纸入库未全部成功，未导出资源包。请使用相同 ID 重试以补齐索引和收藏夹。") + "\n" + "\n".join(failures[:5]))
+                self._export_resource_package()
             if not self._is_cancelled:
                 self.finished_all.emit(imported_count, dup_count, fail_count, self.category_name)
         except Exception as e:
-            self.failed.emit(str(e))
+            if not self._is_cancelled:
+                self.failed.emit(str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _export_resource_package(self):
+        from services.exchange_export import ExchangeExportService
+
+        def progress(done, total, message):
+            if self._is_cancelled:
+                raise InterruptedError()
+            self.progress.emit(done, total, message)
+
+        # 在目标目录内暂存，成功后原子替换，避免失败或取消留下半个包。
+        destination = os.path.abspath(self.export_path)
+        with tempfile.TemporaryDirectory(prefix="tg_package_", dir=os.path.dirname(destination)) as directory:
+            temporary = os.path.join(directory, "package.zip")
+            manifest = ExchangeExportService(self.storage.base_dir).export_zip(
+                temporary,
+                selected_categories=[self.category_name],
+                export_scope="categories",
+                package_id=self.category_name,
+                progress_callback=progress,
+            )
+            if not manifest["counts"]["resources"]:
+                raise ValueError(t("收藏夹中没有可导出的资源"))
+            if not self._is_cancelled:
+                os.replace(temporary, destination)
 
 
 # ==================== TG 贴纸下载界面 ====================
@@ -838,12 +875,15 @@ class TGStickerInterface(QWidget):
             FIF.SAVE, t("入库选中"), self.actionBar
         )
         self.importAllButton = PushButton(FIF.APPLICATION, t("入库全部"), self.actionBar)
+        self.exportPackageButton = PushButton(FIF.SAVE, t("导出为资源包"), self.actionBar)
+        self.exportPackageButton.setToolTip(t("将当前贴纸包全部清洗入库到 ID 同名收藏夹，并导出为 ID.zip"))
         self.selectAllButton = PushButton(t("全选已加载"), self.actionBar)
         self.clearSelectionButton = PushButton(t("清空选择"), self.actionBar)
         self.invertSelectionButton = PushButton(t("反选"), self.actionBar)
 
         for button in (
             self.importSelectedButton, self.importAllButton,
+            self.exportPackageButton,
             self.exportSelectedButton, self.exportAllButton,
             self.selectAllButton, self.clearSelectionButton,
             self.invertSelectionButton
@@ -852,6 +892,7 @@ class TGStickerInterface(QWidget):
 
         self.importSelectedButton.clicked.connect(self.importSelected)
         self.importAllButton.clicked.connect(self.importAll)
+        self.exportPackageButton.clicked.connect(self.exportPackage)
         self.exportSelectedButton.clicked.connect(self.exportSelected)
         self.exportAllButton.clicked.connect(self.exportAll)
         self.selectAllButton.clicked.connect(self.selectAllLoaded)
@@ -860,6 +901,7 @@ class TGStickerInterface(QWidget):
 
         action_layout.addWidget(self.importSelectedButton)
         action_layout.addWidget(self.importAllButton)
+        action_layout.addWidget(self.exportPackageButton)
         action_layout.addStretch()
         action_layout.addWidget(self.selectAllButton)
         action_layout.addWidget(self.clearSelectionButton)
@@ -1010,6 +1052,7 @@ class TGStickerInterface(QWidget):
         self.exportAllButton.setEnabled(enabled)
         self.importSelectedButton.setEnabled(enabled)
         self.importAllButton.setEnabled(enabled)
+        self.exportPackageButton.setEnabled(enabled)
         self.selectAllButton.setEnabled(enabled)
         self.clearSelectionButton.setEnabled(enabled)
         self.invertSelectionButton.setEnabled(enabled)
@@ -1320,6 +1363,8 @@ class TGStickerInterface(QWidget):
     # ==========================================
 
     def startParsePack(self):
+        if self._has_running_task():
+            return
         link = self.urlInputEdit.text().strip()
         if not link:
             self.log(t("❌ 请先输入 Telegram 贴纸链接或包名！"))
@@ -1378,7 +1423,6 @@ class TGStickerInterface(QWidget):
         if self._import_thread and self._import_thread.isRunning():
             self._import_thread.cancel()
             self._import_thread.wait(200)
-            self._import_thread = None
 
         if self.detail_movie:
             try:
@@ -1733,6 +1777,8 @@ class TGStickerInterface(QWidget):
         self._executeDownload(None)
 
     def _executeDownload(self, selected_indices: Optional[List[int]]):
+        if self._has_running_task():
+            return
         out_root = self.savePathEdit.text().strip()
         if not out_root:
             out_root = os.path.abspath(os.path.join(".", "downloads"))
@@ -1829,6 +1875,70 @@ class TGStickerInterface(QWidget):
     # 导入到 SuzuEmojy 资源库逻辑
     # ==========================================
 
+    def exportPackage(self):
+        if not self.current_pack or not self.all_stickers or self._has_running_task():
+            return
+        storage = getattr(self.window(), "storage", None)
+        if storage is None:
+            QMessageBox.warning(self, t("错误"), t("无法获取表情包资源库存储服务！"))
+            return
+        package_id, accepted = QInputDialog.getText(
+            self, t("导出为资源包"),
+            t("请输入资源包 ID（同时作为收藏夹名称和 ZIP 文件名）："),
+        )
+        if not accepted:
+            return
+        package_id = package_id.strip()
+        reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+        reserved.update(f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "123456789¹²³")
+        if (not package_id or len(package_id) > 120
+                or package_id in ("全部表情", "未分类", "新建分类")
+                or any(ch in '<>:"/\\|?*' or ord(ch) < 32 for ch in package_id)
+                or package_id.endswith(".")
+                or package_id.split(".")[0].upper() in reserved):
+            QMessageBox.warning(self, t("提示"), t("请输入有效的资源包 ID：不能使用文件名禁用字符、保留名称或末尾句点，长度不超过 120。"))
+            return
+        directory = QFileDialog.getExistingDirectory(self, t("选择资源包保存目录"), self.save_path)
+        if not directory:
+            return
+        export_path = os.path.join(directory, package_id + ".zip")
+        if os.path.exists(export_path) and QMessageBox.question(
+            self, t("覆盖资源包"), t("文件已存在，是否覆盖？") + "\n" + export_path,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        self._set_busy(True)
+        self.tooltip.show(t("正在导出资源包"), t("正在下载并清洗贴纸..."))
+        worker = ImportPackThread(
+            self._get_configured_downloader(), storage, list(self.all_stickers),
+            package_id, parent=self, export_path=export_path,
+        )
+        self._import_thread = worker
+        worker.progress.connect(self._onImportProgress)
+        worker.finished_all.connect(self._onPackageFinished)
+        worker.failed.connect(self._onPackageFailed)
+        worker.start()
+
+    def _onPackageFinished(self, imported, duplicated, failed, category_name):
+        self._set_busy(False)
+        path = self._import_thread.export_path
+        refresh = getattr(self.window(), "refresh_library", None)
+        if callable(refresh):
+            refresh()
+        self.log(t("资源包导出完成") + ": " + path)
+        self.tooltip.finish(t("资源包导出完成"), path)
+        QMessageBox.information(self, t("资源包导出完成"),
+                                f"ID: {category_name}\n{path}")
+
+    def _onPackageFailed(self, message):
+        self._set_busy(False)
+        refresh = getattr(self.window(), "refresh_library", None)
+        if callable(refresh):
+            refresh()
+        self.log(message)
+        self.tooltip.finish(t("资源包导出失败"), message)
+        QMessageBox.critical(self, t("资源包导出失败"), message)
+
     def importSelected(self):
         """将选中的贴纸下载并导入到资源库"""
         if not self.current_pack:
@@ -1880,6 +1990,8 @@ class TGStickerInterface(QWidget):
         self._executeImport(None)
 
     def _executeImport(self, selected_indices: Optional[List[int]]):
+        if self._has_running_task():
+            return
         main_win = self.window()
         if not hasattr(main_win, 'storage') or not main_win.storage:
             self.log(t("❌ 导入失败，无法获取表情包资源库存储服务！"))

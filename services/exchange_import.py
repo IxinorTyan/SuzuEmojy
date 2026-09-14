@@ -13,6 +13,7 @@ from typing import Any, Mapping, Optional, Callable
 
 from PIL import Image
 from io import BytesIO
+from services.exchange_icons import IMAGE_SUFFIXES, load_icons, is_valid_icon
 
 
 class ExchangeImportError(RuntimeError):
@@ -49,6 +50,7 @@ class ExchangeImportService:
         self.base_dir = root
         self.data_dir = root / "data"
         self.images_dir = self.data_dir / "images"
+        self.warnings: list[str] = []
 
     def import_zip(
         self,
@@ -56,6 +58,7 @@ class ExchangeImportService:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> tuple[int, int]:
         archive = Path(zip_path)
+        self.warnings.clear()
         if not archive.is_file():
             raise ExchangeImportError(f"ZIP 文件不存在: {archive}")
 
@@ -68,6 +71,7 @@ class ExchangeImportService:
             manifest = self._load_json(staging / "manifest.json")
             catalog = self._load_json(staging / "catalog.json")
             resources, categories = self._parse_catalog(manifest, catalog, staging)
+            icons = self._parse_icons(catalog, staging)
 
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +88,28 @@ class ExchangeImportService:
                 connections.append(connection)
 
             category_ids = self._load_categories(connections[2])
+            existing_icons = load_icons(self.data_dir)
+            for name in categories.values():
+                connections[2].execute(
+                    "INSERT OR IGNORE INTO categories (name, sort_order) "
+                    "VALUES (?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories))", (name,)
+                )
+            for ref, icon in icons.items():
+                name = categories[ref]
+                old = existing_icons.get(name)
+                if is_valid_icon(self.data_dir, old):
+                    continue
+                if isinstance(icon, Path):
+                    icon_dir = self.data_dir / "category_icons"
+                    icon_dir.mkdir(exist_ok=True)
+                    destination = icon_dir / (self._sha256(icon) + icon.suffix.lower())
+                    if not destination.exists():
+                        shutil.copy2(icon, destination)
+                        created_files.append(destination)
+                    value = "category_icons/" + destination.name
+                else:
+                    value = icon
+                connections[2].execute("UPDATE categories SET icon_path = ? WHERE name = ?", (value, name))
             existing = self._scan_existing()
             next_order = self._next_order(connections[3])
 
@@ -115,13 +141,16 @@ class ExchangeImportService:
                     progress_callback(current_step, total_zip_files * 4, f"正在导入表情: {resource.display_name}")
                 existing_path = existing.get(resource.sync_key)
                 if existing_path is not None:
+                    self._merge_metadata(connections[1], existing_path.name, resource)
                     self._add_category_relations(
                         connections[2], resource, categories, existing_path.name, category_ids
                     )
                     skipped += 1
                     continue
 
-                base_name = resource.display_name
+                base_name = Path(resource.display_name.replace("\\", "/")).name
+                if base_name in ("", ".", ".."):
+                    base_name = self._asset_filename(resource)
                 path_obj = Path(base_name)
                 stem = path_obj.stem
                 suffix = path_obj.suffix
@@ -277,8 +306,13 @@ class ExchangeImportService:
                 raise ExchangeImportError(f"sync_key 校验失败: {asset_path}")
 
             keywords = item.get("keywords", [])
+            if manifest.get("includes_keywords") is False or manifest.get("export_scope") == "categories":
+                keywords = []
             if not isinstance(keywords, list):
                 raise ExchangeImportError("keywords 必须是列表")
+            if any(not isinstance(k, str) for k in keywords):
+                raise ExchangeImportError("keywords 必须是字符串列表")
+            keywords = list(dict.fromkeys(token for k in keywords for token in k.split()))
             resources.append(_Resource(
                 sync_key, asset_path, asset_size, asset_sha256, file_md5, pixel_md5,
                 str(item.get("format", actual["format"])), bool(item.get("is_animated", False)),
@@ -303,6 +337,47 @@ class ExchangeImportService:
         if "total_asset_bytes" in manifest and int(manifest["total_asset_bytes"]) != total_bytes:
             raise ExchangeImportError("资源总大小校验失败")
         return resources, categories
+
+    def _parse_icons(self, catalog, staging):
+        icons = {}
+        for category in catalog["categories"]:
+            icon = category.get("icon")
+            if not icon:
+                continue
+            try:
+                if icon["type"] == "text":
+                    value = icon["text"]
+                    if not isinstance(value, str) or not value.strip():
+                        raise ValueError("文字图标为空")
+                    icons[category["ref"]] = value
+                elif icon["type"] == "image":
+                    if not isinstance(icon["asset_path"], str) or not icon["asset_path"].startswith("icons/"):
+                        raise ValueError("图标路径非法")
+                    source = self._safe_asset_path(staging, icon["asset_path"])
+                    if source.suffix.lower() not in IMAGE_SUFFIXES:
+                        raise ValueError("不支持的图标格式")
+                    if source.stat().st_size != icon["asset_size"] or self._sha256(source) != icon["asset_sha256"]:
+                        raise ValueError("图标校验失败")
+                    with Image.open(source) as image:
+                        image.verify()
+                    icons[category["ref"]] = source
+                elif icon["type"] != "default":
+                    raise ValueError("不支持的图标类型")
+            except (KeyError, TypeError, ValueError, OSError, ExchangeImportError) as exc:
+                self.warnings.append(f"{category['name']}: 图标已跳过 ({exc})")
+        return icons
+
+    @staticmethod
+    def _merge_metadata(connection, image_path, resource):
+        if not resource.keywords:
+            return
+        row = connection.execute("SELECT keywords FROM image_metadata WHERE image_path = ?", (image_path,)).fetchone()
+        merged = list(dict.fromkeys((row[0] or "").split() + list(resource.keywords))) if row else list(resource.keywords)
+        connection.execute(
+            "INSERT INTO image_metadata (image_path, keywords) VALUES (?, ?) "
+            "ON CONFLICT(image_path) DO UPDATE SET keywords = excluded.keywords",
+            (image_path, " ".join(merged)),
+        )
 
     @staticmethod
     def _safe_asset_path(staging: Path, asset_path: str) -> Path:
@@ -440,5 +515,10 @@ def import_resources(
     zip_path: str | os.PathLike[str],
     base_dir: str | os.PathLike[str] | None = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    warnings: Optional[list[str]] = None,
 ) -> tuple[int, int]:
-    return ExchangeImportService(base_dir=base_dir).import_zip(zip_path, progress_callback=progress_callback)
+    service = ExchangeImportService(base_dir=base_dir)
+    result = service.import_zip(zip_path, progress_callback=progress_callback)
+    if warnings is not None:
+        warnings.extend(service.warnings)
+    return result

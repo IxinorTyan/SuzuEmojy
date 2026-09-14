@@ -32,7 +32,8 @@ class FeatureDB:
             self.base_dir = os.path.dirname(self.data_dir)
 
         self._init_db()
-        self.check_and_migrate_from_json()
+        # JSON 迁移由 main.py 启动阶段的 MigrationManager 负责。
+        # 后台索引创建 FeatureDB 时不得读取或删除运行中的 JSON 备份。
 
     def _get_connection(self) -> sqlite3.Connection:
         """获取 SQLite 数据库连接，设置 row_factory 便于按字典形式读取列名"""

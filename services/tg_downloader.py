@@ -483,7 +483,8 @@ class TGStickerDownloader:
                 png_bytes = self.webm_to_png_frame(raw_bytes)
                 return png_bytes, "png"
             elif ext == "tgs":
-                return raw_bytes, "tgs"
+                from services.tgs_converter import convert_tgs
+                return convert_tgs(raw_bytes, "png"), "png"
             return raw_bytes, ext
 
         if target_format == "gif":
@@ -491,7 +492,8 @@ class TGStickerDownloader:
                 gif_bytes = self.webm_to_gif(raw_bytes)
                 return gif_bytes, "gif"
             elif ext == "tgs":
-                return raw_bytes, "tgs"
+                from services.tgs_converter import convert_tgs
+                return convert_tgs(raw_bytes, "gif"), "gif"
             elif ext == "webp":
                 return self.webp_to_png(raw_bytes), "png"
             return raw_bytes, ext

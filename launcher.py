@@ -74,9 +74,9 @@ def find_system_python():
 def check_dependencies(python_exe):
     """检查依赖是否已安装"""
     try:
-        # 简单检查 PySide6 和 qfluentwidgets
+        # TGS 渲染也需要本地 rlottie 动态库，旧环境升级时一并补齐。
         result = subprocess.run(
-            [python_exe, "-c", "import PySide6; import qfluentwidgets"], 
+            [python_exe, "-c", "import PySide6; import qfluentwidgets; from rlottie_python.rlottie_wrapper import RLOTTIE_LIB; assert RLOTTIE_LIB is not None"],
             capture_output=True, 
             creationflags=subprocess.CREATE_NO_WINDOW
         )

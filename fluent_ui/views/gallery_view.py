@@ -53,7 +53,7 @@ class DownloadThread(QThread):
                     import urllib.parse
                     parsed_url = urllib.parse.urlparse(self.url)
                     _, ext = os.path.splitext(parsed_url.path)
-                    if ext.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.webp']:
+                    if ext.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']:
                         is_image = True
 
                 if not is_image:
@@ -198,6 +198,7 @@ class ExchangeImportThread(QThread):
     def __init__(self, zip_path, base_dir=None, parent=None):
         super().__init__(parent)
         self.zip_path = zip_path
+        self.warnings = []
         self.base_dir = base_dir
 
     def run(self):
@@ -206,7 +207,8 @@ class ExchangeImportThread(QThread):
             imported, skipped = import_resources(
                 self.zip_path,
                 base_dir=self.base_dir,
-                progress_callback=self._on_progress
+                progress_callback=self._on_progress,
+                warnings=self.warnings
             )
             self.finished.emit(imported, skipped, "")
         except Exception as e:
@@ -233,6 +235,7 @@ class ExchangeExportThread(QThread):
             manifest = export_resources(
                 self.zip_path,
                 selected_categories=self.selected_categories,
+                export_scope="all" if self.selected_categories is None else "categories",
                 base_dir=self.base_dir,
                 progress_callback=self._on_progress
             )
@@ -583,7 +586,7 @@ class CategorySidebar(QWidget):
 
             if icon_val:
                 # 判断是否是图片路径（通过后缀名判断，因为现在存的是文件名，可能不包含路径分隔符）
-                is_image_path = any(icon_val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+                is_image_path = any(icon_val.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
 
                 if is_image_path:
                     if os.path.exists(icon_val):
@@ -2783,6 +2786,8 @@ class GalleryInterface(QWidget):
                 msg += f"，跳过 {skipped} 个重复资源"
             self.storage.force_reload()
             self.show_success("导入成功", msg)
+            if self.exchange_import_thread.warnings:
+                InfoBar.warning(title="部分图标未导入", content="\n".join(self.exchange_import_thread.warnings), parent=self, duration=10000)
             self.on_images_changed()
             self.sidebar.refresh_list(self.current_category)
 

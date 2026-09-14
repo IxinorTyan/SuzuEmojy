@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
 import json
 import os
@@ -13,6 +15,7 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
 from PIL import Image
+from services.exchange_icons import load_icons, pack_icon
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,19 @@ class ExchangeExportService:
         zip_path: str,
         selected_categories: Optional[List[str]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        export_scope: Optional[str] = None,
+        package_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if package_id is not None and (not isinstance(package_id, str) or not package_id.strip()):
+            raise ValueError("资源包 ID 不能为空")
+        export_scope = export_scope or ("all" if selected_categories is None else "categories")
+        if export_scope not in ("all", "categories"):
+            raise ValueError("无效的导出范围")
+        if export_scope == "categories" and not selected_categories:
+            raise ValueError("请至少选择一个收藏夹")
+        if export_scope == "all":
+            selected_categories = None
+        include_keywords = export_scope == "all"
         os.makedirs(os.path.dirname(os.path.abspath(zip_path)), exist_ok=True)
 
         categories, warnings = self._load_categories_readonly()
@@ -104,7 +119,7 @@ class ExchangeExportService:
             if selected_categories is not None and not refs:
                 continue
 
-            meta_keywords = metadata.get(result.display_name, "")
+            meta_keywords = self._parse_keywords(metadata.get(result.display_name, "")) if include_keywords else []
             meta_quality = quality_map.get(result.display_name, 0.0)
 
             existing = resource_map.get(result.sync_key)
@@ -130,7 +145,7 @@ class ExchangeExportService:
                 continue
 
             existing["category_refs"].update(refs)
-            existing["keywords"] = self._merge_keyword_lists(existing["keywords"], meta_keywords)
+            existing["keywords"] = list(dict.fromkeys(existing["keywords"] + meta_keywords))
             existing["quality_score"] = max(float(existing["quality_score"]), float(meta_quality or 0.0))
             existing["created_at"] = min(int(existing["created_at"]), int(result.created_at))
 
@@ -157,15 +172,30 @@ class ExchangeExportService:
                 "category_refs": category_refs,
             }
             filtered_dict = {k: v for k, v in raw_dict.items() if v is not None}
+            if not include_keywords:
+                filtered_dict.pop("keywords", None)
             resources.append(filtered_dict)
 
         resources.sort(key=lambda x: (x["created_at"], x["display_name"], x["sync_key"]))
 
         categories_json = [{"ref": idx, "name": name} for idx, name in enumerate(categories.keys(), start=1)]
+        icon_assets: Dict[str, bytes] = {}
+        icons = {self._normalize_name(name): value for name, value in load_icons(self.data_dir).items()}
+        for category in categories_json:
+            try:
+                icon = pack_icon(self.data_dir, icons.get(category["name"]), icon_assets)
+                if icon:
+                    category["icon"] = icon
+            except Exception as exc:
+                warnings.append({"type": "icon_skipped", "name": category["name"], "reason": str(exc)})
         relations_count = sum(len(resource["category_refs"]) for resource in resources)
         manifest: Dict[str, Any] = {
             "format_version": 1,
-            "package_id": str(uuid.uuid4()),
+            "export_scope": export_scope,
+            "includes_keywords": include_keywords,
+            "icon_assets": len(icon_assets),
+            "total_icon_bytes": sum(map(len, icon_assets.values())),
+            "package_id": package_id if package_id is not None else str(uuid.uuid4()),
             "exporter": "pc",
             "app_version": self.app_version,
             "exported_at": int(datetime.now(timezone.utc).timestamp() * 1000),
@@ -198,6 +228,8 @@ class ExchangeExportService:
         ) as zf:
             zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
             zf.writestr("catalog.json", json.dumps(catalog, ensure_ascii=False, indent=2))
+            for path, payload in icon_assets.items():
+                zf.writestr(path, payload)
             total_resources = len(resources)
             for idx, item in enumerate(resources):
                 if progress_callback:
@@ -292,7 +324,7 @@ class ExchangeExportService:
 
         if os.path.exists(self.categories_db_path):
             try:
-                with sqlite3.connect(f"file:{self.categories_db_path}?mode=ro", uri=True) as conn:
+                with closing(sqlite3.connect(f"file:{self.categories_db_path}?mode=ro", uri=True)) as conn:
                     cur = conn.cursor()
                     cur.execute("SELECT name FROM categories ORDER BY sort_order ASC, id ASC")
                     names = [row[0] for row in cur.fetchall()]
@@ -362,7 +394,7 @@ class ExchangeExportService:
 
         if os.path.exists(self.metadata_db_path):
             try:
-                with sqlite3.connect(f"file:{self.metadata_db_path}?mode=ro", uri=True) as conn:
+                with closing(sqlite3.connect(f"file:{self.metadata_db_path}?mode=ro", uri=True)) as conn:
                     cur = conn.cursor()
                     cur.execute("SELECT image_path, keywords FROM image_metadata")
                     for image_path, keywords in cur.fetchall():
@@ -389,7 +421,7 @@ class ExchangeExportService:
             return result
 
         try:
-            with sqlite3.connect(f"file:{self.features_db_path}?mode=ro", uri=True) as conn:
+            with closing(sqlite3.connect(f"file:{self.features_db_path}?mode=ro", uri=True)) as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT image_path, quality_score FROM image_features")
                 for image_path, quality_score in cur.fetchall():
@@ -508,9 +540,11 @@ def export_resources(
     base_dir: Optional[str] = None,
     selected_categories: Optional[List[str]] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    export_scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     return ExchangeExportService(base_dir=base_dir).export_zip(
         zip_path,
         selected_categories=selected_categories,
         progress_callback=progress_callback,
+        export_scope=export_scope,
     )

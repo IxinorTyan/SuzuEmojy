@@ -6,11 +6,22 @@ import json
 import hashlib
 import io
 import sqlite3
+import time
+from functools import wraps
 from PIL import Image
+from services.exchange_icons import IMAGE_SUFFIXES, resolve_icon_path, portable_icon_path
+
+
+def _storage_locked(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+    return locked
 
 
 class StorageService:
-    SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.webm')
+    SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.webm', '.tgs')
 
     def __init__(self):
         import sys
@@ -73,7 +84,7 @@ class StorageService:
 
         self._repair_orphaned_resources()
 
-    def _persist_sync_key(self, filename, sync_key, file_size, mtime_ns, md5_val=None):
+    def _persist_sync_key(self, filename, sync_key, file_size, mtime_ns, md5_val=None, strict=False):
         """持久化 sync_key 及其文件状态校验字段到 SQLite features.db"""
         try:
             with sqlite3.connect(self.features_db_path) as conn:
@@ -90,6 +101,8 @@ class StorageService:
                 conn.commit()
         except Exception as e:
             print(f"[WARNING] 持久化 sync_key 失败: {e}")
+            if strict:
+                raise
 
     def _remove_feature_record(self, filename):
         """从 features.db 移除失效文件的特征记录"""
@@ -202,6 +215,7 @@ class StorageService:
 
         return self._sync_key_index
 
+    @_storage_locked
     def _atomic_save_json(self, target_file, data, indent=4):
         """原子写入 JSON，防止文件写入损坏"""
         temp_file = f"{target_file}.{uuid.uuid4()}.tmp"
@@ -210,7 +224,14 @@ class StorageService:
                 json.dump(data, f, indent=indent, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp_file, target_file)
+            for attempt in range(5):
+                try:
+                    os.replace(temp_file, target_file)
+                    break
+                except OSError as exc:
+                    if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 4:
+                        raise
+                    time.sleep(0.05 * (2 ** attempt))
         finally:
             if os.path.exists(temp_file):
                 try:
@@ -326,6 +347,7 @@ class StorageService:
     # 哈希缓存 (Hashes) - DB 与 JSON 双写双读
     # ==========================
 
+    @_storage_locked
     def _load_hashes(self):
         hashes = {}
         # 1. 先从 DB (features.db) 读取
@@ -358,7 +380,7 @@ class StorageService:
 
         return hashes
 
-    def _save_hashes(self):
+    def _save_hashes(self, strict=False):
         with self.lock:
             # 1. 保存到 JSON
             self._atomic_write_json(self.hashes_file, self._hashes_cache)
@@ -379,6 +401,8 @@ class StorageService:
                         conn.commit()
             except Exception as e:
                 print(f"[ERROR] 保存到 features.db 失败: {e}")
+                if strict:
+                    raise
 
     def _repair_orphaned_resources(self):
         """自愈孤儿资源：检查本地图片文件是否缺失 order 记录，缺失时仅做轻量补录。
@@ -553,6 +577,7 @@ class StorageService:
     # 分类 (Categories) - DB 与 JSON 双写双读
     # ==========================
     
+    @_storage_locked
     def get_all_categories(self):
         """获取所有分类及其包含的图片绝对路径列表"""
         if not self._categories_dirty:
@@ -614,7 +639,8 @@ class StorageService:
             self._categories_dirty = False
             return self._categories_cache
 
-    def save_categories(self, categories_data):
+    @_storage_locked
+    def save_categories(self, categories_data, strict=False):
         """保存分类数据 - DB 与 JSON 双写"""
         portable_data = {}
         for category, paths in categories_data.items():
@@ -626,6 +652,8 @@ class StorageService:
             self._categories_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_categories JSON 失败: {e}")
+            if strict:
+                raise
 
         # 2. 写 categories.db
         try:
@@ -649,12 +677,15 @@ class StorageService:
             self._categories_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_categories DB 失败: {e}")
+            if strict:
+                raise
 
     def get_exportable_categories(self):
         """获取可导出的用户分类名称列表，保持当前分类排序"""
         categories = self.get_all_categories()
         return list(categories.keys())
 
+    @_storage_locked
     def add_category(self, category_name):
         """新建一个分类"""
         if not category_name or category_name in ("全部表情", "未分类", "新建分类"):
@@ -740,9 +771,10 @@ class StorageService:
             return True
         return False
 
-    def add_image_to_category(self, filepath, category_name):
+    @_storage_locked
+    def add_image_to_category(self, filepath, category_name, strict=False):
         """将图片添加到指定分类"""
-        categories = self.get_all_categories()
+        categories = {name: list(paths) for name, paths in self.get_all_categories().items()}
         if category_name not in categories:
             categories[category_name] = []
             
@@ -750,10 +782,16 @@ class StorageService:
         if abs_filepath not in categories[category_name]:
             categories[category_name].append(abs_filepath)
             try:
-                self.save_categories(categories)
+                self.save_categories(categories, strict=strict)
                 return "success"
             except Exception:
+                self._categories_dirty = True
+                if strict:
+                    raise
                 return "error"
+        if strict:
+            # JSON 备份可能成功而 DB 失败；重试不能仅依赖内存/JSON 判定完成。
+            self.save_categories(categories, strict=True)
         return "already_exists"
 
     def remove_image_from_category(self, filepath, category_name):
@@ -908,8 +946,8 @@ class StorageService:
                     cursor.execute("SELECT name, icon_path FROM categories WHERE icon_path IS NOT NULL AND icon_path != ''")
                     for row in cursor.fetchall():
                         cat_name, icon_p = row[0], row[1]
-                        if any(icon_p.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
-                            icons[cat_name] = self._to_abspath(icon_p)
+                        if any(icon_p.lower().endswith(ext) for ext in IMAGE_SUFFIXES):
+                            icons[cat_name] = str(resolve_icon_path(self.data_dir, icon_p))
                         else:
                             icons[cat_name] = icon_p
             except Exception as e:
@@ -922,8 +960,8 @@ class StorageService:
                     json_icons = json.load(f)
                     for cat, val in json_icons.items():
                         if cat not in icons:
-                            if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
-                                icons[cat] = self._to_abspath(val)
+                            if any(val.lower().endswith(ext) for ext in IMAGE_SUFFIXES):
+                                icons[cat] = str(resolve_icon_path(self.data_dir, val))
                             else:
                                 icons[cat] = val
             except Exception:
@@ -935,8 +973,8 @@ class StorageService:
         """保存分类图标数据 - DB 与 JSON 双写"""
         portable_data = {}
         for cat, val in icons_data.items():
-            if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
-                portable_data[cat] = self._to_filename(val)
+            if any(val.lower().endswith(ext) for ext in IMAGE_SUFFIXES):
+                portable_data[cat] = portable_icon_path(self.data_dir, val)
             else:
                 portable_data[cat] = val
 
@@ -1093,10 +1131,19 @@ class StorageService:
     def detect_format_magic(data_bytes: bytes) -> str:
         """
         根据文件魔数识别真实格式
-        返回值: 'webm', 'webp', 'gif', 'png', 'jpeg', 'apng', 'bmp', 'tiff', 或 'unknown'
+        返回值: 'tgs', 'webm', 'webp', 'gif', 'png', 'jpeg', 'apng', 'bmp', 'tiff', 或 'unknown'
         """
         if not data_bytes or len(data_bytes) < 4:
             return "unknown"
+
+        # TGS 是 gzip 压缩的 Lottie JSON，不能把所有 gzip 都当成贴纸。
+        if data_bytes[:2] == b"\x1f\x8b":
+            try:
+                from services.tgs_converter import read_tgs_json
+                read_tgs_json(data_bytes)
+                return "tgs"
+            except ValueError:
+                pass
 
         # WebM / Matroska 魔数: 1A 45 DF A3
         if data_bytes.startswith(b"\x1a\x45\xdf\xa3"):
@@ -1138,6 +1185,11 @@ class StorageService:
         若转码失败则抛出异常或返回 None
         """
         fmt = self.detect_format_magic(data_bytes)
+
+        # 矢量动画先渲染为 GIF，再复用 GIF 的单帧归一化和去重流程。
+        if fmt == "tgs":
+            from services.tgs_converter import convert_tgs
+            return self._convert_source_to_standard_bytes(convert_tgs(data_bytes, "gif"))
 
         # 1. 动态 WebM 视频 -> 转为 GIF
         if fmt == "webm":
@@ -1264,7 +1316,9 @@ class StorageService:
 
         return data_bytes, fmt, False
 
-    def _standardize_and_save(self, data_bytes, original_ext, source_path=None, pil_source=None):
+    @_storage_locked
+    def _standardize_and_save(self, data_bytes, original_ext, source_path=None, pil_source=None, strict=False):
+        stage = "清洗失败"
         try:
             # 步骤 1：格式归一化预处理
             if pil_source is not None:
@@ -1299,37 +1353,36 @@ class StorageService:
                 file_hash = self._calculate_bytes_hash(final_bytes)
 
             # 步骤 3：哈希查重与去重入库
+            stage = "索引保存失败"
             # L1 快路径：用最终入库文件的 file_md5 在 _hashes_cache 中查找
             if file_hash and file_hash in self._hashes_cache:
                 existing_filename = self._hashes_cache[file_hash]
                 existing_path = self._to_abspath(existing_filename)
                 if os.path.exists(existing_path):
+                    self._repair_saved_index(existing_path, file_hash, strict=strict)
                     self.move_image_to_front(existing_path)
                     return existing_path, True
                 else:
                     del self._hashes_cache[file_hash]
 
-            # L2 像素路径：快路径未命中且为静态图时，与本地 images 目录的 sync_key 索引比对
-            if not is_animated:
-                pixel_hash = self._calculate_pixel_hash(clean_img)
-                if pixel_hash:
-                    skey = f"p:{pixel_hash}"
-                    sync_index = self._get_sync_key_index()
-                    if skey in sync_index:
-                        existing_filename = sync_index[skey]
-                        existing_path = self._to_abspath(existing_filename)
-                        if os.path.exists(existing_path):
-                            self._hashes_cache[file_hash] = existing_filename
-                            self._save_hashes()
-                            self.move_image_to_front(existing_path)
-                            return existing_path, True
-                        else:
-                            # 死链自动驱逐：外部已删除该文件，立即从内存索引与 DB 剔除
-                            with self._sync_index_lock:
-                                sync_index.pop(skey, None)
-                            self._remove_feature_record(existing_filename)
+            # L2 也扫描已落盘但缺少哈希记录的资源，支持重启后的恢复。
+            pixel_hash = self._calculate_pixel_hash(clean_img) if not is_animated else None
+            skey = f"f:{file_hash}" if is_animated else (f"p:{pixel_hash}" if pixel_hash else None)
+            if skey:
+                sync_index = self._get_sync_key_index()
+                existing_filename = sync_index.get(skey)
+                if existing_filename:
+                    existing_path = self._to_abspath(existing_filename)
+                    if os.path.exists(existing_path):
+                        self._repair_saved_index(existing_path, file_hash, strict=strict)
+                        self.move_image_to_front(existing_path)
+                        return existing_path, True
+                    with self._sync_index_lock:
+                        sync_index.pop(skey, None)
+                    self._remove_feature_record(existing_filename)
 
             # 步骤 4：正式写入磁盘
+            stage = "图片写入失败"
             filename = self.generate_new_filename(final_ext)
             filepath = os.path.join(self.images_dir, filename)
 
@@ -1337,8 +1390,9 @@ class StorageService:
                 f.write(final_bytes)
 
             if file_hash:
+                stage = "索引保存失败"
                 self._hashes_cache[file_hash] = filename
-                self._save_hashes()
+                self._save_hashes(strict=strict)
 
             # 获取落盘后的准确文件状态
             try:
@@ -1356,19 +1410,41 @@ class StorageService:
                     skey = f"p:{pixel_hash}"
                     with self._sync_index_lock:
                         self._get_sync_key_index()[skey] = filename
-                    self._persist_sync_key(filename, skey, cur_size, cur_mtime_ns, md5_val=file_hash)
+                    self._persist_sync_key(filename, skey, cur_size, cur_mtime_ns, md5_val=file_hash, strict=strict)
             else:
                 skey = f"f:{file_hash}"
                 with self._sync_index_lock:
                     self._get_sync_key_index()[skey] = filename
-                self._persist_sync_key(filename, skey, cur_size, cur_mtime_ns, md5_val=file_hash)
+                self._persist_sync_key(filename, skey, cur_size, cur_mtime_ns, md5_val=file_hash, strict=strict)
 
             self._images_dirty = True
             return self._to_abspath(filename), False
 
         except Exception as e:
-            print(f"[ERROR] 图片标准化保存失败: {e}")
+            print(f"[ERROR] {stage}: {e}")
+            if strict:
+                raise RuntimeError(f"{stage}: {e}") from e
             return None, False
+
+    def _repair_saved_index(self, filepath, file_hash, strict=False):
+        """重复文件也补齐持久化索引，恢复此前落盘后中断的入库。"""
+        filename = self._to_filename(filepath)
+        # 像素相同的文件编码可能不同；数据库记录必须使用实际落盘字节的哈希。
+        with open(filepath, "rb") as source:
+            actual_hash = self._calculate_bytes_hash(source.read())
+        self._hashes_cache[file_hash] = filename
+        self._hashes_cache[actual_hash] = filename
+        self._save_hashes(strict=strict)
+        file_hash = actual_hash
+        with Image.open(filepath) as image:
+            animated = getattr(image, "is_animated", False)
+            skey = f"f:{file_hash}" if animated else f"p:{self._calculate_pixel_hash(image)}"
+        stat = os.stat(filepath)
+        self._persist_sync_key(filename, skey, stat.st_size, stat.st_mtime_ns, file_hash, strict=strict)
+        index = self._get_sync_key_index()
+        with self._sync_index_lock:
+            index[skey] = filename
+        self._images_dirty = True
 
     def save_image(self, qimage):
         """
@@ -1394,8 +1470,10 @@ class StorageService:
             qimage.save(buffer, "PNG")
             return self._standardize_and_save(byte_array.data(), ".png")
 
-    def save_file(self, source_path):
+    def save_file(self, source_path, strict=False):
         if not os.path.exists(source_path):
+            if strict:
+                raise FileNotFoundError(source_path)
             return None, False
 
         try:
@@ -1407,11 +1485,14 @@ class StorageService:
             if not ext:
                 ext = ".png"
 
-            return self._standardize_and_save(data_bytes, ext, source_path=source_path)
+            return self._standardize_and_save(data_bytes, ext, source_path=source_path, strict=strict)
         except Exception as e:
-            print(f"[ERROR] 读取文件失败: {e}")
+            if strict:
+                raise
+            print(f"[ERROR] 文件入库失败: {e}")
             return None, False
 
+    @_storage_locked
     def force_reload(self):
         """强制清空内存缓存，从 SQLite DB 重新加载并同步保存到 JSON 备份文件"""
         self._images_dirty = True
@@ -1454,8 +1535,8 @@ class StorageService:
         try:
             portable_icons = {}
             for cat, val in category_icons.items():
-                if any(val.lower().endswith(ext) for ext in self.SUPPORTED_FORMATS):
-                    portable_icons[cat] = self._to_filename(val)
+                if any(val.lower().endswith(ext) for ext in IMAGE_SUFFIXES):
+                    portable_icons[cat] = portable_icon_path(self.data_dir, val)
                 else:
                     portable_icons[cat] = val
             self._atomic_write_json(self.icons_file, portable_icons)
