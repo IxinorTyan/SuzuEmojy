@@ -341,6 +341,18 @@ class SettingInterface(QWidget):
         )
         self.showSettingBtnCard.setChecked(self.config.get("show_setting_button", True))
         
+        self.showMultiSelectBtnConfigItem = ConfigItem(
+            "Theme", "ShowMultiSelectButton", True,
+            BoolValidator()
+        )
+        self.showMultiSelectBtnConfigItem.value = self.config.get("show_multi_select_button", True)
+        
+        self.showMultiSelectBtnCard = SwitchSettingCard(
+            FIF.TILES, t("显示多选入口"), t("在主面板右上角显示多选（批量选择）按钮"),
+            configItem=self.showMultiSelectBtnConfigItem, parent=self.themeGroup
+        )
+        self.showMultiSelectBtnCard.setChecked(self.config.get("show_multi_select_button", True))
+        
         # =================== 3. 高级设置 ===================
         self.advancedGroup = SettingCardGroup(t("高级设置"), self.scrollWidget)
         
@@ -436,6 +448,7 @@ class SettingInterface(QWidget):
         self.themeGroup.addSettingCard(self.themeColorCard)
         self.themeGroup.addSettingCard(self.sidebarIconSizeCard)
         self.themeGroup.addSettingCard(self.showSettingBtnCard)
+        self.themeGroup.addSettingCard(self.showMultiSelectBtnCard)
         self.themeGroup.addSettingCard(self.useSystemFontCard)
         
         # 将卡片加入高级设置组
@@ -505,6 +518,8 @@ class SettingInterface(QWidget):
         self.sidebarIconSizeCard.setContent(t("设置左侧分类列表图标的尺寸"))
         self.showSettingBtnCard.setTitle(t("显示设置入口"))
         self.showSettingBtnCard.setContent(t("在主面板右上角显示快速进入设置的按钮"))
+        self.showMultiSelectBtnCard.setTitle(t("显示多选入口"))
+        self.showMultiSelectBtnCard.setContent(t("在主面板右上角显示多选（批量选择）按钮"))
         
         self.advancedGroup.titleLabel.setText(t("高级设置"))
         self.sendAsGifCard.setTitle(t("发送时将静态图转为GIF"))
@@ -535,6 +550,7 @@ class SettingInterface(QWidget):
         self.previewSizeCard.valueChanged.connect(lambda v: self._save_config("preview_size", v))
         self.sidebarIconSizeCard.valueChanged.connect(lambda v: self._save_config("sidebar_icon_size", v, True))
         self.showSettingBtnCard.checkedChanged.connect(lambda v: self._save_config("show_setting_button", v, True))
+        self.showMultiSelectBtnCard.checkedChanged.connect(lambda v: self._save_config("show_multi_select_button", v, True))
         self.sendAsGifCard.checkedChanged.connect(lambda v: self._save_config("convert_static_to_gif", v, True))
         self.sidebarTooltipCard.checkedChanged.connect(lambda v: self._save_config("show_sidebar_tooltip", v, True))
         self.batchSizeCard.valueChanged.connect(lambda v: self._save_config("render_batch_size", v))

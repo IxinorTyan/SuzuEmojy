@@ -4,6 +4,14 @@
     "preview_size": 320,
     "use_system_font": false,
     "convert_static_to_gif": true,
+    "show_setting_button": true,
+    "show_multi_select_button": true,
     "qq_save_path": "D:/14915/Videos",
-    "qq_data_path": "D:\\14915\\Videos\\Tencent Files"
+    "qq_data_path": "D:\\14915\\Videos\\Tencent Files",
+    "window_geometry": [
+        359,
+        243,
+        999,
+        510
+    ]
 }

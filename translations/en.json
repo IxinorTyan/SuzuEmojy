@@ -27,6 +27,8 @@
     "设置左侧分类列表图标的尺寸": "Set the size of the left category list icons",
     "显示设置入口": "Show Settings Entry",
     "在主面板右上角显示快速进入设置的按钮": "Show a button in the top right corner of the main panel to quickly enter settings",
+    "显示多选入口": "Show Multi-Select Entry",
+    "在主面板右上角显示多选（批量选择）按钮": "Display multi-select button in the top right corner of the main panel",
     "高级设置": "Advanced Settings",
     "悬停预览延迟": "Hover Preview Delay",
     "设置鼠标悬停多久后弹出大图预览": "Set how long to hover before popping up the large image preview",

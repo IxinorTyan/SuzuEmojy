@@ -7,7 +7,7 @@ import hashlib
 import tempfile
 import configparser
 from pathlib import Path
-from PIL import Image, ImageSequence
+from PIL import Image
 
 from services.marketface_handler import (
     get_recovered_gif_path,
@@ -67,6 +67,27 @@ class QQExtractor:
         return temp_dir
 
     @staticmethod
+    def _quantize_gif_frame(frame):
+        """GIF 只有一位透明度：裁掉低覆盖率边缘，避免半透明像素变成实色毛边。"""
+        rgba = frame.convert('RGBA')
+        transparent = rgba.getchannel('A').point(lambda alpha: 255 if alpha < 128 else 0)
+        rgb = rgba.convert('RGB')
+        # 透明像素的 RGB 可能是任意颜色，不应挤占主体的调色板。
+        rgb.paste((0, 0, 0), mask=transparent)
+        indexed = rgb.quantize(
+            colors=255, method=Image.Quantize.MEDIANCUT,
+            dither=Image.Dither.NONE,
+        )
+        # 固定保留最后一个索引，防止量化把不透明颜色与透明色混用。
+        palette = indexed.getpalette()[:765]
+        indexed.putpalette(palette + [0] * (768 - len(palette)))
+        indexed.paste(255, mask=transparent)
+        # 不让 PNG 的 loop 等元数据被 GIF 保存器按另一套语义继承。
+        indexed.info.clear()
+        indexed.info['transparency'] = 255
+        return indexed
+
+    @staticmethod
     def convert_apng_to_gif(apng_path, output_gif_path=None):
         """
         将 APNG 转换为带透明度的标准 GIF 动图。
@@ -76,34 +97,32 @@ class QQExtractor:
         if not os.path.exists(apng_path):
             return None
 
-        if output_gif_path is None:
+        use_cache = output_gif_path is None
+        if use_cache:
             try:
                 with open(apng_path, 'rb') as f:
                     content = f.read()
                 file_hash = hashlib.md5(content).hexdigest()
             except Exception:
-                file_hash = hashlib.md5(apng_path.encode('utf-8')).hexdigest()
-            output_gif_path = os.path.join(QQExtractor.get_temp_gif_cache_dir(), f"{file_hash}.gif")
+                file_hash = hashlib.md5(os.fsencode(apng_path)).hexdigest()
+            output_gif_path = os.path.join(QQExtractor.get_temp_gif_cache_dir(), f"{file_hash}_v2.gif")
 
         # 如果临时缓存已存在且非空，直接返回
-        if os.path.exists(output_gif_path) and os.path.getsize(output_gif_path) > 0:
+        if use_cache and os.path.exists(output_gif_path) and os.path.getsize(output_gif_path) > 0:
             return output_gif_path
 
         try:
-            im = Image.open(apng_path)
             frames = []
             durations = []
-            
-            # 逐帧提取
-            for frame in ImageSequence.Iterator(im):
-                # 保持 RGBA 色彩与透明通道
-                rgba_frame = frame.convert('RGBA')
-                frames.append(rgba_frame)
-                # 获取帧间隔时间，默认为 40ms (25fps)
-                dur = frame.info.get('duration', 40)
-                if dur <= 0:
-                    dur = 40
-                durations.append(dur)
+            with Image.open(apng_path) as im:
+                plays = im.info.get('loop', 0)
+                # APNG 可有不参与动画的默认封面；Pillow seek 已处理 blend/disposal。
+                start = 1 if im.info.get('default_image', False) else 0
+                for index in range(start, getattr(im, 'n_frames', 1)):
+                    im.seek(index)
+                    frames.append(QQExtractor._quantize_gif_frame(im))
+                    dur = im.info.get('duration', 40)
+                    durations.append(dur if dur > 0 else 40)
 
             if not frames:
                 return None
@@ -111,14 +130,19 @@ class QQExtractor:
             # 确保目标目录存在
             os.makedirs(os.path.dirname(os.path.abspath(output_gif_path)), exist_ok=True)
 
-            # 保存为 GIF (disposal=2 防止帧残留叠影)
+            # APNG loop 是总播放次数，GIF loop 是首次播放之后的重复次数。
+            loop_options = {'loop': 0 if plays == 0 else plays - 1} if plays != 1 else {}
+            # 固定透明背景与索引，禁止保存器重排透明色；disposal=2 清除上一帧。
             frames[0].save(
                 output_gif_path,
                 save_all=True,
                 append_images=frames[1:],
                 duration=durations,
-                loop=0,
-                disposal=2
+                disposal=2,
+                transparency=255,
+                background=255,
+                optimize=False,
+                **loop_options,
             )
             return output_gif_path
         except Exception as e:

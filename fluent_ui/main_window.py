@@ -527,6 +527,11 @@ class MainWindow(FramelessWindow):
             is_show = self.config.get("show_setting_button", True)
             self.gallery_interface.btn_setting.setVisible(is_show)
             
+        elif changed_key == "show_multi_select_button":
+            is_show = self.config.get("show_multi_select_button", True)
+            if not getattr(self.gallery_interface, "is_selection_mode", False):
+                self.gallery_interface.btn_multi_select.setVisible(is_show)
+            
         elif changed_key in ["global_hotkey", "quick_panel_hotkey"]:
             self.bind_global_hotkey()
             
