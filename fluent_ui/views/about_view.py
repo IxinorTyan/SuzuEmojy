@@ -59,6 +59,8 @@ class AvatarLoader(QThread):
             except Exception as e:
                 print(f"[About] 读取本地头像缓存失败: {e}")
 
+        if self.isInterruptionRequested():
+            return
         # 2. 网络异步下载更新
         try:
             import requests
@@ -69,6 +71,8 @@ class AvatarLoader(QThread):
                 timeout=8,
                 headers={"User-Agent": "SuzuEmojy-Client"}
             )
+            if self.isInterruptionRequested():
+                return
             if response.status_code == 200 and response.content:
                 pixmap = QPixmap()
                 if pixmap.loadFromData(response.content):
@@ -261,8 +265,23 @@ class AboutInterface(QWidget):
         self.setObjectName("AboutInterface")
 
         self._init_ui()
-        self._load_avatar()
+        self.avatar_thread = None
+        QApplication.instance().aboutToQuit.connect(self.shutdown)
         i18n_engine.language_changed.connect(self.update_texts)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.avatar_thread is None:
+            self._load_avatar()
+
+    def shutdown(self):
+        if self.avatar_thread is not None and self.avatar_thread.isRunning():
+            self.avatar_thread.requestInterruption()
+            self.avatar_thread.wait()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
 
     def _init_ui(self):
         self.mainLayout = QVBoxLayout(self)

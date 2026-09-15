@@ -23,8 +23,7 @@ class TestAboutView(unittest.TestCase):
         self.about = AboutInterface()
 
     def tearDown(self):
-        if hasattr(self.about, "avatar_thread") and self.about.avatar_thread.isRunning():
-            self.about.avatar_thread.wait(1000)
+        self.about.shutdown()
         self.about.deleteLater()
 
     def test_ui_components_exist(self):

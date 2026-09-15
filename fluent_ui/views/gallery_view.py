@@ -807,6 +807,7 @@ class GalleryInterface(QWidget):
     重构后的 Gallery 视图，包含左侧分类栏和右侧表情网格
     """
     setting_requested = Signal()
+    exchange_requested = Signal()
 
     def __init__(self, storage_service, clipboard_service, config_service, parent=None):
         super().__init__(parent=parent)
@@ -953,10 +954,15 @@ class GalleryInterface(QWidget):
         self.btn_setting.setToolTip("设置")
         self.btn_setting.setVisible(self.config.get("show_setting_button", True))
         self.btn_setting.clicked.connect(self.setting_requested.emit)
+
+        self.btn_exchange = TransparentToolButton(FIF.SHARE, self.top_bar)
+        self.btn_exchange.setToolTip("导入导出")
+        self.btn_exchange.clicked.connect(self.exchange_requested.emit)
         
         self.top_bar_layout.addStretch() # 把搜索框推到右边
         self.top_bar_layout.addWidget(self.btn_multi_select)
         self.top_bar_layout.addWidget(self.btn_filter)
+        self.top_bar_layout.addWidget(self.btn_exchange)
         self.top_bar_layout.addWidget(self.btn_setting)
         self.top_bar_layout.addWidget(self.search_box)
         
@@ -1033,6 +1039,91 @@ class GalleryInterface(QWidget):
         
         # 监听滚动条实现懒加载
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
+
+    def _import_exchange_package(self):
+        from PySide6.QtWidgets import QFileDialog
+        from services.exchange_import import ExchangeImportService
+        from fluent_ui.components.exchange_task_dialog import run_exchange_task
+
+        if self.import_thread is not None and self.import_thread.isRunning():
+            self.show_error("导入中", "请等待当前导入任务完成")
+            return
+        path, _ = QFileDialog.getOpenFileName(self.window(), "导入资源包", "", "资源包 (*.zip)")
+        if not path:
+            return
+        service = ExchangeImportService(self.storage.base_dir)
+        try:
+            saved, skipped = run_exchange_task(
+                self.window(), "正在导入资源包", lambda progress: service.import_zip(path, progress)
+            )
+            self.storage.force_reload()
+            self.sidebar.refresh_list(self.current_category)
+            self.force_refresh_sidebar_icons()
+            self.on_images_changed()
+            message = f"新增 {saved} 个，跳过 {skipped} 个"
+            if service.warnings:
+                message += "\n" + "\n".join(map(str, service.warnings))
+            self.show_success("导入完成", message)
+        except Exception as exc:
+            self.show_error("导入失败", str(exc))
+
+    def _export_all_exchange_package(self):
+        self._export_exchange_package()
+
+    def _export_selected_categories_exchange_package(self):
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+
+        categories = self.storage.get_all_categories()
+        if not categories:
+            self.show_error("无法导出", "请先创建收藏分类")
+            return
+        dialog = QDialog(self.window())
+        dialog.setWindowTitle("选择要导出的分类")
+        layout = QVBoxLayout(dialog)
+        choices = QListWidget(dialog)
+        for name in categories:
+            item = QListWidgetItem(name, choices)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+        layout.addWidget(choices)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dialog)
+        buttons.button(QDialogButtonBox.Ok).setEnabled(False)
+        choices.itemChanged.connect(lambda _: buttons.button(QDialogButtonBox.Ok).setEnabled(
+            any(choices.item(i).checkState() == Qt.Checked for i in range(choices.count()))
+        ))
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(360, 420)
+        if dialog.exec() == QDialog.Accepted:
+            selected = [choices.item(i).text() for i in range(choices.count())
+                        if choices.item(i).checkState() == Qt.Checked]
+            self._export_exchange_package(selected)
+
+    def _export_exchange_package(self, selected_categories=None):
+        from PySide6.QtWidgets import QFileDialog
+        from services.exchange_export import ExchangeExportService
+        from fluent_ui.components.exchange_task_dialog import run_exchange_task
+
+        path, _ = QFileDialog.getSaveFileName(
+            self.window(), "导出资源包", "SuzuEmojy.zip", "资源包 (*.zip)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+        try:
+            service = ExchangeExportService(self.storage.base_dir)
+            manifest = run_exchange_task(self.window(), "正在导出资源包", lambda progress:
+                service.export_zip(path, selected_categories, progress))
+            message = f"资源包已保存到\n{path}"
+            if manifest.get("skipped"):
+                message += f"\n跳过 {len(manifest['skipped'])} 个不支持的文件，详见包内 manifest.json"
+            if manifest.get("warnings"):
+                message += f"\n有 {len(manifest['warnings'])} 条导出提示，详见包内 manifest.json"
+            self.show_success("导出完成", message)
+        except Exception as exc:
+            self.show_error("导出失败", str(exc))
 
     def _apply_lazy_loading(self):
         if not hasattr(self, '_all_card_widgets'):

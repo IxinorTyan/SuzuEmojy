@@ -222,6 +222,8 @@ class MainWindow(FramelessWindow):
         """保存窗口状态和布局比例"""
         geo = self.geometry()
         self.config.set("window_geometry", [geo.x(), geo.y(), geo.width(), geo.height()])
+        if hasattr(self, 'about_interface'):
+            self.about_interface.shutdown()
         if hasattr(self, 'qq_scan_interface') and hasattr(self.qq_scan_interface, 'shutdown'):
             self.qq_scan_interface.shutdown()
         if hasattr(self, 'tg_sticker_interface') and hasattr(self.tg_sticker_interface, 'shutdown'):
