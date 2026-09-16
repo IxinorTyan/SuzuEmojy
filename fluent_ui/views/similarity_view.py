@@ -15,6 +15,7 @@ from qfluentwidgets import (
 
 from services.i18n import t
 from services.similarity import scan, group_features, ScanCancelled
+from fluent_ui.components.exchange_task_dialog import ExchangeWorker
 
 
 def similarity_icon():
@@ -188,6 +189,7 @@ class SimilarityDialog(QDialog):
         self.selected = set()
         self.page = 0
         self.deleting = False
+        self.delete_worker = None
         self.closing = False
         self.categories = {}
         self.failures = []
@@ -485,21 +487,58 @@ class SimilarityDialog(QDialog):
             picture.stop()
         self.set_busy(True)
         self.status.setText(t('正在删除所选图片…'))
-        # Use the gallery's existing serialized deletion queue, including all indexes.
-        self.gallery._start_async_delete(paths, t('相似图片清理完成'), self.deletion_finished)
+        self.progress.setValue(0)
+        try:
+            self.delete_worker = ExchangeWorker(
+                lambda report: self.storage.delete_images_batch(
+                    paths, progress_callback=lambda n, total: report(n, total, t('正在删除所选图片…'))),
+                self)
+            self.delete_worker.progress.connect(self.deletion_progress)
+            self.delete_worker.finished.connect(self.deletion_finished)
+            self.delete_worker.start()
+        except Exception as error:
+            if self.delete_worker:
+                self.delete_worker.deleteLater()
+                self.delete_worker = None
+            self.deleting = False
+            self.set_busy(False)
+            self.status.setText(t('删除失败：') + str(error))
+
+    def deletion_progress(self, current, total, message):
+        self.status.setText(f'{message} {current} / {total}')
+        self.progress.setValue(int(current * 100 / max(total, 1)))
 
     def deletion_finished(self):
+        worker = self.delete_worker
+        self.delete_worker = None
+        error, result = worker.error, worker.result or {}
+        worker.deleteLater()
         self.deleting = False
         self.selected.clear()
         self.set_busy(False)
         self.features = [f for f in (self.features or []) if os.path.isfile(f.path)]
-        self.gallery.on_images_changed()
+        try:
+            self.gallery.on_images_changed()
+        except Exception as refresh_error:
+            error = error or refresh_error
         if self.closing:
             self.close()
+        elif error or result.get('failed'):
+            # Some files may already be gone even if index persistence failed.
+            remaining = {f.path for f in self.features}
+            self.groups = [[f for f in group if f.path in remaining] for group in self.groups]
+            self.groups = [group for group in self.groups if len(group) > 1]
+            self.entries = [(g, i) for g, group in enumerate(self.groups) for i in range(len(group))]
+            self.page = min(self.page, max(0, (len(self.entries) - 1) // self.PAGE_SIZE))
+            self.render_page()
+            details = str(error) if error else '\n'.join(result.get('failure_details', {}).values())
+            self.status.setText(t('删除失败：') + (details or str(result.get('failed'))))
         else:
             self.rematch()
 
     def shutdown(self):
+        if self.delete_worker:
+            self.delete_worker.wait()
         if self.worker:
             self.worker.requestInterruption()
             self.worker.wait()

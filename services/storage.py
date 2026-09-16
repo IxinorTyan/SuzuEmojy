@@ -803,6 +803,36 @@ class StorageService:
             self.save_categories(categories)
             return True
         return False
+
+    @_storage_locked
+    def add_images_to_category(self, filepaths, category_name):
+        """批量添加图片到分类，一次性持久化。"""
+        categories = {n: list(v) for n, v in self.get_all_categories().items()}
+        if category_name not in categories:
+            categories[category_name] = []
+        existing = set(categories[category_name])
+        added = 0
+        for filepath in filepaths:
+            path = self._to_abspath(filepath)
+            if path not in existing:
+                categories[category_name].append(path); existing.add(path); added += 1
+        if added:
+            self.save_categories(categories, strict=True)
+        return added
+
+    @_storage_locked
+    def remove_images_from_category(self, filepaths, category_name):
+        """批量从分类移除图片，一次性持久化。"""
+        categories = {n: list(v) for n, v in self.get_all_categories().items()}
+        if category_name not in categories:
+            return 0
+        targets = {self._to_abspath(p) for p in filepaths}
+        old = categories[category_name]
+        categories[category_name] = [p for p in old if p not in targets]
+        removed = len(old) - len(categories[category_name])
+        if removed:
+            self.save_categories(categories, strict=True)
+        return removed
         
     def get_images_by_category(self, category_name):
         """获取特定分类下的所有图片"""

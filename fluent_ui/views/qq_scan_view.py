@@ -82,6 +82,17 @@ class LogDialog(MessageBoxBase):
     def _on_copy(self):
         from PySide6.QtGui import QGuiApplication
         QGuiApplication.clipboard().setText(self.logTextEdit.toPlainText())
+
+class QQScanWorker(QThread):
+    finished_scan = Signal(list)
+    failed = Signal(str)
+    def __init__(self, target_path, selected_folder, parent=None):
+        super().__init__(parent); self.target_path = target_path; self.selected_folder = selected_folder
+    def run(self):
+        try: self.finished_scan.emit(QQExtractor.scan_emojis(self.target_path, self.selected_folder))
+        except Exception as e: self.failed.emit(str(e))
+    def cancel(self):
+        pass
 class QQImportWorker(QThread):
     """后台异步入库线程：执行 APNG 转码、Marketface 提取、StorageService 保存与分类"""
     progress = Signal(int, int, str, bool)  # done, total, filename, is_duplicated
@@ -1159,7 +1170,24 @@ class QQScanInterface(QWidget):
         self.tooltip.show(t("正在扫描表情包..."), _tf("正在扫描分类 [{folder}]...", folder=selected_folder))
         QCoreApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
-        self.emoji_file_paths = QQExtractor.scan_emojis(target_path, selected_folder)
+        self._set_busy(True)
+        self._scan_worker = QQScanWorker(target_path, selected_folder, self)
+        self._current_worker = self._scan_worker
+        self._scan_worker.finished_scan.connect(self._on_scan_finished)
+        self._scan_worker.failed.connect(self._on_scan_failed)
+        self._scan_worker.start()
+        return
+
+    def _on_scan_failed(self, error):
+        self._set_busy(False)
+        self._current_worker = None
+        self.tooltip.finish(t("扫描失败"), str(error))
+        self.log(_tf("❌ 扫描失败: {error}", error=error))
+
+    def _on_scan_finished(self, paths):
+        self._set_busy(False)
+        self._current_worker = None
+        self.emoji_file_paths = paths
         total_valid = len(self.emoji_file_paths)
 
         if total_valid == 0:

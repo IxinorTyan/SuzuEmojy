@@ -2,7 +2,7 @@ import os
 import ctypes
 from PySide6.QtWidgets import (
     QWidget, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout, 
-    QListWidget, QListWidgetItem, QInputDialog, QLineEdit
+    QListWidget, QListWidgetItem, QInputDialog, QLineEdit, QProgressDialog
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal
 from PySide6.QtGui import QCursor, QIcon
@@ -719,20 +719,13 @@ class CategorySidebar(QWidget):
                 w.exec()
                 return
                 
-            # 更新 categories
-            new_categories = {}
-            for k, v in categories.items():
-                if k == old_name:
-                    new_categories[new_name] = v
-                else:
-                    new_categories[k] = v
-            self.storage.save_categories(new_categories)
-            
-            # 同步更新图标配置
-            icons = self.storage.get_all_category_icons()
-            if old_name in icons:
-                icons[new_name] = icons.pop(old_name)
-                self.storage.save_category_icons(icons)
+            # 统一通过存储层重命名，确保 JSON、图标和 SQLite 中的分类关系
+            # 同步更新，避免仅创建一个新的分类而遗留旧分类。
+            if not self.storage.rename_category(old_name, new_name):
+                from qfluentwidgets import MessageBox
+                w = MessageBox("错误", "分类重命名失败", self.window())
+                w.exec()
+                return
                 
             self.refresh_list(new_name)
             if self.gallery_view: self.gallery_view.show_success("重命名成功")
@@ -779,10 +772,10 @@ class CategorySidebar(QWidget):
             if delete_files:
                 images_to_delete = self.storage.get_images_by_category(cat_name)
                 self.storage.remove_category(cat_name)
-                for img in images_to_delete:
-                    other_cats = self.storage.get_categories_by_image(img)
-                    if not other_cats: 
-                        self.storage.delete_image(img)
+                removable = [img for img in images_to_delete
+                              if not self.storage.get_categories_by_image(img)]
+                if removable:
+                    self.storage.delete_images_batch(removable)
             else:
                 self.storage.remove_category(cat_name)
                 
@@ -808,6 +801,7 @@ class GalleryInterface(QWidget):
     """
     setting_requested = Signal()
     exchange_requested = Signal()
+    similarity_requested = Signal()
 
     def __init__(self, storage_service, clipboard_service, config_service, parent=None):
         super().__init__(parent=parent)
@@ -948,6 +942,10 @@ class GalleryInterface(QWidget):
         self.btn_filter = TransparentToolButton(FIF.FILTER, self.top_bar)
         self.btn_filter.setToolTip("筛选")
         self.btn_filter.clicked.connect(self._show_filter_menu)
+
+        self.btn_similarity = TransparentToolButton(FIF.SEARCH, self.top_bar)
+        self.btn_similarity.setToolTip("感知哈希去重")
+        self.btn_similarity.clicked.connect(self.similarity_requested.emit)
         
         # 设置按钮
         self.btn_setting = TransparentToolButton(FIF.SETTING, self.top_bar)
@@ -962,6 +960,7 @@ class GalleryInterface(QWidget):
         self.top_bar_layout.addStretch() # 把搜索框推到右边
         self.top_bar_layout.addWidget(self.btn_multi_select)
         self.top_bar_layout.addWidget(self.btn_filter)
+        self.top_bar_layout.addWidget(self.btn_similarity)
         self.top_bar_layout.addWidget(self.btn_exchange)
         self.top_bar_layout.addWidget(self.btn_setting)
         self.top_bar_layout.addWidget(self.search_box)
@@ -1731,13 +1730,27 @@ class GalleryInterface(QWidget):
                 
         self.update_selection_count()
 
+    def _run_batch_operation(self, title, paths, operation):
+        total = max(1, len(paths))
+        progress = QProgressDialog(title, "取消", 0, total, self.window())
+        progress.setWindowTitle(title)
+        progress.setAutoClose(False)
+        progress.setValue(0)
+        QApplication.processEvents()
+        try:
+            result = operation()
+            progress.setValue(total)
+            QApplication.processEvents()
+            return result
+        finally:
+            progress.close()
+
     def _execute_batch_delete(self, paths):
         if not paths: return
         from qfluentwidgets import MessageBox
         dialog = MessageBox("批量删除确认", f"确定要彻底删除选中的 {len(paths)} 个表情包吗？", self.window())
         if dialog.exec():
-            for p in paths:
-                self.storage.delete_image(p)
+            self._run_batch_operation("正在删除图片", paths, lambda: self.storage.delete_images_batch(paths))
             self.on_images_changed()
             self.show_success("批量删除成功")
             self.set_selection_mode(False)
@@ -1748,14 +1761,8 @@ class GalleryInterface(QWidget):
         exist_count = 0
         error_count = 0
         
-        for p in paths:
-            res = self.storage.add_image_to_category(p, cat_name)
-            if res == "success":
-                success_count += 1
-            elif res == "already_exists":
-                exist_count += 1
-            else:
-                error_count += 1
+        success_count = self._run_batch_operation("正在添加到分类", paths, lambda: self.storage.add_images_to_category(paths, cat_name))
+        exist_count = len(paths) - success_count
                 
         msg = f"成功添加 {success_count} 项。"
         if exist_count > 0:
@@ -1777,17 +1784,8 @@ class GalleryInterface(QWidget):
         exist_count = 0
         error_count = 0
         
-        for p in paths:
-            res = self.storage.add_image_to_category(p, target_cat)
-            if res in ("success", "already_exists"):
-                if res == "already_exists":
-                    exist_count += 1
-                if self.storage.remove_image_from_category(p, self.current_category):
-                    success_count += 1
-                else:
-                    error_count += 1
-            else:
-                error_count += 1
+        self._run_batch_operation("正在移动图片", paths, lambda: self.storage.add_images_to_category(paths, target_cat))
+        success_count = self._run_batch_operation("正在更新原分类", paths, lambda: self.storage.remove_images_from_category(paths, self.current_category))
                 
         msg = f"成功移动 {success_count} 项。"
         if exist_count > 0:
@@ -1806,9 +1804,7 @@ class GalleryInterface(QWidget):
     def _execute_batch_remove(self, paths):
         if not paths: return
         count = 0
-        for p in paths:
-            if self.storage.remove_image_from_category(p, self.current_category):
-                count += 1
+        count = self._run_batch_operation("正在移出分类", paths, lambda: self.storage.remove_images_from_category(paths, self.current_category))
                 
         self.show_success("批量移出成功", f"已将 {count} 个表情从 '{self.current_category}' 移出")
         self.set_selection_mode(False)

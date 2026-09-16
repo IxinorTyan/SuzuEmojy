@@ -278,6 +278,7 @@ class MainWindow(FramelessWindow):
         
         self.gallery_interface.setting_requested.connect(self.show_settings)
         self.gallery_interface.exchange_requested.connect(self.show_exchange)
+        self.gallery_interface.similarity_requested.connect(self.show_similarity)
         
         self.main_layout.addWidget(self.stacked_widget)
         
@@ -323,6 +324,13 @@ class MainWindow(FramelessWindow):
         self.activateWindow()
         self.raise_()
         self._reapply_window_flags_after_show()
+
+    def show_similarity(self):
+        """打开感知哈希去重对话框。"""
+        from fluent_ui.views.similarity_view import SimilarityDialog
+        dialog = SimilarityDialog(self.gallery_interface)
+        dialog.exec()
+        self.gallery_interface.on_images_changed()
 
     def show_qq_scan(self):
         """切换到QQ扫描界面"""
