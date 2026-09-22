@@ -4,6 +4,7 @@ import time
 import shutil
 import tempfile
 import subprocess
+import zipfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -475,6 +476,7 @@ class ImportPackThread(QThread):
     progress = Signal(int, int, str)  # done, total, msg
     finished_all = Signal(int, int, int, str)  # imported, duplicated, failed, category_name
     failed = Signal(str)
+    stage_changed = Signal(str)
 
     def __init__(
         self,
@@ -485,11 +487,20 @@ class ImportPackThread(QThread):
         max_workers: int = 4,
         parent=None,
         export_path: Optional[str] = None,
+        source_url: str = "",
+        prepared_sources=None,
+        cancel_event=None,
     ):
         super().__init__(parent)
         self.downloader = downloader
         self.storage = storage_service
         self.export_path = export_path
+        self.source_url = source_url
+        self.prepared_sources = prepared_sources
+        self.cancel_event = cancel_event
+        self.skipped_count = 0
+        self.skipped_details = []
+        self.imported_count = 0
         self.target_stickers = target_stickers
         self.category_name = category_name
         self.max_workers = max_workers
@@ -498,8 +509,14 @@ class ImportPackThread(QThread):
     def cancel(self):
         self._is_cancelled = True
 
+    def _cancelled(self):
+        return self._is_cancelled or (self.cancel_event is not None and self.cancel_event.is_set())
+
     def run(self):
         temp_dir = tempfile.mkdtemp(prefix="tg_import_")
+        self.skipped_count = 0
+        self.skipped_details = []
+        self.imported_count = 0
         total_count = len(self.target_stickers)
         imported_count = 0
         dup_count = 0
@@ -507,13 +524,21 @@ class ImportPackThread(QThread):
         failures = []
 
         try:
+            if self._cancelled():
+                return
+            self.stage_changed.emit("import")
             # 创建/确保分类存在
             self.storage.add_category(self.category_name)
 
             def _download_single(sticker: StickerItem):
-                if self._is_cancelled:
+                if self._cancelled():
                     return None
                 try:
+                    if self.prepared_sources is not None:
+                        prepared = self.prepared_sources[sticker.index]
+                        if isinstance(prepared, Exception):
+                            raise prepared
+                        return prepared
                     file_path = self.downloader.get_file_path(sticker.file_id)
                     raw_bytes = self.downloader.download_file_bytes(file_path)
                     src_file = os.path.join(temp_dir, f"{sticker.index + 1:03d}.download")
@@ -528,12 +553,24 @@ class ImportPackThread(QThread):
                 futures = {executor.submit(_download_single, s): s for s in self.target_stickers}
                 done_count = 0
                 for future in as_completed(futures):
-                    if self._is_cancelled:
+                    if self._cancelled():
                         break
                     sticker = futures[future]
                     try:
                         src_file = future.result()
-                        if self._is_cancelled:
+                    except Exception as exc:
+                        if self._cancelled():
+                            break
+                        self.skipped_count += 1
+                        detail = t("贴纸 #{index} 获取失败：{error}").format(
+                            index=sticker.index + 1, error=exc,
+                        )
+                        self.skipped_details.append(detail)
+                        done_count += 1
+                        self.progress.emit(done_count, total_count, detail)
+                        continue
+                    try:
+                        if self._cancelled():
                             break
                         dest_path, is_dup = self.storage.save_file(src_file, strict=True)
                         if not dest_path:
@@ -576,14 +613,19 @@ class ImportPackThread(QThread):
                     else:
                         fail_count += 1
 
-            if not self._is_cancelled and self.export_path:
-                if fail_count or not imported_count:
+            self.imported_count = imported_count
+            if not self._cancelled() and self.export_path:
+                if fail_count:
                     raise ValueError(t("贴纸入库未全部成功，未导出资源包。请使用相同 ID 重试以补齐索引和收藏夹。") + "\n" + "\n".join(failures[:5]))
+                if not imported_count:
+                    raise ValueError(t("没有可导出的贴纸，所有贴纸均获取失败。")
+                                     + "\n" + "\n".join(self.skipped_details))
+                self.stage_changed.emit("export")
                 self._export_resource_package()
-            if not self._is_cancelled:
+            if not self._cancelled():
                 self.finished_all.emit(imported_count, dup_count, fail_count, self.category_name)
         except Exception as e:
-            if not self._is_cancelled:
+            if not self._cancelled():
                 self.failed.emit(str(e))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -592,7 +634,7 @@ class ImportPackThread(QThread):
         from services.exchange_export import ExchangeExportService
 
         def progress(done, total, message):
-            if self._is_cancelled:
+            if self._cancelled():
                 raise InterruptedError()
             self.progress.emit(done, total, message)
 
@@ -609,7 +651,10 @@ class ImportPackThread(QThread):
             )
             if not manifest["counts"]["resources"]:
                 raise ValueError(t("收藏夹中没有可导出的资源"))
-            if not self._is_cancelled:
+            if self.source_url:
+                with zipfile.ZipFile(temporary, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr("TG.txt", self.source_url.strip() + "\n")
+            if not self._cancelled():
                 os.replace(temporary, destination)
 
 
@@ -648,6 +693,7 @@ class TGStickerInterface(QWidget):
         self._parse_thread: Optional[ParsePackThread] = None
         self.detail_movie: Optional[QMovie] = None
         self.last_download_result: Optional[Dict[str, Any]] = None
+        self._batch_package_dialog = None
 
         self._init_ui()
 
@@ -844,7 +890,13 @@ class TGStickerInterface(QWidget):
         )
         self.parseButton.setFixedHeight(36)
         self.parseButton.clicked.connect(self.startParsePack)
-        config_layout.addWidget(self.parseButton)
+        self.batchPackageButton = PushButton(FIF.FOLDER, t("批量打包"), self.configFormWidget)
+        self.batchPackageButton.setFixedHeight(36)
+        self.batchPackageButton.clicked.connect(self.exportBatchPackages)
+        parse_row = QHBoxLayout()
+        parse_row.addWidget(self.parseButton, 1)
+        parse_row.addWidget(self.batchPackageButton)
+        config_layout.addLayout(parse_row)
 
         export_row = QHBoxLayout()
         export_row.setSpacing(8)
@@ -1061,6 +1113,7 @@ class TGStickerInterface(QWidget):
         """统一设置后台操作期间的控件状态，避免重复提交。"""
         self._busy = busy
         self.parseButton.setEnabled(not busy)
+        self.batchPackageButton.setEnabled(not busy)
         self.selectDirButton.setEnabled(not busy)
         self.testNetButton.setEnabled(not busy)
         self.resetCfgButton.setEnabled(not busy)
@@ -1112,6 +1165,8 @@ class TGStickerInterface(QWidget):
 
     def shutdown(self):
         """应用退出时取消任务并等待线程收尾，避免销毁运行中的 QThread。"""
+        if self._batch_package_dialog is not None:
+            self._batch_package_dialog.shutdown()
         threads = tuple(
             thread
             for thread in (
@@ -1875,6 +1930,38 @@ class TGStickerInterface(QWidget):
     # 导入到 SuzuEmojy 资源库逻辑
     # ==========================================
 
+    def exportBatchPackages(self):
+        if self._has_running_task():
+            return
+        storage = getattr(self.window(), "storage", None)
+        if storage is None:
+            QMessageBox.warning(self, t("错误"), t("无法获取表情包资源库存储服务！"))
+            return
+        from fluent_ui.components.tg_batch_dialog import TGBatchPackageDialog
+        downloader = self._get_configured_downloader()
+        config = dict(
+            bot_token=downloader.bot_token, cf_proxy=downloader.cf_proxy,
+            network_proxy=dict(downloader.session.proxies), timeout=downloader.timeout,
+            retries=downloader.retries, prefer_direct=downloader.prefer_direct,
+        )
+        downloader.session.close()
+        dialog = TGBatchPackageDialog(
+            self, self.savePathEdit.text().strip() or self.save_path,
+            config, storage, ImportPackThread,
+        )
+        self._batch_package_dialog = dialog
+        self._set_busy(True)
+        try:
+            dialog.exec()
+        finally:
+            dialog.shutdown()
+            self._batch_package_dialog = None
+            self._set_busy(False)
+            refresh = getattr(self.window(), "refresh_library", None)
+            if callable(refresh):
+                refresh()
+            dialog.deleteLater()
+
     def exportPackage(self):
         if not self.current_pack or not self.all_stickers or self._has_running_task():
             return
@@ -1885,18 +1972,13 @@ class TGStickerInterface(QWidget):
         package_id, accepted = QInputDialog.getText(
             self, t("导出为资源包"),
             t("请输入资源包 ID（同时作为收藏夹名称和 ZIP 文件名）："),
+            text=self.current_pack.title,
         )
         if not accepted:
             return
         package_id = package_id.strip()
-        reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
-        reserved.update(f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "123456789¹²³")
-        if (not package_id or len(package_id) > 120
-                or package_id in ("全部表情", "未分类", "新建分类")
-                or any(ch in '<>:"/\\|?*' or ord(ch) < 32 for ch in package_id)
-                or package_id.endswith(".")
-                or package_id.split(".")[0].upper() in reserved):
-            QMessageBox.warning(self, t("提示"), t("请输入有效的资源包 ID：不能使用文件名禁用字符、保留名称或末尾句点，长度不超过 120。"))
+        if not package_id:
+            QMessageBox.warning(self, t("提示"), t("资源包 ID 不能为空"))
             return
         directory = QFileDialog.getExistingDirectory(self, t("选择资源包保存目录"), self.save_path)
         if not directory:
@@ -1912,6 +1994,7 @@ class TGStickerInterface(QWidget):
         worker = ImportPackThread(
             self._get_configured_downloader(), storage, list(self.all_stickers),
             package_id, parent=self, export_path=export_path,
+            source_url=self.current_pack.source_url,
         )
         self._import_thread = worker
         worker.progress.connect(self._onImportProgress)
@@ -1925,10 +2008,15 @@ class TGStickerInterface(QWidget):
         refresh = getattr(self.window(), "refresh_library", None)
         if callable(refresh):
             refresh()
-        self.log(t("资源包导出完成") + ": " + path)
-        self.tooltip.finish(t("资源包导出完成"), path)
+        summary = t("处理成功 {imported} 张，重复合并 {duplicated} 张，获取失败跳过 {skipped} 张。").format(
+            imported=imported, duplicated=duplicated,
+            skipped=self._import_thread.skipped_count,
+        )
+        details = "\n".join(self._import_thread.skipped_details)
+        self.log(t("资源包导出完成") + ": " + path + "\n" + summary + "\n" + details)
+        self.tooltip.finish(t("资源包导出完成"), summary)
         QMessageBox.information(self, t("资源包导出完成"),
-                                f"ID: {category_name}\n{path}")
+                                f"ID: {category_name}\n{summary}\n{path}\n{details}")
 
     def _onPackageFailed(self, message):
         self._set_busy(False)
@@ -2055,6 +2143,7 @@ class TGStickerInterface(QWidget):
 
     def _onImportFinished(self, imported: int, dup: int, failed: int, cat_name: str):
         self._set_busy(False)
+        failed += self._import_thread.skipped_count
 
         self.log(
             t("✅ 导入完成！成功入库 {imported} 张贴纸到 [{category}]，重复合并 {duplicated} 张，失败 {failed} 张。").format(

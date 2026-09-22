@@ -54,6 +54,10 @@ DEF_PROXY = DEF_CF_PROXY
 DEF_TOKEN = "8946472903:AAHSjf3nWYbhJxIHEgzCO_ko05vEZE5lDwA"
 
 
+class StickerUnavailableError(RuntimeError):
+    """Telegram 明确报告源贴纸文件不存在，可跳过而不取消整个资源包。"""
+
+
 @dataclass
 class StickerItem:
     """单个贴纸项元数据"""
@@ -85,6 +89,11 @@ class StickerPackInfo:
     @property
     def total_count(self) -> int:
         return len(self.stickers)
+
+    @property
+    def source_url(self) -> str:
+        route = "addemoji" if self.sticker_type == "custom_emoji" else "addstickers"
+        return f"https://t.me/{route}/{self.name}"
 
     @property
     def type_desc(self) -> str:
@@ -205,6 +214,7 @@ class TGStickerDownloader:
         """带直连优先与自动反代回退重试的 API 请求封装"""
         bases = self.candidate_bases
         last_err = None
+        missing_error = None
 
         for base in bases:
             url = self._api_url_for_base(base, method)
@@ -218,15 +228,26 @@ class TGStickerDownloader:
                     data = resp.json()
                     if not data.get("ok"):
                         err_desc = data.get("description", "Unknown Telegram API error")
+                        if method == "getFile" and data.get("error_code") in (400, 404, 410):
+                            description = err_desc.lower()
+                            if any(reason in description for reason in (
+                                "file not found", "file_id not found", "file_id_invalid",
+                                "invalid file_id", "file has been deleted",
+                            )) and "temporar" not in description:
+                                raise StickerUnavailableError(err_desc)
                         raise RuntimeError(err_desc)
                     # 请求成功，记录当前有效线路
                     self._active_base_url = base
                     return data["result"]
                 except Exception as e:
                     last_err = e
+                    if isinstance(e, StickerUnavailableError):
+                        missing_error = e
                     if attempt < self.retries - 1:
                         time.sleep(0.5 + attempt * 0.5)
 
+        if missing_error is not None:
+            raise missing_error
         raise RuntimeError(f"请求 Telegram API [{method}] 失败: {last_err}")
 
     def test_connection(self) -> Dict[str, Any]:
@@ -349,6 +370,7 @@ class TGStickerDownloader:
 
         bases = self.candidate_bases
         last_err = None
+        missing_error = None
 
         for base in bases:
             url = self._file_url_for_base(base, file_path)
@@ -359,14 +381,23 @@ class TGStickerDownloader:
                         retry_after = int(resp.headers.get("Retry-After", 2))
                         time.sleep(max(retry_after, 2))
                         continue
+                    # 反代自身的 404 可能只是路由故障，不能据此认定贴纸丢失。
+                    if base == TG_DIRECT_API and resp.status_code in (404, 410):
+                        raise StickerUnavailableError(
+                            f"Telegram 源文件不存在 (HTTP {resp.status_code}): {file_path}"
+                        )
                     resp.raise_for_status()
                     self._active_base_url = base
                     return resp.content
                 except Exception as e:
                     last_err = e
+                    if isinstance(e, StickerUnavailableError):
+                        missing_error = e
                     if attempt < self.retries - 1:
                         time.sleep(0.5 + attempt * 0.5)
 
+        if missing_error is not None:
+            raise missing_error
         raise RuntimeError(f"下载文件 [{file_path}] 失败: {last_err}")
 
     # ===== 格式转换工具 =====

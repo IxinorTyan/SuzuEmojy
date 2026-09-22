@@ -1,6 +1,8 @@
 import os
 import sys
 import subprocess
+import tempfile
+from pathlib import Path
 
 
 def _get_ffmpeg_exe():
@@ -30,6 +32,33 @@ def is_ffmpeg_available():
         return os.path.isfile(_get_ffmpeg_exe())
     except Exception:
         return False
+
+def webm_single_frame_png(input_path):
+    """最多解码两帧；只有一帧时返回原尺寸 RGBA PNG，多帧返回 None。"""
+    with tempfile.TemporaryDirectory(prefix="webm_frames_") as directory:
+        output = Path(directory)
+        result = subprocess.run(
+            [
+                _get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y",
+                "-c:v", "libvpx-vp9", "-i", str(input_path),
+                "-an", "-frames:v", "2", "-fps_mode", "passthrough",
+                "-pix_fmt", "rgba", "-c:v", "png", str(output / "%02d.png"),
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg frame decoding failed: "
+                + result.stderr.decode("utf-8", errors="replace")
+            )
+        first = output / "01.png"
+        if not first.is_file() or first.stat().st_size == 0:
+            raise RuntimeError("FFmpeg decoded no frames")
+        if (output / "02.png").exists():
+            return None
+        return first.read_bytes()
+
 
 def webm_to_png_frame_ffmpeg(input_path, output_path):
     """使用 FFmpeg 提取 WebM 首帧为带透明通道的 PNG。"""

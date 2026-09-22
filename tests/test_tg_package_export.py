@@ -14,6 +14,7 @@ from contextlib import closing
 from PIL import Image
 
 from fluent_ui.views.tg_sticker_view import ImportPackThread
+from services.tg_downloader import StickerUnavailableError
 from test_storage_single_frame_gif import _make_storage
 
 
@@ -37,6 +38,7 @@ class TGPackageExportTest(unittest.TestCase):
             self.downloader, self.storage,
             [SimpleNamespace(index=i, file_id=str(i)) for i in range(2)],
             "tg-001", export_path=str(self.output),
+            source_url="https://t.me/addstickers/Kei_Aris",
         )
         self.errors = []
         self.finished = []
@@ -50,6 +52,8 @@ class TGPackageExportTest(unittest.TestCase):
         self.assertEqual(self.errors, [])
         self.assertEqual(len(self.finished), 1)
         with zipfile.ZipFile(self.output) as archive:
+            self.assertEqual(archive.read("TG.txt").decode("utf-8"),
+                             "https://t.me/addstickers/Kei_Aris\n")
             manifest = json.loads(archive.read("manifest.json"))
             catalog = json.loads(archive.read("catalog.json"))
             self.assertEqual(manifest["package_id"], "tg-001")
@@ -61,6 +65,71 @@ class TGPackageExportTest(unittest.TestCase):
             self.assertEqual(resource["category_refs"], [1])
             self.assertTrue(archive.read(resource["asset_path"]).startswith(b"\x89PNG"))
         self.assertTrue(self.storage.get_images_by_category("tg-001"))
+
+    def test_missing_source_is_skipped_and_remaining_sticker_exports(self):
+        def get_file_path(file_id):
+            if file_id == "0":
+                raise StickerUnavailableError("Bad Request: file not found")
+            return "sticker.bmp"
+
+        self.downloader.get_file_path = get_file_path
+        worker = self.worker()
+        messages = []
+        worker.progress.connect(lambda _, __, msg: messages.append(msg))
+        worker.run()
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.finished, [(1, 0, 0, "tg-001")])
+        self.assertEqual(worker.skipped_count, 1)
+        self.assertTrue(any("贴纸 #1 获取失败" in msg for msg in messages))
+        with zipfile.ZipFile(self.output) as archive:
+            self.assertEqual(json.loads(archive.read("manifest.json"))["counts"]["resources"], 1)
+            self.assertIn("TG.txt", archive.namelist())
+
+    def test_all_sources_missing_does_not_replace_existing_zip(self):
+        self.output.write_bytes(b"existing")
+        self.downloader.download_file_bytes = lambda _: (_ for _ in ()).throw(
+            StickerUnavailableError("file not found"))
+        worker = self.worker()
+        worker.run()
+        self.assertEqual(worker.skipped_count, 2)
+        self.assertTrue(self.errors)
+        self.assertIn("没有可导出的贴纸", self.errors[0])
+        self.assertEqual(self.output.read_bytes(), b"existing")
+
+    def test_all_network_failures_do_not_export_empty_package(self):
+        self.downloader.download_file_bytes = lambda _: (_ for _ in ()).throw(
+            TimeoutError("timeout"))
+        worker = self.worker()
+        worker.run()
+        self.assertEqual(worker.skipped_count, 2)
+        self.assertTrue(self.errors)
+        self.assertFalse(self.output.exists())
+
+    def test_partial_network_failure_exports_with_details(self):
+        self.downloader.get_file_path = lambda file_id: (
+            "sticker.bmp" if file_id == "1" else (_ for _ in ()).throw(TimeoutError("timeout"))
+        )
+        worker = self.worker()
+        worker.run()
+        self.assertEqual(self.errors, [])
+        self.assertTrue(self.output.exists())
+        self.assertEqual(worker.imported_count, 1)
+        self.assertEqual(worker.skipped_count, 1)
+        self.assertIn("#1", worker.skipped_details[0])
+        self.assertIn("timeout", worker.skipped_details[0])
+
+    def test_tg_source_file_is_compatible_with_package_import(self):
+        from services.exchange_import import ExchangeImportService
+        worker = self.worker()
+        worker.source_url = "https://t.me/addemoji/TestEmoji"
+        worker.run()
+        self.assertEqual(self.errors, [])
+        with zipfile.ZipFile(self.output) as archive:
+            self.assertEqual(archive.read("TG.txt"), b"https://t.me/addemoji/TestEmoji\n")
+        destination = self.root / "roundtrip"
+        _make_storage(destination)
+        ExchangeImportService(str(destination)).import_zip(str(self.output))
+        self.assertEqual(len(list((destination / "data" / "images").iterdir())), 1)
 
     def test_failed_cleaning_preserves_existing_output(self):
         self.output.write_bytes(b"existing")

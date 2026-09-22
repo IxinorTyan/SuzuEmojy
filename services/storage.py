@@ -1223,13 +1223,16 @@ class StorageService:
 
         # 1. 动态 WebM 视频 -> 转为 GIF
         if fmt == "webm":
-            from services.webm_converter import is_ffmpeg_available, convert_video_to_gif
+            from services.webm_converter import (
+                is_ffmpeg_available, convert_video_to_gif, webm_single_frame_png,
+            )
             if not is_ffmpeg_available():
                 raise RuntimeError("FFmpeg 缺失或不可用，无法转换 WebM 动态贴纸")
 
             import tempfile
             temp_in = None
             temp_out = None
+            need_clean_in = False
             try:
                 # 写入临时文件供 FFmpeg 读取（若已有 source_path 且格式相符则直接使用，否则写入临时文件）
                 if source_path and os.path.exists(source_path):
@@ -1240,6 +1243,11 @@ class StorageService:
                     with os.fdopen(fd_in, "wb") as f:
                         f.write(data_bytes)
                     need_clean_in = True
+
+                # 单帧不经过 fps/调色板，保留原尺寸和完整 alpha。
+                single_png = webm_single_frame_png(temp_in)
+                if single_png is not None:
+                    return single_png, "png", False
 
                 fd_out, temp_out = tempfile.mkstemp(suffix=".gif")
                 os.close(fd_out)
