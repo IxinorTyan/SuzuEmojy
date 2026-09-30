@@ -3,7 +3,7 @@ import os
 import time
 
 from PySide6.QtCore import Qt, QSize, QThread, Signal, QTimer
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QPen, QColor, QMovie, QImageReader
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QPen, QColor, QMovie, QImageReader, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
     QGridLayout, QScrollArea, QMessageBox,
@@ -136,37 +136,67 @@ def description(feature, categories):
 class GroupPreview(QDialog):
     def __init__(self, group, index, categories, parent):
         super().__init__(parent)
-        self.group, self.index, self.categories = group, index, categories
-        self.setWindowTitle(t('同组图片预览'))
+        self.owner = parent
+        self.categories = categories
+        self.entries = [(g, i, feature) for g, items in enumerate(parent.groups)
+                        for i, feature in enumerate(items)]
+        self.index = next(n for n, (_, _, feature) in enumerate(self.entries)
+                          if feature.path == group[index].path)
+        self.setWindowTitle(t('相似图片预览'))
         self.layout = QVBoxLayout(self)
         self.picture = None
         self.details = BodyLabel(self)
         self.details.setWordWrap(True)
         self.layout.addWidget(self.details)
         row = QHBoxLayout()
-        previous = PushButton(t('上一张'), self)
-        following = PushButton(t('下一张'), self)
-        previous.clicked.connect(lambda: self.navigate(-1))
-        following.clicked.connect(lambda: self.navigate(1))
-        row.addWidget(previous)
-        row.addWidget(following)
+        self.previous = PushButton(t('上一张'), self)
+        self.following = PushButton(t('下一张'), self)
+        self.previous.clicked.connect(lambda: self.navigate(-1))
+        self.following.clicked.connect(lambda: self.navigate(1))
+        self.selection = CheckBox(t('选择删除') + ' (Del)', self)
+        self.selection.toggled.connect(self.select_current)
+        row.addWidget(self.previous)
+        row.addWidget(self.following)
+        row.addWidget(self.selection)
         self.layout.addLayout(row)
+        self.layout.addWidget(CaptionLabel(t('← / ↑ 上一张，→ / ↓ 下一张；跨组浏览，Del 切换删除勾选。'), self))
+        for key, step in ((Qt.Key_Left, -1), (Qt.Key_Up, -1),
+                          (Qt.Key_Right, 1), (Qt.Key_Down, 1)):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(lambda step=step: self.navigate(step))
+        shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self)
+        shortcut.setAutoRepeat(False)
+        shortcut.activated.connect(self.selection.toggle)
         self.navigate(0)
 
+    def select_current(self, checked):
+        self.owner.select(self.entries[self.index][2].path, checked)
+
     def navigate(self, step):
-        self.index = (self.index + step) % len(self.group)
+        index = max(0, min(self.index + step, len(self.entries) - 1))
+        if self.picture is not None and index == self.index:
+            return
+        self.index = index
         if self.picture:
             self.picture.stop()
             self.layout.removeWidget(self.picture)
             self.picture.deleteLater()
-        feature = self.group[self.index]
+        group_index, item_index, feature = self.entries[self.index]
         screen = self.screen().availableGeometry().size()
         size = QSize(min(680, int(screen.width() * .7)), min(500, int(screen.height() * .65)))
         self.picture = ImageLabel(feature, size, self, autoplay=True)
         self.layout.insertWidget(0, self.picture, alignment=Qt.AlignCenter)
         self.picture.play()
-        self.details.setText(f'{self.index + 1} / {len(self.group)}  ·  {os.path.basename(feature.path)}\n'
+        self.details.setText(f'{self.index + 1} / {len(self.entries)}  ·  '
+                             f'{t("相似组")} {group_index + 1} · '
+                             f'{item_index + 1} / {len(self.owner.groups[group_index])}  ·  '
+                             f'{os.path.basename(feature.path)}\n'
                              + description(feature, self.categories))
+        self.previous.setEnabled(self.index > 0)
+        self.following.setEnabled(self.index + 1 < len(self.entries))
+        self.selection.blockSignals(True)
+        self.selection.setChecked(feature.path in self.owner.selected)
+        self.selection.blockSignals(False)
 
     def done(self, result):
         self.picture.stop()
@@ -197,7 +227,7 @@ class SimilarityDialog(QDialog):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(20, 16, 20, 16)
         self.layout.addWidget(SubtitleLabel(t('感知哈希去重'), self))
-        hint = BodyLabel(t('结果为疑似相似图片，请逐张比较后勾选删除。动图悬停播放，点击图片放大。'), self)
+        hint = BodyLabel(t('结果为疑似相似图片，请逐张比较后勾选删除。动图悬停播放，点击图片放大；预览中方向键跨组切换，Del 切换删除勾选。'), self)
         hint.setWordWrap(True)
         self.layout.addWidget(hint)
         row = QHBoxLayout()
@@ -443,8 +473,12 @@ class SimilarityDialog(QDialog):
             self.resize_timer.start()
 
     def preview(self, group, index):
+        self.rematch_timer.stop()
         dialog = GroupPreview(group, index, self.categories, self)
         dialog.exec()
+        self.page = dialog.index // self.PAGE_SIZE
+        self.render_page()
+        self.scroll.ensureWidgetVisible(self.pictures[dialog.index % self.PAGE_SIZE])
         dialog.deleteLater()
 
     def change_page(self, delta):
@@ -457,6 +491,12 @@ class SimilarityDialog(QDialog):
             self.selected.add(path)
         else:
             self.selected.discard(path)
+        for picture in self.pictures:
+            if picture.feature.path == path:
+                checkbox = picture.parentWidget().findChild(CheckBox)
+                checkbox.blockSignals(True)
+                checkbox.setChecked(checked)
+                checkbox.blockSignals(False)
         self.update_selection()
 
     def update_selection(self):

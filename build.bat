@@ -92,6 +92,9 @@ REM Clean up __pycache__ folders from release directory
 echo Cleaning __pycache__ from release folder...
 for /d /r "dist\SuzuEmojy_Release" %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d"
 
+python scripts\package_release.py "dist\SuzuEmojy_Release" --flavor lightweight
+if errorlevel 1 goto :fail
+
 echo.
 echo ====================================
 echo Build Complete!

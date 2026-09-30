@@ -61,6 +61,8 @@ def build_launcher_stub(release_dir):
 
 
 def main():
+    # Fail early instead of discovering the updater build dependency after Nuitka.
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], check=True)
     print("====================================")
     print("Building SuzuEmojy with Nuitka")
     print("====================================")
@@ -224,6 +226,8 @@ def main():
                 sys.exit(1)
         
         print("\n====================================")
+        from scripts.package_release import package_release
+        package_release(release_dir, "standalone")
         print("All Done!")
         print(f"Clean release package is ready at: {os.path.abspath(release_dir)}")
         print("====================================")

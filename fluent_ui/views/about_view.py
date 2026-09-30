@@ -16,6 +16,7 @@ from qfluentwidgets import (
     CardWidget, SimpleCardWidget, isDarkTheme, IconWidget
 )
 from services.i18n import t, i18n_engine
+from services.update_service import current_version
 
 
 def disable_wheel_scroll_adjustment(widget: QWidget):
@@ -266,6 +267,7 @@ class AboutInterface(QWidget):
 
         self._init_ui()
         self.avatar_thread = None
+        self.update_dialog = None
         QApplication.instance().aboutToQuit.connect(self.shutdown)
         i18n_engine.language_changed.connect(self.update_texts)
 
@@ -275,6 +277,8 @@ class AboutInterface(QWidget):
             self._load_avatar()
 
     def shutdown(self):
+        if self.update_dialog is not None:
+            self.update_dialog.shutdown()
         if self.avatar_thread is not None and self.avatar_thread.isRunning():
             self.avatar_thread.requestInterruption()
             self.avatar_thread.wait()
@@ -350,7 +354,7 @@ class AboutInterface(QWidget):
         self.badgesLayout.setContentsMargins(0, 0, 0, 0)
         self.badgesLayout.setSpacing(8)
 
-        self.badgeVersion = PillBadge("v1.2.0", is_accent=True, parent=self.heroCard)
+        self.badgeVersion = PillBadge("v" + current_version(), is_accent=True, parent=self.heroCard)
         self.badgeLicense = PillBadge("GPL-3.0 License", parent=self.heroCard)
         self.badgePlatform = PillBadge("Windows 10 / 11", parent=self.heroCard)
         self.badgeTech = PillBadge("PySide6 · Fluent UI", parent=self.heroCard)
@@ -375,9 +379,9 @@ class AboutInterface(QWidget):
         self.btnRepo.setFixedWidth(130)
         self.btnRepo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.PROJECT_URL)))
 
-        self.btnReleases = PushButton(FIF.CLOUD_DOWNLOAD, t("发布与更新"), self.heroCard)
+        self.btnReleases = PushButton(FIF.CLOUD_DOWNLOAD, t("检查更新"), self.heroCard)
         self.btnReleases.setFixedWidth(130)
-        self.btnReleases.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.RELEASES_URL)))
+        self.btnReleases.clicked.connect(self._open_updates)
 
         self.heroActionsLayout.addWidget(self.btnRepo)
         self.heroActionsLayout.addWidget(self.btnReleases)
@@ -666,6 +670,12 @@ class AboutInterface(QWidget):
         self.avatar_thread.avatar_loaded.connect(self.avatarWidget.set_pixmap)
         self.avatar_thread.start()
 
+    def _open_updates(self):
+        from fluent_ui.components.update_dialog import UpdateDialog
+        if self.update_dialog is None:
+            self.update_dialog = UpdateDialog(self)
+        self.update_dialog.open_manual()
+
     def _copy_qq_group(self):
         """一键复制 QQ 群号到剪贴板并弹出 Fluent 提示条"""
         clipboard = QApplication.clipboard()
@@ -688,7 +698,7 @@ class AboutInterface(QWidget):
         # Hero
         self.appSloganLabel.setText(t("轻量、快速、随心所欲的 Windows 本地表情包管理利器"))
         self.btnRepo.setText(t("项目主页"))
-        self.btnReleases.setText(t("发布与更新"))
+        self.btnReleases.setText(t("检查更新"))
 
         # 徽章
         self.badgeVersion.update_style()

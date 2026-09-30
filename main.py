@@ -38,6 +38,11 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 def main():
+    # Windows login startup does not inherit the application's working directory.
+    base_dir = (os.path.dirname(os.path.abspath(sys.executable))
+                if getattr(sys, "frozen", False) or globals().get("__compiled__")
+                else os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(base_dir)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 
     app = QApplication(sys.argv)
@@ -199,7 +204,9 @@ def main():
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.show()
     
-    window.show()
+    from services.autostart import should_start_hidden
+    if not should_start_hidden(sys.argv, QSystemTrayIcon.isSystemTrayAvailable()):
+        window.show()
     
     
     sys.exit(app.exec())

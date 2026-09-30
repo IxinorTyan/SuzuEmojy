@@ -1,7 +1,7 @@
 import os
 import sys
 from PySide6.QtCore import Qt, Signal, QUrl, QSize
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QFileDialog, QMessageBox
 from PySide6.QtGui import QMouseEvent, QDesktopServices, QIcon
 from qfluentwidgets import (
     SettingCard, SettingCardGroup, ScrollArea, ExpandLayout,
@@ -144,9 +144,19 @@ class ExchangeInterface(QWidget):
         )
         self.exportSelectedCard.clicked.connect(self.export_selected_requested.emit)
 
+        self.splitCard = ActionSettingCard(
+            FIF.SAVE,
+            t("资源包切割分卷"),
+            t("将已导出的资源包按完整图片分卷，每卷不超过 100 MB；逐卷导入后自动合并分类"),
+            btn_text=t("选择资源包..."),
+            parent=self.resourceGroup,
+        )
+        self.splitCard.clicked.connect(self._split_package)
+
         self.resourceGroup.addSettingCard(self.importCard)
         self.resourceGroup.addSettingCard(self.exportAllCard)
         self.resourceGroup.addSettingCard(self.exportSelectedCard)
+        self.resourceGroup.addSettingCard(self.splitCard)
 
         # =================== 2. 第三方平台导入卡片组 ===================
         self.thirdPartyGroup = SettingCardGroup(t("第三方导入"), self.scrollWidget)
@@ -184,6 +194,34 @@ class ExchangeInterface(QWidget):
         self.mainLayout.addWidget(self.scrollArea)
         disable_wheel_scroll_adjustment(self)
 
+    def _split_package(self):
+        from services.exchange_split import split_package
+        from fluent_ui.components.exchange_task_dialog import run_exchange_task
+
+        source, _ = QFileDialog.getOpenFileName(
+            self.window(), t("资源包切割分卷"), "", "ZIP (*.zip)"
+        )
+        if not source:
+            return
+        output = QFileDialog.getExistingDirectory(
+            self.window(), t("选择分卷保存文件夹"), os.path.dirname(source)
+        )
+        if not output:
+            return
+        try:
+            destination, paths = run_exchange_task(
+                self.window(), t("正在切割资源包"),
+                lambda progress: split_package(source, output, progress),
+            )
+            QMessageBox.information(
+                self.window(), t("分卷完成"),
+                t("已生成 {count} 个分卷，每卷不超过 100 MB，图片内容保持不变。\n保存位置：{path}\n请通过“导入资源包”逐卷导入，分类会自动合并。").format(
+                    count=len(paths), path=destination,
+                ),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self.window(), t("分卷失败"), str(exc))
+
     def _connect_signals(self):
         # 绑定多语言切换
         i18n_engine.language_changed.connect(self.update_texts)
@@ -206,6 +244,10 @@ class ExchangeInterface(QWidget):
         self.exportSelectedCard.setTitle(t("导出指定分类"))
         self.exportSelectedCard.setContent(t("自由勾选需要导出的表情分类，单独打包生成资源包"))
         self.exportSelectedCard.button.setText(t("挑选导出..."))
+
+        self.splitCard.setTitle(t("资源包切割分卷"))
+        self.splitCard.setContent(t("将已导出的资源包按完整图片分卷，每卷不超过 100 MB；逐卷导入后自动合并分类"))
+        self.splitCard.button.setText(t("选择资源包..."))
 
         self.thirdPartyGroup.titleLabel.setText(t("第三方导入"))
         self.qqScanCard.setTitle(t("扫描 QQ 聊天表情"))

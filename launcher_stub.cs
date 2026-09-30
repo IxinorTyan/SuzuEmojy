@@ -9,6 +9,27 @@ internal static class LauncherStub
     private static void Main()
     {
         string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        string updateDirectory = Path.Combine(baseDirectory, ".update");
+        if (File.Exists(Path.Combine(updateDirectory, "journal.json")) ||
+            File.Exists(Path.Combine(updateDirectory, "installer-ready")))
+        {
+            string recovery = Path.Combine(updateDirectory, "SuzuEmojyUpdater.exe");
+            try
+            {
+                Process.Start(new ProcessStartInfo {
+                    FileName = recovery,
+                    Arguments = "--recover --root \"" + baseDirectory.TrimEnd('\\') + "\"",
+                    WorkingDirectory = updateDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show("更新恢复失败，请保留 .update 目录并重试。\n" + error.Message, "SuzuEmojy");
+            }
+            return;
+        }
         string targetPath = Path.Combine(baseDirectory, "bin", "SuzuEmojy.exe");
 
         if (!File.Exists(targetPath))

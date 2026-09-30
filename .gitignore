@@ -42,5 +42,6 @@ mini_launcher.py
 *.log
 
 # User Data & Config
+.update/
 data/
 config/config.json

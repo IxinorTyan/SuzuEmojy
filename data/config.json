@@ -1,5 +1,6 @@
 {
     "always_on_top": true,
+    "hide_main_after_paste": true,
     "preview_delay": 500,
     "preview_size": 320,
     "use_system_font": false,
@@ -9,9 +10,9 @@
     "qq_save_path": "D:/14915/Videos",
     "qq_data_path": "D:\\14915\\Videos\\Tencent Files",
     "window_geometry": [
-        534,
-        173,
+        781,
+        109,
         860,
-        683
+        640
     ]
 }

@@ -13,6 +13,7 @@ from qfluentwidgets import (
 
 from fluent_ui.components.emoji_card import EmojiCard
 from fluent_ui.components.hover_preview import HoverPreviewPopup
+from fluent_ui.components.hover_preview_controller import HoverPreviewController
 
 user32 = ctypes.windll.user32
 
@@ -72,11 +73,12 @@ class ImportThread(QThread):
     progress = Signal(int, int) # current, total
     finished = Signal(int, int, int) # saved_count, skipped_count, failed_count
     
-    def __init__(self, filepaths, storage, target_category, delete_after=False, parent=None):
+    def __init__(self, filepaths, storage, target_category, delete_after=False, parent=None, file_categories=None):
         super().__init__(parent)
         self.filepaths = filepaths
         self.storage = storage
         self.target_category = target_category
+        self.file_categories = file_categories or {}
         self.delete_after = delete_after
         
     def _handle_failed_import(self, filepath):
@@ -161,8 +163,9 @@ class ImportThread(QThread):
                 else:
                     saved_count += 1
                     
-                if self.target_category not in ("全部表情", "未分类"):
-                    self.storage.add_image_to_category(saved_path, self.target_category)
+                category = self.file_categories.get(filepath, self.target_category)
+                if category not in ("全部表情", "未分类"):
+                    self.storage.add_image_to_category(saved_path, category)
                     
                 if self.delete_after and os.path.exists(filepath):
                     try:
@@ -802,6 +805,7 @@ class GalleryInterface(QWidget):
     setting_requested = Signal()
     exchange_requested = Signal()
     similarity_requested = Signal()
+    hide_after_paste_requested = Signal()
 
     def __init__(self, storage_service, clipboard_service, config_service, parent=None):
         super().__init__(parent=parent)
@@ -818,15 +822,21 @@ class GalleryInterface(QWidget):
         self.is_selection_mode = False
         self._inbox_scanning = False
         self._last_cleanup_time = 0
+
+        # 等子控件的尺寸稳定后再重排，合并窗口动画和连续拖动产生的 resize。
+        self._responsive_layout_timer = QTimer(self)
+        self._responsive_layout_timer.setSingleShot(True)
+        self._responsive_layout_timer.setInterval(50)
+        self._responsive_layout_timer.timeout.connect(self._trigger_responsive_layout)
         
         self._init_ui()
         
         # 悬停预览组件
         self.preview_popup = HoverPreviewPopup(self)
-        self.hover_timer = QTimer(self)
-        self.hover_timer.setSingleShot(True)
-        self.hover_timer.timeout.connect(self._show_preview_popup)
-        self.current_hover_path = None
+        self.preview_controller = HoverPreviewController(
+            self, self.preview_popup, self.scroll_area.viewport(), parent=self,
+        )
+        self.preview_controller.set_delay(self.config.get("preview_delay", 500))
         
         # 焦点追踪器，用于复制后自动粘贴
         self.focus_timer = QTimer(self)
@@ -1177,7 +1187,7 @@ class GalleryInterface(QWidget):
                 self.config.set("sidebar_width_grid", sidebar_width)
             else:
                 self.config.set("sidebar_width_list", sidebar_width)
-        self._trigger_responsive_layout()
+        self._schedule_responsive_layout()
 
     def eventFilter(self, obj, event):
         if hasattr(self, 'splitter') and obj == self.splitter.handle(1):
@@ -1200,6 +1210,9 @@ class GalleryInterface(QWidget):
                     self.config.set("sidebar_width_list", sidebar_width)
                 else:
                     self.config.set("sidebar_width_grid", sidebar_width)
+
+        if obj == self.scroll_area.viewport() and event.type() == event.Type.Resize:
+            self._schedule_responsive_layout()
 
         if obj == self.scroll_area.viewport() and event.type() == event.Type.Wheel:
             if QApplication.keyboardModifiers() & Qt.ControlModifier:
@@ -1428,13 +1441,18 @@ class GalleryInterface(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._trigger_responsive_layout(force=True)
+        self._schedule_responsive_layout()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._trigger_responsive_layout()
+        self._schedule_responsive_layout()
+
+    def _schedule_responsive_layout(self):
+        if hasattr(self, '_responsive_layout_timer'):
+            self._responsive_layout_timer.start()
 
     def _trigger_responsive_layout(self, force=False):
+        self._responsive_layout_timer.stop()
         if not hasattr(self, 'scroll_area'): return
         item_width = self.config.get("thumbnail_size", 120) + self.LAYOUT_SPACING
         area_width = self.scroll_area.viewport().width() - 32
@@ -1567,6 +1585,8 @@ class GalleryInterface(QWidget):
 
     def on_images_changed(self):
         """统一的图片变更刷新入口"""
+        if hasattr(self, 'preview_controller'):
+            self.preview_controller.cancel()
         # 1. 重新执行统一过滤管道
         self._all_current_images = self._filter_images()
         
@@ -1658,8 +1678,8 @@ class GalleryInterface(QWidget):
             card.clicked.connect(self.on_image_clicked)
             card.delete_requested.connect(self.on_delete_requested)
             
-            card.hover_started.connect(self.on_hover_started)
-            card.hover_ended.connect(self.on_hover_ended)
+            card.hover_started.connect(lambda path, w=card: self.on_hover_started(w, path))
+            card.hover_ended.connect(lambda w=card: self.on_hover_ended(w))
             
             card.set_selectable(self.is_selection_mode)
             # 恢复选中状态
@@ -1684,6 +1704,8 @@ class GalleryInterface(QWidget):
     # ================== 批量选择与交互逻辑 ==================
 
     def set_selection_mode(self, enabled):
+        if hasattr(self, 'preview_controller'):
+            self.preview_controller.cancel()
         self.is_selection_mode = enabled
         self.command_bar.setVisible(enabled)
         self.btn_multi_select.setVisible(not enabled and self.config.get("show_multi_select_button", True))
@@ -1837,32 +1859,21 @@ class GalleryInterface(QWidget):
         except Exception as e:
             self.show_error("导出失败", str(e))
 
-    def on_hover_started(self, image_path):
+    def on_hover_started(self, card, image_path):
         if self.is_selection_mode: return
-        self.current_hover_path = image_path
-        self.hover_timer.start(self.config.get("preview_delay", 500))
+        self.preview_controller.set_delay(self.config.get("preview_delay", 500))
+        self.preview_controller.enter(card, image_path)
 
-    def on_hover_ended(self):
-        self.hover_timer.stop()
-        self.current_hover_path = None
-        self.preview_popup.hide_preview()
+    def on_hover_ended(self, card):
+        self.preview_controller.leave(card)
 
-    def _show_preview_popup(self):
-        if not self.current_hover_path: return
-        
-        categories = self.storage.get_categories_by_image(self.current_hover_path)
-        keywords = self.storage.get_image_keywords(self.current_hover_path)
-        
-        cat_str = ", ".join(categories) if categories else "无"
-        kw_str = keywords if keywords else "无"
-        
-        self.preview_popup.show_preview(
-            self.current_hover_path, 
-            QCursor.pos(), 
-            self.config.get("preview_size", 320),
-            cat_str,
-            kw_str
-        )
+    def get_preview_size(self):
+        return self.config.get("preview_size", 320)
+
+    def get_preview_metadata(self, image_path):
+        categories = self.storage.get_categories_by_image(image_path)
+        keywords = self.storage.get_image_keywords(image_path)
+        return ", ".join(categories) if categories else "无", keywords or "无"
 
     def on_image_clicked(self, image_path, modifiers=Qt.NoModifier):
         is_ctrl = bool(modifiers & Qt.ControlModifier)
@@ -1899,20 +1910,27 @@ class GalleryInterface(QWidget):
             # 记录到最近使用
             limit = self.config.get("recent_limit", 30)
             self.storage.add_recent_image(image_path, limit)
+
+            target_window = self.last_active_window
+            hide_after_paste = self.config.get("hide_main_after_paste", False)
+            if hide_after_paste:
+                # Hide before restoring chat focus, just like the quick panel.
+                self.hide_after_paste_requested.emit()
             
             # 再次检查 last_active_window 是否仍然有效且不是桌面/资源管理器等系统关键窗口
-            if self.last_active_window and user32.IsWindow(self.last_active_window):
-                class_name = get_window_class_name(self.last_active_window)
+            if target_window and user32.IsWindow(target_window):
+                class_name = get_window_class_name(target_window)
                 system_classes = (
                     "Progman", "WorkerW", "Shell_TrayWnd", 
                     "CabinetWClass", "ExploreWClass", "Windows.UI.Core.CoreWindow"
                 )
                 if class_name not in system_classes:
-                    user32.SetForegroundWindow(self.last_active_window)
+                    user32.SetForegroundWindow(target_window)
                     QTimer.singleShot(100, self.simulate_paste)
                     return
             
-            self.show_success("已复制到剪切板！")
+            if not hide_after_paste:
+                self.show_success("已复制到剪切板！")
 
     def _toggle_card_selection(self, image_path):
         for widget in getattr(self, '_all_card_widgets', []):
@@ -2055,14 +2073,14 @@ class GalleryInterface(QWidget):
             
         if mime_data.hasUrls():
             local_files = []
-            folder_to_import = None
+            folders_to_import = []
             
             for url in mime_data.urls():
                 if url.isLocalFile():
                     filepath = url.toLocalFile()
                     if os.path.isdir(filepath):
-                        if not folder_to_import:
-                            folder_to_import = filepath
+                        if filepath not in folders_to_import:
+                            folders_to_import.append(filepath)
                     else:
                         abs_filepath = os.path.normcase(os.path.abspath(filepath))
                         abs_storage = os.path.normcase(os.path.abspath(self.storage.images_dir))
@@ -2077,11 +2095,47 @@ class GalleryInterface(QWidget):
             
             event.accept()
             
-            if folder_to_import:
-                if len(mime_data.urls()) > 1:
-                    self.show_error("提示", "检测到文件夹，仅处理第一个文件夹，忽略其他文件")
-                    
-                folder_name = os.path.basename(folder_to_import).strip()
+            if folders_to_import:
+                self._import_dropped_folders(folders_to_import, local_files)
+            elif local_files:
+                self._start_background_import(local_files)
+
+    def _import_dropped_folders(self, folders, local_files):
+        if self.import_thread and self.import_thread.isRunning():
+            self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
+            return
+
+        # 同一批次共用一个线程，避免后续文件夹被“导入中”检查丢弃。
+        target_category = self.current_category
+        valid_images = list(local_files)
+        file_categories = {path: target_category for path in local_files}
+        folder_names = []
+        issues = []
+        total_files = len(local_files)
+        subdirs = 0
+        non_images = 0
+        for folder in folders:
+            folder_name = os.path.basename(os.path.normpath(folder)).strip() or folder
+            folder_names.append(folder_name)
+            folder_images = []
+            try:
+                with os.scandir(folder) as entries:
+                    for entry in entries:
+                        total_files += 1
+                        if entry.is_dir():
+                            subdirs += 1
+                        elif entry.is_file():
+                            if entry.name.lower().endswith(self.storage.SUPPORTED_FORMATS):
+                                folder_images.append(entry.path)
+                            else:
+                                non_images += 1
+            except OSError as e:
+                issues.append(f"文件夹 '{folder_name}' 扫描失败：{e}")
+            else:
+                if not folder_images:
+                    issues.append(f"文件夹 '{folder_name}' 中没有找到支持的图片文件")
+
+            if folder_images:
                 if folder_name:
                     is_new = self.storage.add_category(folder_name)
                     if is_new:
@@ -2089,37 +2143,24 @@ class GalleryInterface(QWidget):
                     else:
                         self.sidebar.set_active_category(folder_name)
                     
-                valid_images = []
-                total_files = 0
-                subdirs = 0
-                non_images = 0
-                
-                try:
-                    for entry in os.scandir(folder_to_import):
-                        total_files += 1
-                        if entry.is_dir():
-                            subdirs += 1
-                        elif entry.is_file():
-                            if entry.name.lower().endswith(self.storage.SUPPORTED_FORMATS):
-                                valid_images.append(entry.path)
-                            else:
-                                non_images += 1
-                except Exception as e:
-                    print(f"[ERROR] 扫描文件夹失败: {e}")
-                    
-                if valid_images:
-                    folder_stats = {
-                        'folder_name': folder_name,
-                        'total_files': total_files,
-                        'image_count': len(valid_images),
-                        'non_images': non_images,
-                        'subdirs': subdirs
-                    }
-                    self._start_background_import(valid_images, target_category=folder_name, folder_stats=folder_stats)
-                else:
-                    self.show_error("导入失败", f"文件夹 '{folder_name}' 中没有找到支持的图片文件")
-            elif local_files:
-                self._start_background_import(local_files)
+                valid_images.extend(folder_images)
+                file_categories.update({path: folder_name for path in folder_images})
+
+        if valid_images:
+            folder_stats = {
+                'folder_name': '、'.join(folder_names),
+                'total_files': total_files,
+                'image_count': len(valid_images),
+                'non_images': non_images,
+                'subdirs': subdirs,
+                'issues': issues,
+            }
+            self._start_background_import(
+                valid_images, target_category=target_category,
+                folder_stats=folder_stats, file_categories=file_categories,
+            )
+        else:
+            self.show_error("导入失败", '\n'.join(issues))
 
     def _reorder_widgets(self, new_order_paths):
         widget_dict = {w.image_path: w for w in getattr(self, '_all_card_widgets', [])}
@@ -2156,6 +2197,7 @@ class GalleryInterface(QWidget):
                 self.show_success("已删除")
 
     def show_context_menu(self, widget, position):
+        self.preview_controller.cancel()
         if self.is_selection_mode and widget.is_selected:
             menu = self._build_batch_context_menu(self.get_selected_paths())
         else:
@@ -2400,14 +2442,14 @@ class GalleryInterface(QWidget):
             self.show_success("批量删除标签成功", f"已从 {count} 个表情中移除了标签")
             self.set_selection_mode(False)
 
-    def _start_background_import(self, filepaths, delete_after=False, silent=False, target_category=None, folder_stats=None):
+    def _start_background_import(self, filepaths, delete_after=False, silent=False, target_category=None, folder_stats=None, file_categories=None):
         if self.import_thread and self.import_thread.isRunning():
             if not silent:
                 self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
             return
             
         import_category = target_category if target_category else self.current_category
-        self.import_thread = ImportThread(filepaths, self.storage, import_category, delete_after, self)
+        self.import_thread = ImportThread(filepaths, self.storage, import_category, delete_after, self, file_categories=file_categories)
         self.import_thread.progress.connect(self._on_import_progress)
         self.import_thread.finished.connect(lambda s, k, f: self._on_import_finished(s, k, f, silent, folder_stats))
         
@@ -2450,6 +2492,8 @@ class GalleryInterface(QWidget):
                 f"忽略非图片文件：{folder_stats['non_images']}\n"
                 f"忽略子文件夹：{folder_stats['subdirs']}"
             )
+            if folder_stats.get('issues'):
+                msg += "\n\n" + '\n'.join(folder_stats['issues'])
             from qfluentwidgets import MessageBox
             w = MessageBox("文件夹导入完成", msg, self.window())
             w.exec()

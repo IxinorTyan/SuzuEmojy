@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from PIL import Image
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, Qt, QTimer
+from PySide6.QtTest import QTest
 from qfluentwidgets import CheckBox
 
 from fluent_ui.views.similarity_view import SimilarityDialog, GroupPreview, similarity_icon
@@ -135,6 +136,63 @@ class SimilarityViewTests(unittest.TestCase):
         self.dialog.close()
         self.wait_worker()
         self.assertFalse(self.dialog.isVisible())
+
+    def test_preview_keys_cross_groups_and_pages_and_toggle_selection(self):
+        self.dialog.start_scan()
+        self.wait_worker()
+        features = self.dialog.groups[0]
+        self.dialog.groups = [features[:2], features[2:]]
+        self.dialog.entries = [(0, 0), (0, 1), (1, 0)]
+        self.dialog.PAGE_SIZE = 2
+        self.dialog.render_page()
+        preview = GroupPreview(self.dialog.groups[0], 1, self.dialog.categories, self.dialog)
+        try:
+            preview.show()
+            preview.activateWindow()
+            self.app.processEvents()
+            preview.selection.setFocus()
+            QTest.keyClick(preview.selection, Qt.Key_Delete)
+            self.assertIn(features[1].path, self.dialog.selected)
+            boxes = self.dialog.scroll.widget().findChildren(CheckBox)
+            self.assertTrue(boxes[1].isChecked())
+            QTest.keyClick(preview.selection, Qt.Key_Right)
+            self.assertEqual(preview.picture.feature.path, features[2].path)
+            self.assertFalse(preview.selection.isChecked())
+            QTest.keyClick(preview.selection, Qt.Key_Delete)
+            self.assertIn(features[2].path, self.dialog.selected)
+            QTest.keyClick(preview.selection, Qt.Key_Down)
+            self.assertEqual(preview.index, 2)
+            self.assertFalse(preview.following.isEnabled())
+            QTest.keyClick(preview.selection, Qt.Key_Up)
+            self.assertTrue(preview.selection.isChecked())
+            QTest.keyClick(preview.selection, Qt.Key_Delete)
+            self.assertNotIn(features[1].path, self.dialog.selected)
+            self.assertFalse(boxes[1].isChecked())
+            QTest.keyClick(preview.selection, Qt.Key_Left)
+            QTest.keyClick(preview.selection, Qt.Key_Left)
+            self.assertEqual(preview.index, 0)
+            self.assertFalse(preview.previous.isEnabled())
+            self.assertEqual(self.gallery.storage.deleted, [])
+        finally:
+            preview.done(0)
+            preview.deleteLater()
+
+    def test_closing_preview_returns_to_current_page_with_selection(self):
+        self.dialog.start_scan()
+        self.wait_worker()
+        self.dialog.PAGE_SIZE = 2
+
+        def browse_and_close():
+            preview = self.dialog.findChild(GroupPreview)
+            preview.navigate(2)
+            preview.selection.setChecked(True)
+            preview.accept()
+
+        QTimer.singleShot(0, browse_and_close)
+        self.dialog.preview(self.dialog.groups[0], 0)
+        self.assertEqual(self.dialog.page, 1)
+        self.assertEqual(self.dialog.pictures[0].feature.path, self.dialog.groups[0][2].path)
+        self.assertTrue(self.dialog.scroll.widget().findChild(CheckBox).isChecked())
 
     def test_delete_failure_restores_controls_and_allows_retry(self):
         self.dialog.start_scan()

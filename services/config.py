@@ -12,6 +12,7 @@ class ConfigService:
         
         self.default_config = {
             "always_on_top": True,   # 默认置顶
+            "hide_main_after_paste": False, # 点击发送后自动隐藏主面板
             "preview_delay": 500,    # 悬停预览延迟 (ms)
             "preview_size": 320,     # 悬停预览浮窗大小 (px)
             "use_system_font": False, # 是否使用系统默认字体

@@ -65,6 +65,7 @@ class QuickPanel(QWidget):
             self.scroll_area.viewport(),
             parent=self,
         )
+        self.preview_controller.set_delay(self.config.get("preview_delay", 500))
         
         # 搜索防抖
         self.search_timer = QTimer(self)
@@ -271,6 +272,7 @@ class QuickPanel(QWidget):
         self._cached_results = tuple(results)
         
         # 清理旧结果
+        self.preview_controller.cancel()
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             widget = item.widget()

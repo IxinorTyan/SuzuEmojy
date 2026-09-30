@@ -76,7 +76,15 @@ def check_dependencies(python_exe):
     try:
         # TGS 渲染也需要本地 rlottie 动态库，旧环境升级时一并补齐。
         result = subprocess.run(
-            [python_exe, "-c", "import PySide6; import qfluentwidgets; from rlottie_python.rlottie_wrapper import RLOTTIE_LIB; assert RLOTTIE_LIB is not None"],
+            [python_exe, "-c",
+             "import sys; import PySide6; import qfluentwidgets; "
+             "from rlottie_python.rlottie_wrapper import RLOTTIE_LIB; assert RLOTTIE_LIB is not None; "
+             "from importlib.metadata import version; from pip._vendor.packaging.requirements import Requirement; "
+             "requirements = [Requirement(line.strip()) for line in open(sys.argv[1], encoding='utf-8') "
+             "if line.strip() and not line.lstrip().startswith('#')]; "
+             "assert all((r.marker is not None and not r.marker.evaluate()) or "
+             "r.specifier.contains(version(r.name), prereleases=True) for r in requirements)",
+             REQUIREMENTS_FILE],
             capture_output=True, 
             creationflags=subprocess.CREATE_NO_WINDOW
         )
@@ -291,6 +299,15 @@ class LauncherApp:
             messagebox.showerror("初始化失败", f"在配置环境时发生错误：\n\n{error_msg}\n\n请检查网络连接或重试。")
 
 def main():
+    # Local recovery only; never check or download releases during startup.
+    update_dir = os.path.join(BASE_DIR, ".update")
+    if any(os.path.isfile(os.path.join(update_dir, name)) for name in ("journal.json", "installer-ready")):
+        try:
+            subprocess.Popen([os.path.join(update_dir, "SuzuEmojyUpdater.exe"), "--recover", "--root", BASE_DIR],
+                             cwd=update_dir, creationflags=subprocess.CREATE_NO_WINDOW)
+        except OSError as error:
+            messagebox.showerror("SuzuEmojy", "更新恢复失败，请保留 .update 目录并重试。\n" + str(error))
+        return
     # 1. 优先检查本地独立环境
     local_python = os.path.join(RUNTIME_DIR, "python.exe")
     if os.path.exists(local_python) and check_dependencies(local_python):

@@ -8,6 +8,7 @@ from qfluentwidgets import (
 )
 from qfluentwidgets import PushButton
 from services.i18n import t, i18n_engine, SUPPORTED_LANGUAGES
+from services.autostart import AutostartService
 
 def disable_wheel_scroll_adjustment(widget: QWidget):
     """
@@ -161,6 +162,7 @@ class SettingInterface(QWidget):
     def __init__(self, config_service, parent=None):
         super().__init__(parent=parent)
         self.config = config_service
+        self.autostart = AutostartService()
         self.setObjectName("SettingInterface")
         
         self._init_ui()
@@ -202,6 +204,13 @@ class SettingInterface(QWidget):
 
         # =================== 1. 窗口设置 ===================
         self.windowGroup = SettingCardGroup(t("窗口设置"), self.scrollWidget)
+        self.autostartCard = SwitchSettingCard(
+            FIF.POWER_BUTTON, t("开机自启动"),
+            t("登录 Windows 后自动启动到托盘；移动程序后请重新开启此选项"),
+            parent=self.windowGroup
+        )
+        self.windowGroup.addSettingCard(self.autostartCard)
+        self._refresh_autostart()
         
         from qfluentwidgets import BoolValidator, qconfig, ConfigItem
         self.alwaysTopConfigItem = ConfigItem(
@@ -215,6 +224,13 @@ class SettingInterface(QWidget):
             configItem=self.alwaysTopConfigItem, parent=self.windowGroup
         )
         self.alwaysTopCard.setChecked(self.config.get("always_on_top", True))
+
+        self.hideAfterPasteCard = SwitchSettingCard(
+            FIF.HIDE, t("粘贴后自动隐藏主面板"),
+            t("点击表情复制并尝试粘贴后隐藏主面板，仍可通过快捷键或托盘呼出"),
+            parent=self.windowGroup
+        )
+        self.hideAfterPasteCard.setChecked(self.config.get("hide_main_after_paste", False))
         
         from qfluentwidgets import RangeConfigItem, RangeValidator
         
@@ -438,6 +454,7 @@ class SettingInterface(QWidget):
 
         # 将卡片加入窗口设置组
         self.windowGroup.addSettingCard(self.alwaysTopCard)
+        self.windowGroup.addSettingCard(self.hideAfterPasteCard)
         self.windowGroup.addSettingCard(self.previewSizeCard)
         self.windowGroup.addSettingCard(self.quickPanelWidthCard)
         self.windowGroup.addSettingCard(self.quickPanelHeightCard)
@@ -487,8 +504,12 @@ class SettingInterface(QWidget):
         self.titleLabel.setText(t("设置"))
         self.btnBack.setToolTip(t("返回主面板"))
         self.windowGroup.titleLabel.setText(t("窗口设置"))
+        self.autostartCard.setTitle(t("开机自启动"))
+        self.autostartCard.setContent(t("登录 Windows 后自动启动到托盘；移动程序后请重新开启此选项"))
         self.alwaysTopCard.setTitle(t("主窗口始终置顶"))
         self.alwaysTopCard.setContent(t("让表情包管理器始终显示在其他窗口之上"))
+        self.hideAfterPasteCard.setTitle(t("粘贴后自动隐藏主面板"))
+        self.hideAfterPasteCard.setContent(t("点击表情复制并尝试粘贴后隐藏主面板，仍可通过快捷键或托盘呼出"))
         self.previewSizeCard.setTitle(t("预览浮窗大小"))
         self.previewSizeCard.setContent(t("设置悬停时弹出的大图的像素尺寸"))
         self.quickPanelWidthCard.setTitle(t("快速面板宽度"))
@@ -544,7 +565,11 @@ class SettingInterface(QWidget):
         self.aboutCard.update_texts()
 
     def _connect_signals(self):
+        self.autostartCard.checkedChanged.connect(self._on_autostart_changed)
         self.alwaysTopCard.checkedChanged.connect(self._on_always_top_changed)
+        self.hideAfterPasteCard.checkedChanged.connect(
+            lambda value: self._save_config("hide_main_after_paste", value)
+        )
         
         self.previewDelayCard.valueChanged.connect(lambda v: self._save_config("preview_delay", v))
         self.previewSizeCard.valueChanged.connect(lambda v: self._save_config("preview_size", v))
@@ -580,6 +605,36 @@ class SettingInterface(QWidget):
             
         self.themeColorCard.color_changed.connect(on_color_changed)
         self.useSystemFontCard.checkedChanged.connect(lambda v: self._save_config("use_system_font", v, True))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_autostart()
+
+    def _refresh_autostart(self):
+        self.autostartCard.setEnabled(self.autostart.supported)
+        try:
+            checked = self.autostart.is_enabled()
+        except OSError as error:
+            self.autostartCard.setEnabled(False)
+            self.autostartCard.setToolTip(str(error))
+            return
+        self.autostartCard.setToolTip("")
+        self.autostartCard.blockSignals(True)
+        try:
+            self.autostartCard.setChecked(checked)
+        finally:
+            self.autostartCard.blockSignals(False)
+
+    def _on_autostart_changed(self, checked):
+        try:
+            self.autostart.set_enabled(checked)
+        except OSError as error:
+            InfoBar.error(
+                title=t("自启动设置失败"),
+                content=t("无法更新 Windows 自启动设置：{error}").format(error=error),
+                duration=6000, parent=self
+            )
+        self._refresh_autostart()
 
     def _on_hotkey_changed(self, key, value, card):
         other_key = "quick_panel_hotkey" if key == "global_hotkey" else "global_hotkey"

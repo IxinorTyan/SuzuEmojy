@@ -1,6 +1,5 @@
 import os
 import ctypes
-import time
 
 from PySide6.QtCore import Qt, QObject, Signal, QSize, QEvent, QTimer
 from PySide6.QtGui import QIcon, QShortcut, QKeySequence
@@ -71,9 +70,6 @@ class MainWindow(FramelessWindow):
         
         self.setTitleBar(StandardTitleBar(self))
         
-        self._last_window_animation_time = 0.0
-        self._animation_cooldown = 0.25
-
         # 合并短时间内重复的全局快捷键事件，避免窗口动画和状态切换堆积
         self._toggle_window_requests = 0
         self._toggle_window_timer = QTimer(self)
@@ -177,26 +173,14 @@ class MainWindow(FramelessWindow):
                 self.titleBar.closeBtn.setPressedColor(QColor(255, 255, 255))
                 self.titleBar.closeBtn.update()
 
-    def _play_window_animation(self):
-        """限制窗口动画频率，避免快速切换时动画请求堆积。"""
-        now = time.monotonic()
-        if now - self._last_window_animation_time < self._animation_cooldown:
-            return
-        self._last_window_animation_time = now
-        if hasattr(self, 'windowEffect'):
-            self.windowEffect.addWindowAnimation(self.winId())
-
     def showEvent(self, event):
         super().showEvent(event)
-        self._play_window_animation()
-
+        # FramelessWindow 已在初始化时启用系统动画，显示/还原时不要重写窗口样式。
         self.apply_rounded_corners()
         # qframelesswindow/Windows 可能在显示阶段重新调整 Z 序，
         # 因此在窗口真正显示后再次应用置顶状态。
         self.apply_window_flags()
-        QTimer.singleShot(0, self.apply_rounded_corners)
         QTimer.singleShot(0, self.apply_window_flags)
-        QTimer.singleShot(100, self.apply_rounded_corners)
         QTimer.singleShot(100, self.apply_window_flags)
 
     def _reset_close_button_state(self):
@@ -212,9 +196,7 @@ class MainWindow(FramelessWindow):
 
     def changeEvent(self, event):
         super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange:
-            self._play_window_animation()
-        elif event.type() == QEvent.ActivationChange:
+        if event.type() == QEvent.ActivationChange:
             # 激活切换只重新确认置顶状态，不修改关闭按钮的正常 hover 状态。
             QTimer.singleShot(0, self.apply_window_flags)
 
@@ -240,6 +222,7 @@ class MainWindow(FramelessWindow):
         self.titleBar.iconLabel.hide()
         
         self.gallery_interface = GalleryInterface(self.storage, self.clipboard, self.config, self)
+        self.gallery_interface.hide_after_paste_requested.connect(self._hide_after_paste)
         
         from PySide6.QtWidgets import QStackedWidget
         self.stacked_widget = QStackedWidget(self)
@@ -355,7 +338,6 @@ class MainWindow(FramelessWindow):
         self.apply_window_flags()
         # 分多个时间点重试，覆盖 Windows 激活、无边框窗口调整 Z 序的异步过程。
         for delay in (0, 100, 500, 1000):
-            QTimer.singleShot(delay, self.apply_rounded_corners)
             QTimer.singleShot(delay, self.apply_window_flags)
 
 
@@ -442,6 +424,12 @@ class MainWindow(FramelessWindow):
                 self.quick_panel.set_target_hwnd(hwnd)
             self.quick_panel.show_at_cursor()
 
+    def _hide_after_paste(self):
+        self._reset_close_button_state()
+        self.gallery_interface.save_scroll_position()
+        self.gallery_interface.preview_controller.cancel()
+        self.hide()
+
     def toggle_window(self):
         if self.isVisible() and self.isActiveWindow():
             # 在隐藏前强制重置标题栏按钮状态
@@ -488,13 +476,7 @@ class MainWindow(FramelessWindow):
             if hr != 0:
                 return False
 
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
-            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
-            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, flags)
+            # DWM 会直接应用圆角偏好；FRAMECHANGED 会额外触发非客户区重算和重绘。
             return True
         except (AttributeError, TypeError, ValueError, OSError):
             return False

@@ -31,6 +31,12 @@ if errorlevel 1 (
 )
 
 :: Run build script
+python -m PyInstaller --version >nul 2>&1
+if errorlevel 1 (
+    echo Installing PyInstaller for the independent updater...
+    python -m pip install pyinstaller
+    if errorlevel 1 exit /b 1
+)
 echo Starting Nuitka build process...
 python build_nuitka.py %*
 if errorlevel 1 (
