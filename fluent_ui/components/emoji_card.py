@@ -136,8 +136,8 @@ class ThumbnailCache:
         return None
 
 _thumbnail_pool = QThreadPool()
-# 缩略图解码通常受磁盘和图片解码器限制；降低并发可减少快速滚动时
-# 同时存在的 QImage 峰值，避免线程池积压造成内存突增。
+# Two decoders allow small images to finish while another image is slow. Each
+# panel still limits outstanding requests to two; the GUI keeps its own budget.
 _thumbnail_pool.setMaxThreadCount(2)
 
 
@@ -164,6 +164,8 @@ class EmojiCard(QLabel):
         self._loading_size = 0
         self._load_request_id = 0
         self._load_task = None
+        self._loading_paused = False
+        self._pending_thumbnail_result = None
 
         # 入场动画资源。动画结束后会移除 opacity effect，避免长期增加绘制开销。
         self._appear_timer = None
@@ -361,6 +363,7 @@ class EmojiCard(QLabel):
         timer.start(delay)
 
     def _cancel_thumbnail_task(self):
+        self._pending_thumbnail_result = None
         task = self._load_task
         self._load_task = None
         if task is not None:
@@ -388,6 +391,11 @@ class EmojiCard(QLabel):
         ):
             return
 
+        if self._loading_paused:
+            # Retain at most one decoded image; don't upload/paint it during motion.
+            self._pending_thumbnail_result = (image_path, image, request_id, target_size)
+            return
+
         self._load_task = None
         self._is_loading = False
         self._loading_size = 0
@@ -413,6 +421,13 @@ class EmojiCard(QLabel):
         self.setPixmap(pixmap)
         self._is_loaded = True
         self._loaded_size = self.current_size
+
+    def set_loading_paused(self, paused):
+        self._loading_paused = paused
+        if not paused and self._pending_thumbnail_result is not None:
+            result = self._pending_thumbnail_result
+            self._pending_thumbnail_result = None
+            self._on_thumbnail_loaded(*result)
 
     def _load_thumbnail_async(self, target_size):
         if self._is_loading and self._loading_size == target_size:
@@ -444,6 +459,8 @@ class EmojiCard(QLabel):
 
     def update_size(self, new_size, load_image=True):
         target_img_size = max(10, new_size - 16)
+        if load_image and self._is_loaded and self._loaded_size == new_size:
+            return
         if (
             load_image
             and self._is_loading

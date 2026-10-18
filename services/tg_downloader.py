@@ -51,7 +51,7 @@ except Exception:
 TG_DIRECT_API = "https://api.telegram.org"
 DEF_CF_PROXY = "http://suzu-tg-proxy.1491503128lgz.workers.dev/"
 DEF_PROXY = DEF_CF_PROXY
-DEF_TOKEN = "8946472903:AAHSjf3nWYbhJxIHEgzCO_ko05vEZE5lDwA"
+DEF_TOKEN = "8544903524:AAGvPab0m0Q6L8qLf023wyPwnKfelpi3gsI"
 
 
 class StickerUnavailableError(RuntimeError):

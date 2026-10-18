@@ -81,6 +81,14 @@ class HoverPreviewTests(unittest.TestCase):
         self.assertTrue(self.popup.isVisible())
         self.assertTrue(self.controller.validation_timer.isActive())
 
+    def test_middle_scroll_mode_blocks_preview_even_without_scrollbar_motion(self):
+        self.scroll.is_scrolling = True
+        self.show_preview()
+        self.assertFalse(self.popup.isVisible())
+        self.scroll.is_scrolling = False
+        self.show_preview()
+        self.assertTrue(self.popup.isVisible())
+
     def test_cursor_leaves_before_timeout_without_leave_event(self):
         self.controller.enter(self.card, self.card.image_path)
         self.cursor.return_value = self.owner.mapToGlobal(QPoint(450, 450))

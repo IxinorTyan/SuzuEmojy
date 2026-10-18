@@ -40,6 +40,11 @@ RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
 REQUIREMENTS_FILE = os.path.join(BASE_DIR, "requirements.txt")
 MAIN_SCRIPT = os.path.join(BASE_DIR, "main.py")
 
+
+def launch_application(python_exe):
+    return subprocess.Popen([python_exe, MAIN_SCRIPT] + sys.argv[1:],
+                            cwd=BASE_DIR, creationflags=subprocess.CREATE_NO_WINDOW)
+
 def find_system_python():
     """扫描系统中已安装的 Python"""
     # 1. 检查环境变量 PATH 中的 python
@@ -277,7 +282,7 @@ class LauncherApp:
             
             # 7. 启动主程序
             self.root.destroy()
-            subprocess.Popen([python_exe, MAIN_SCRIPT], cwd=BASE_DIR, creationflags=subprocess.CREATE_NO_WINDOW)
+            launch_application(python_exe)
             
         except Exception as e:
             self.progress.stop()
@@ -311,13 +316,13 @@ def main():
     # 1. 优先检查本地独立环境
     local_python = os.path.join(RUNTIME_DIR, "python.exe")
     if os.path.exists(local_python) and check_dependencies(local_python):
-        subprocess.Popen([local_python, MAIN_SCRIPT], cwd=BASE_DIR, creationflags=subprocess.CREATE_NO_WINDOW)
+        launch_application(local_python)
         return
 
     # 2. 扫描系统 Python
     system_python = find_system_python()
     if system_python and check_dependencies(system_python):
-        subprocess.Popen([system_python, MAIN_SCRIPT], cwd=BASE_DIR, creationflags=subprocess.CREATE_NO_WINDOW)
+        launch_application(system_python)
         return
 
     # 如果环境未就绪，先弹出确认框

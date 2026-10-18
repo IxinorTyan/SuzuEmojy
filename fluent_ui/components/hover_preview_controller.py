@@ -56,6 +56,8 @@ class HoverPreviewController(QObject):
         if isinstance(scroll_area, QAbstractScrollArea):
             scroll_area.verticalScrollBar().valueChanged.connect(self.suspend)
             scroll_area.horizontalScrollBar().valueChanged.connect(self.suspend)
+            if hasattr(scroll_area, 'scrollingChanged'):
+                scroll_area.scrollingChanged.connect(self.suspend)
 
     def suspend(self, *_):
         """滚动/布局稳定后重新命中卡片，再开始完整悬停延迟。"""
@@ -161,6 +163,8 @@ class HoverPreviewController(QObject):
             global_pos = QCursor.pos()
 
         if not self._is_valid_widget(self.viewport):
+            return False
+        if getattr(self.viewport.parentWidget(), 'is_scrolling', False):
             return False
         if not self._is_valid_widget(card):
             return False

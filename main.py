@@ -39,22 +39,29 @@ from PySide6.QtCore import Qt
 
 def main():
     # Windows login startup does not inherit the application's working directory.
-    base_dir = (os.path.dirname(os.path.abspath(sys.executable))
+    from services.autostart import _process_executable
+    base_dir = (str(_process_executable().parent)
                 if getattr(sys, "frozen", False) or globals().get("__compiled__")
                 else os.path.dirname(os.path.abspath(__file__)))
     os.chdir(base_dir)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 
     app = QApplication(sys.argv)
-    
+
     from PySide6.QtCore import QSharedMemory
     shared_memory = QSharedMemory("SuzuEmojy_App_Instance")
     if not shared_memory.create(1):
         sys.exit(0)
-    
+
+    from services.autostart import AutostartService
+    try:
+        AutostartService().repair_registration()
+    except OSError as error:
+        print(f"[WARNING] Failed to repair login startup: {error}")
+
     from services.config import ConfigService
     config_service = ConfigService()
-    
+
     app_font = app.font()
     if app_font.pointSize() <= 0:
         app_font.setPointSize(9)
@@ -68,16 +75,16 @@ def main():
                 setFontFamilies([system_font])
         except Exception as e:
             print(f"Failed to set system font: {e}")
-            
+
     from PySide6.QtWidgets import QSystemTrayIcon
     from PySide6.QtGui import QIcon
     from qfluentwidgets import setTheme, Theme, RoundMenu, Action
     from services.storage import StorageService
     from services.clipboard import ClipboardService
     from services.i18n import i18n_engine, t
-    
+
     app.setQuitOnLastWindowClosed(False)
-    
+
     from PySide6.QtWidgets import QProgressDialog
     from services.migration_manager import MigrationManager
     from fluent_ui.main_window import MainWindow
@@ -139,10 +146,10 @@ def main():
 
     _bg_thread = threading.Thread(target=_background_startup_tasks, daemon=True, name="startup-maintenance")
     _bg_thread.start()
-    
+
     # 初始化多语言引擎
     i18n_engine.init(config_service)
-    
+
     # 外观模式使用 appearance_mode；兼容旧版本保存的 theme_mode
     theme_mode = config_service.get(
         "appearance_mode",
@@ -156,7 +163,7 @@ def main():
         setTheme(Theme.AUTO)
 
     window = MainWindow(storage_service, clipboard_service, config_service)
-    
+
     tray_icon = QSystemTrayIcon()
     if getattr(sys, 'frozen', False):
         icon_dir = sys._MEIPASS
@@ -168,47 +175,51 @@ def main():
         window.setWindowIcon(QIcon(icon_path))
     else:
         pass
-    
+
     tray_icon.setToolTip("SuzuEmojy")
-    
+    clipboard_service.auto_paste.failed.connect(lambda: tray_icon.showMessage(
+        t("未自动粘贴"), t("未能自动粘贴，请返回目标窗口手动粘贴。"),
+        QSystemTrayIcon.Information, 4000,
+    ))
+
     tray_menu = RoundMenu()
-    
+
     show_action = Action(t("显示主面板"), triggered=window.show_gallery)
     tray_menu.addAction(show_action)
-    
+
     def open_settings():
         window.show_settings()
-        
+
     settings_action = Action(t("设置"), triggered=open_settings)
     tray_menu.addAction(settings_action)
-    
+
     tray_menu.addSeparator()
-    
+
     quit_action = Action(t("退出"), triggered=app.quit)
     tray_menu.addAction(quit_action)
-    
+
     # 动态刷新托盘菜单文案
     def update_tray_texts(lang):
         show_action.setText(t("显示主面板"))
         settings_action.setText(t("设置"))
         quit_action.setText(t("退出"))
     i18n_engine.language_changed.connect(update_tray_texts)
-    
+
     def on_tray_activated(reason):
         if reason == QSystemTrayIcon.Trigger or reason == QSystemTrayIcon.DoubleClick:
             window.show_gallery()
         elif reason == QSystemTrayIcon.Context:
             from PySide6.QtGui import QCursor
             tray_menu.exec(QCursor.pos())
-            
+
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.show()
-    
+
     from services.autostart import should_start_hidden
     if not should_start_hidden(sys.argv, QSystemTrayIcon.isSystemTrayAvailable()):
         window.show()
-    
-    
+
+
     sys.exit(app.exec())
 
 if __name__ == "__main__":

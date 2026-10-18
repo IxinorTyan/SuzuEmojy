@@ -1,30 +1,28 @@
 import os
 import ctypes
+from ctypes import wintypes
 from PySide6.QtWidgets import (
-    QWidget, QGridLayout, QApplication, QHBoxLayout, QVBoxLayout, 
+    QWidget, QApplication, QHBoxLayout, QVBoxLayout, 
     QListWidget, QListWidgetItem, QInputDialog, QLineEdit, QProgressDialog
 )
 from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal
 from PySide6.QtGui import QCursor, QIcon
 from qfluentwidgets import (
-    ScrollArea, InfoBar, InfoBarPosition, RoundMenu, Action, 
+    InfoBar, InfoBarPosition, RoundMenu, Action, 
     PushButton, FluentIcon as FIF, TransparentToolButton, setFont, BodyLabel
 )
 
 from fluent_ui.components.emoji_card import EmojiCard
 from fluent_ui.components.hover_preview import HoverPreviewPopup
 from fluent_ui.components.hover_preview_controller import HoverPreviewController
+from fluent_ui.components.responsive_scroll_area import ResponsiveScrollArea
+from fluent_ui.components.virtual_grid_layout import VirtualGridLayout
+from fluent_ui.components.virtual_gallery import VirtualGallery
+from services.auto_paste import user32
 
-user32 = ctypes.windll.user32
 
 FAILED_RETENTION_DAYS = 7
 CLEANUP_THROTTLE_HOURS = 1
-
-def get_window_class_name(hwnd):
-    """获取窗口的类名"""
-    buff = ctypes.create_unicode_buffer(256)
-    user32.GetClassNameW(hwnd, buff, 256)
-    return buff.value
 
 class DownloadThread(QThread):
     finished = Signal(bool, str, str, str) # success, temp_filepath, error_msg, url
@@ -806,6 +804,8 @@ class GalleryInterface(QWidget):
     exchange_requested = Signal()
     similarity_requested = Signal()
     hide_after_paste_requested = Signal()
+    THUMBNAIL_PREFETCH_SCREENS = 1
+    THUMBNAIL_RETENTION_SCREENS = 2
 
     def __init__(self, storage_service, clipboard_service, config_service, parent=None):
         super().__init__(parent=parent)
@@ -860,6 +860,7 @@ class GalleryInterface(QWidget):
         
         # 懒加载状态
         self._all_card_widgets = []
+        self._active_thumbnail_widgets = set()
         self._cleanup_threshold = 200
         
         # 布局常量
@@ -978,13 +979,13 @@ class GalleryInterface(QWidget):
         self.right_layout.addWidget(self.top_bar)
         
         # 右侧下部：滚动区 (承载网格)
-        self.scroll_area = ScrollArea(self.right_container)
+        self.scroll_area = ResponsiveScrollArea(self.right_container)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
         
         self.grid_container = QWidget()
         self.grid_container.setStyleSheet("QWidget { background-color: transparent; }")
-        self.gallery_layout = QGridLayout(self.grid_container)
+        self.gallery_layout = VirtualGridLayout(self.grid_container)
         self.gallery_layout.setSpacing(10)
         self.gallery_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         self.gallery_layout.setContentsMargins(16, 8, 16, 16)
@@ -1047,7 +1048,6 @@ class GalleryInterface(QWidget):
         self.splitter.handle(1).installEventFilter(self)
         
         # 监听滚动条实现懒加载
-        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
     def _import_exchange_package(self):
         from PySide6.QtWidgets import QFileDialog
@@ -1134,50 +1134,16 @@ class GalleryInterface(QWidget):
         except Exception as exc:
             self.show_error("导出失败", str(exc))
 
-    def _apply_lazy_loading(self):
-        if not hasattr(self, '_all_card_widgets'):
-            return
-            
-        scrollbar = self.scroll_area.verticalScrollBar()
-        scroll_y = scrollbar.value()
-        viewport_height = self.scroll_area.viewport().height()
-        
-        visible_top = scroll_y
-        visible_bottom = scroll_y + viewport_height
-        
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + self.LAYOUT_SPACING)))
-        current_size = self.config.get("thumbnail_size", 120)
-        
-        for index, widget in enumerate(self._all_card_widgets):
-            row = index // columns
-            
-            card_y = self.LAYOUT_TOP_MARGIN + row * (current_size + self.LAYOUT_SPACING)
-            card_bottom = card_y + current_size
-            
-            is_far_above = card_bottom < visible_top - 500
-            is_far_below = card_y > visible_bottom + 500
-            is_near = (card_bottom >= visible_top - 200) and (card_y <= visible_bottom + 200)
-            
-            if is_far_above or is_far_below:
-                if getattr(widget, '_is_loaded', True):
-                    widget.clear_resources()
-            elif is_near:
-                if widget.needs_reload(current_size):
-                    widget.update_size(current_size)
+    def _thumbnail_range(self, padding_screens=0):
+        return self._virtual_gallery.index_range(padding_screens)
 
-    def _on_scroll(self, value):
-        if not self._is_loading:
-            scrollbar = self.scroll_area.verticalScrollBar()
-            # 当滚动到距离底部 100px 以内时，加载下一批
-            if scrollbar.maximum() - value < 100:
-                self._load_next_batch()
-                
-        # 滚动节流：延迟 32ms 执行懒加载，合并高频滚动事件
-        self._lazy_load_timer.start(32)
-        
-        # 重置空闲定时器
-        from fluent_ui.components.emoji_card import ThumbnailCache
-        ThumbnailCache().reset_idle_timer()
+    def _schedule_lazy_loading(self):
+        if hasattr(self, '_virtual_gallery'):
+            self._virtual_gallery.schedule_thumbnails()
+
+    def _apply_lazy_loading(self):
+        if hasattr(self, '_virtual_gallery'):
+            self._virtual_gallery.load_thumbnails()
 
     def _on_splitter_moved(self, pos, index):
         sizes = self.splitter.sizes()
@@ -1215,7 +1181,7 @@ class GalleryInterface(QWidget):
             self._schedule_responsive_layout()
 
         if obj == self.scroll_area.viewport() and event.type() == event.Type.Wheel:
-            if QApplication.keyboardModifiers() & Qt.ControlModifier:
+            if event.modifiers() & Qt.ControlModifier:
                 delta = event.angleDelta().y()
                 step = 10 if delta > 0 else -10
                 
@@ -1305,10 +1271,14 @@ class GalleryInterface(QWidget):
 
     def track_active_window(self):
         hwnd = user32.GetForegroundWindow()
-        if hwnd and hwnd != int(self.window().winId()):
+        process_id = wintypes.DWORD()
+        if hwnd:
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        if process_id.value and process_id.value != os.getpid():
             self.last_active_window = hwnd
             
-        self._check_inbox()
+        if not self.scroll_area.is_scrolling:
+            self._check_inbox()
 
     def _check_inbox(self):
         if self._inbox_scanning:
@@ -1403,6 +1373,7 @@ class GalleryInterface(QWidget):
 
 
     def _apply_thumbnail_size(self, size):
+        self.scroll_area.stop_scrolling()
         # 第一阶段：仅更新尺寸，不判断可见性
         for widget in getattr(self, '_all_card_widgets', []):
             widget.update_size(size, load_image=False)
@@ -1417,31 +1388,16 @@ class GalleryInterface(QWidget):
         ThumbnailCache().reset_idle_timer()
 
     def _refresh_visible_thumbnails(self):
-        if not hasattr(self, '_all_card_widgets') or not self._all_card_widgets:
-            return
-            
-        scrollbar = self.scroll_area.verticalScrollBar()
-        scroll_y = scrollbar.value()
-        viewport_height = self.scroll_area.viewport().height()
-        
-        visible_top = scroll_y - 200
-        visible_bottom = scroll_y + viewport_height + 200
-        
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + self.LAYOUT_SPACING)))
-        current_size = self.config.get("thumbnail_size", 120)
-        
-        for index, widget in enumerate(self._all_card_widgets):
-            row = index // columns
-            card_y = self.LAYOUT_TOP_MARGIN + row * (current_size + self.LAYOUT_SPACING)
-            card_bottom = card_y + current_size
-            
-            if card_bottom >= visible_top and card_y <= visible_bottom:
-                if widget.needs_reload(current_size):
-                    widget.update_size(current_size, load_image=True)
+        self._apply_lazy_loading()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._schedule_responsive_layout()
+
+    def hideEvent(self, event):
+        if hasattr(self, '_virtual_gallery'):
+            self._virtual_gallery.suspend()
+        super().hideEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1461,66 +1417,35 @@ class GalleryInterface(QWidget):
         if getattr(self, '_current_columns', 0) != columns or force:
             self._current_columns = columns
             self._rearrange_gallery(columns)
+        elif hasattr(self, '_virtual_gallery'):
+            # A hotkey wake does not refresh storage; resume interrupted loading here.
+            self._virtual_gallery.refresh()
+        self._schedule_lazy_loading()
 
     def _rearrange_gallery(self, columns):
-        self.grid_container.setUpdatesEnabled(False)
-        
-        while self.gallery_layout.count():
-            self.gallery_layout.takeAt(0)
-            
-        from PySide6.QtCore import QSignalBlocker
-        
-        for index, widget in enumerate(getattr(self, '_all_card_widgets', [])):
-            row = index // columns
-            col = index % columns
-            
-            blocker = QSignalBlocker(widget)
-            self.gallery_layout.addWidget(widget, row, col)
-            widget.show()
-            del blocker
-            
-        self.grid_container.setUpdatesEnabled(True)
-        self.grid_container.update()
-        
-        # 恢复懒加载定时器，接管缩放结束后的剩余加载任务
-        self._lazy_load_timer.start(32)
+        if not hasattr(self, '_virtual_gallery'):
+            return
+        for index, card in self._virtual_gallery.cards.items():
+            self.gallery_layout.addWidget(card, index // columns, index % columns)
+        self._virtual_gallery.refresh()
 
     def remove_card_by_path(self, image_path):
-        """局部刷新：仅移除指定的卡片并重排，避免全局重绘卡顿"""
-        widget_to_remove = None
-        for widget in getattr(self, '_all_card_widgets', []):
-            if getattr(widget, 'image_path', None) == image_path:
-                widget_to_remove = widget
-                break
-                
-        if widget_to_remove:
-            self.grid_container.setUpdatesEnabled(False)
-            
-            self.gallery_layout.removeWidget(widget_to_remove)
-            widget_to_remove.hide()
-            widget_to_remove.setParent(None)
-            widget_to_remove.deleteLater()
-            
-            self._all_card_widgets.remove(widget_to_remove)
-            
-            if image_path in self._all_current_images:
-                self._all_current_images.remove(image_path)
-                self._loaded_count -= 1
-                
-            if image_path in self.selected_paths:
-                self.selected_paths.remove(image_path)
-                self.update_selection_count()
-                
-            columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
-            self._rearrange_gallery(columns)
-            
-            self.grid_container.setUpdatesEnabled(True)
-            self.grid_container.update()
+        if image_path in self._all_current_images:
+            self._all_current_images.remove(image_path)
+        self.selected_paths.discard(image_path)
+        self.update_selection_count()
+        self.clear_gallery()
+        self._load_next_batch()
 
     def clear_gallery(self):
-        """清空所有卡片并强制垃圾回收，释放内存"""
+        """清空可视区域卡片并取消所有待处理工作。"""
+        if hasattr(self, '_virtual_gallery'):
+            self._virtual_gallery.clear()
         if hasattr(self, '_render_timer') and self._render_timer.isActive():
             self._render_timer.stop()
+        self._lazy_load_timer.stop()
+        self.scroll_area.stop_scrolling()
+        self._active_thumbnail_widgets = set()
             
         self.grid_container.setUpdatesEnabled(False)
             
@@ -1529,6 +1454,7 @@ class GalleryInterface(QWidget):
             
         for widget in getattr(self, '_all_card_widgets', []):
             try:
+                widget.clear_resources()
                 widget.hide()
                 widget.setParent(None)
                 widget.deleteLater()
@@ -1543,9 +1469,6 @@ class GalleryInterface(QWidget):
         self.grid_container.setUpdatesEnabled(True)
         self.grid_container.update()
         
-        # 强制垃圾回收
-        import gc
-        gc.collect()
 
     def _matches_category(self, image_path, category_name, categories_map):
         if category_name == "全部表情": return True
@@ -1585,11 +1508,23 @@ class GalleryInterface(QWidget):
 
     def on_images_changed(self):
         """统一的图片变更刷新入口"""
+        if self.scroll_area.is_scrolling:
+            if not hasattr(self, '_gallery_refresh_timer'):
+                self._gallery_refresh_timer = QTimer(self)
+                self._gallery_refresh_timer.setSingleShot(True)
+                self._gallery_refresh_timer.timeout.connect(self.on_images_changed)
+            self._gallery_refresh_timer.start(160)
+            return
         if hasattr(self, 'preview_controller'):
             self.preview_controller.cancel()
-        # 1. 重新执行统一过滤管道
-        self._all_current_images = self._filter_images()
-        
+        images = self._filter_images()
+        if images == self._all_current_images and hasattr(self, '_virtual_gallery'):
+            # Waking the panel must not tear down cards or discard their pixmaps.
+            self._virtual_gallery.refresh()
+            return
+        self._all_current_images = images
+        self.scroll_area.verticalScrollBar().setValue(0)
+
         # 2. 清理多选状态中已经被过滤掉的图片
         if self.is_selection_mode:
             valid_selected = {p for p in self.selected_paths if p in self._all_current_images}
@@ -1609,97 +1544,19 @@ class GalleryInterface(QWidget):
 
     def refresh_gallery(self):
         """兼容旧接口，直接调用统一刷新入口"""
+        for card in self._all_card_widgets:
+            card.update_style()
         self.on_images_changed()
 
     def _load_next_batch(self):
-        if self._is_loading or self._loaded_count >= len(self._all_current_images):
-            return
-            
-        self._is_loading = True
-        
-        # 动态计算填满一屏需要的图片数量
-        current_size = self.config.get("thumbnail_size", 120)
-        item_width = current_size + 10
-        item_height = current_size + 10
-        
-        viewport_width = self.scroll_area.viewport().width()
-        viewport_height = self.scroll_area.viewport().height()
-        
-        # 确保初始启动时视口大小正确计算
-        if viewport_width < 100 or viewport_height < 100:
-            geometry = self.config.get("window_geometry", None)
-            if geometry and len(geometry) == 4:
-                viewport_width = max(100, geometry[2] - 140) # 减去侧边栏估算宽度
-                viewport_height = max(100, geometry[3] - 100) # 减去顶栏等估算高度
-            else:
-                viewport_width = 860 - 140
-                viewport_height = 640 - 100
-        
-        columns = max(1, viewport_width // item_width)
-        visible_rows = max(1, (viewport_height // item_height) + 2) # 多预加载2行防止滚动白屏
-        
-        target_count = columns * visible_rows
-        
-        # 确保至少加载一屏，且不超过总数
-        self._target_load_count = min(self._loaded_count + target_count, len(self._all_current_images))
-        
-        # 开始分帧渲染
-        self._render_timer = QTimer(self)
-        self._render_timer.timeout.connect(self._render_chunk)
-        self._render_timer.start(0) # 0ms 延迟，让出主线程后立即执行
+        if not hasattr(self, '_virtual_gallery'):
+            self._virtual_gallery = VirtualGallery(self)
+            self._render_timer = self._virtual_gallery.render_timer
+        self._virtual_gallery.refresh()
 
     def _render_chunk(self):
-        """分帧渲染核心逻辑，每次只渲染一小批，防止主线程卡死"""
-        if self._loaded_count >= self._target_load_count:
-            self._render_timer.stop()
-            self._is_loading = False
-            self._apply_lazy_loading()
-            return
-            
-        # 获取用户设置的单次渲染上限
-        max_batch_size = self.config.get("render_batch_size", 50)
-        
-        end_idx = min(self._loaded_count + max_batch_size, self._target_load_count)
-        batch_images = self._all_current_images[self._loaded_count:end_idx]
-        
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
-        current_size = self.config.get("thumbnail_size", 120)
-        
-        self.grid_container.setUpdatesEnabled(False)
-        from PySide6.QtCore import QSignalBlocker
-        
-        for i, image_path in enumerate(batch_images):
-            index = self._loaded_count + i
-            row = index // columns
-            col = index % columns
-            
-            card = EmojiCard(image_path, size=current_size)
-            card.customContextMenuRequested.connect(lambda pos, w=card: self.show_context_menu(w, pos))
-            card.clicked.connect(self.on_image_clicked)
-            card.delete_requested.connect(self.on_delete_requested)
-            
-            card.hover_started.connect(lambda path, w=card: self.on_hover_started(w, path))
-            card.hover_ended.connect(lambda w=card: self.on_hover_ended(w))
-            
-            card.set_selectable(self.is_selection_mode)
-            # 恢复选中状态
-            if image_path in self.selected_paths:
-                card.set_selected(True)
-                
-            card.selection_changed.connect(self.on_selection_changed)
-            
-            if not hasattr(self, '_all_card_widgets'):
-                self._all_card_widgets = []
-            card._is_loaded = True
-            self._all_card_widgets.append(card)
-            
-            blocker = QSignalBlocker(card)
-            self.gallery_layout.addWidget(card, row, col)
-            del blocker
-            
-        self._loaded_count = end_idx
-        self.grid_container.setUpdatesEnabled(True)
-        self.grid_container.update()
+        if hasattr(self, '_virtual_gallery'):
+            self._virtual_gallery.render_chunk()
 
     # ================== 批量选择与交互逻辑 ==================
 
@@ -1876,6 +1733,7 @@ class GalleryInterface(QWidget):
         return ", ".join(categories) if categories else "无", keywords or "无"
 
     def on_image_clicked(self, image_path, modifiers=Qt.NoModifier):
+        self.clipboard.auto_paste.cancel()
         is_ctrl = bool(modifiers & Qt.ControlModifier)
         is_shift = bool(modifiers & Qt.ShiftModifier)
 
@@ -1906,31 +1764,21 @@ class GalleryInterface(QWidget):
         self._last_clicked_path = image_path
         self._anchor_from_selection_click = False
 
+        target_window = self.last_active_window
         if self.clipboard.copy_image_to_clipboard(image_path):
             # 记录到最近使用
             limit = self.config.get("recent_limit", 30)
             self.storage.add_recent_image(image_path, limit)
 
-            target_window = self.last_active_window
             hide_after_paste = self.config.get("hide_main_after_paste", False)
             if hide_after_paste:
                 # Hide before restoring chat focus, just like the quick panel.
                 self.hide_after_paste_requested.emit()
             
-            # 再次检查 last_active_window 是否仍然有效且不是桌面/资源管理器等系统关键窗口
-            if target_window and user32.IsWindow(target_window):
-                class_name = get_window_class_name(target_window)
-                system_classes = (
-                    "Progman", "WorkerW", "Shell_TrayWnd", 
-                    "CabinetWClass", "ExploreWClass", "Windows.UI.Core.CoreWindow"
-                )
-                if class_name not in system_classes:
-                    user32.SetForegroundWindow(target_window)
-                    QTimer.singleShot(100, self.simulate_paste)
-                    return
-            
-            if not hide_after_paste:
-                self.show_success("已复制到剪切板！")
+            self.clipboard.paste_to_window(target_window)
+        else:
+            from services.i18n import t
+            self.show_error(t("复制失败"), t("无法复制图片，请检查文件后重试。"))
 
     def _toggle_card_selection(self, image_path):
         for widget in getattr(self, '_all_card_widgets', []):
@@ -1939,48 +1787,28 @@ class GalleryInterface(QWidget):
                 break
 
     def _execute_shift_selection(self, start_path, end_path):
-        widgets = getattr(self, '_all_card_widgets', [])
-        start_idx = -1
-        end_idx = -1
-        anchor_selected = True
-        
-        for i, widget in enumerate(widgets):
-            if widget.image_path == start_path:
-                start_idx = i
-                anchor_selected = widget.is_selected
-            if widget.image_path == end_path:
-                end_idx = i
-                
-        if start_idx != -1 and end_idx != -1:
-            min_idx = min(start_idx, end_idx)
-            max_idx = max(start_idx, end_idx)
-            
-            new_shift_paths = set()
-            for i in range(min_idx, max_idx + 1):
-                new_shift_paths.add(widgets[i].image_path)
-                
-            # 恢复多出来的卡片状态
-            for path in self._shift_selected_paths:
-                if path not in new_shift_paths:
-                    for w in widgets:
-                        if w.image_path == path:
-                            w.set_selected(not anchor_selected)
-                            break
-                            
-            # 设置新范围内的卡片状态
-            for i in range(min_idx, max_idx + 1):
-                widgets[i].set_selected(anchor_selected)
-                
-            self._shift_selected_paths = new_shift_paths
-
-    def simulate_paste(self):
-        VK_CONTROL = 0x11
-        VK_V = 0x56
-        KEYEVENTF_KEYUP = 0x0002
-        user32.keybd_event(VK_CONTROL, 0, 0, 0)
-        user32.keybd_event(VK_V, 0, 0, 0)
-        user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
-        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+        # Selection ranges are data indices; offscreen cards need not exist.
+        images = self._all_current_images
+        try:
+            start, end = images.index(start_path), images.index(end_path)
+        except ValueError:
+            return
+        anchor_selected = start_path in self.selected_paths
+        for path in self._shift_selected_paths:
+            if anchor_selected:
+                self.selected_paths.discard(path)
+            else:
+                self.selected_paths.add(path)
+        first, last = sorted((start, end))
+        selected_range = set(images[first:last + 1])
+        if anchor_selected:
+            self.selected_paths.update(selected_range)
+        else:
+            self.selected_paths.difference_update(selected_range)
+        self._shift_selected_paths = selected_range
+        for card in self._all_card_widgets:
+            card.set_selected(card.image_path in self.selected_paths)
+        self.update_selection_count()
 
     # ================== 拖拽逻辑 ==================
 
@@ -2036,24 +1864,17 @@ class GalleryInterface(QWidget):
             insert_after = False
             
             view_pos = self.grid_container.mapFrom(self, drop_pos)
-            min_dist = float('inf')
-            best_widget = None
-            
-            for i in range(self.gallery_layout.count()):
-                item = self.gallery_layout.itemAt(i)
-                if not item: continue
-                widget = item.widget()
-                if isinstance(widget, EmojiCard):
-                    widget_center = widget.geometry().center()
-                    dist = (view_pos - widget_center).manhattanLength()
-                    if dist < min_dist:
-                        min_dist = dist
-                        best_widget = widget
-                        insert_after = (view_pos.x() > widget_center.x())
-            
-            if best_widget:
-                target_path = best_widget.image_path
-                
+            size = self.config.get("thumbnail_size", 120)
+            stride = size + self.LAYOUT_SPACING
+            columns = max(1, self._current_columns)
+            left = max(16, (self.grid_container.width() - (columns * stride - self.LAYOUT_SPACING)) // 2)
+            row = max(0, (view_pos.y() - self.LAYOUT_TOP_MARGIN) // stride)
+            column = max(0, min(columns - 1, (view_pos.x() - left) // stride))
+            if self._all_current_images:
+                index = min(len(self._all_current_images) - 1, row * columns + column)
+                target_path = self._all_current_images[index]
+                insert_after = view_pos.x() > left + column * stride + size // 2
+
             if source_path and target_path and source_path != target_path:
                 images = self.storage.get_all_images()
                 # 统一使用标准化绝对路径进行比对，防止路径格式不一致导致排序失效
@@ -2163,19 +1984,11 @@ class GalleryInterface(QWidget):
             self.show_error("导入失败", '\n'.join(issues))
 
     def _reorder_widgets(self, new_order_paths):
-        widget_dict = {w.image_path: w for w in getattr(self, '_all_card_widgets', [])}
-        
-        sorted_widgets = []
-        for path in new_order_paths:
-            if path in widget_dict: sorted_widgets.append(widget_dict[path])
-                
-        for w in getattr(self, '_all_card_widgets', []):
-            if w not in sorted_widgets: sorted_widgets.append(w)
-                
-        self._all_card_widgets = sorted_widgets
-        
-        columns = getattr(self, '_current_columns', max(1, self.scroll_area.viewport().width() // (self.config.get("thumbnail_size", 120) + 10)))
-        self._rearrange_gallery(columns)
+        # Keep current filtering, but derive positions from the complete order.
+        current = set(self._all_current_images)
+        self._all_current_images = [path for path in new_order_paths if path in current]
+        self.clear_gallery()
+        self._load_next_batch()
 
     def force_refresh_sidebar_icons(self):
         """外部调用以重新应用图标尺寸"""

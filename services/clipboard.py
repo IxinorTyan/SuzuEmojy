@@ -5,6 +5,7 @@ import re
 import html
 import hashlib
 from PIL import Image
+from services.auto_paste import AutoPasteController, user32
 
 class ClipboardService(QObject):
     def __init__(self, config_service=None):
@@ -12,6 +13,10 @@ class ClipboardService(QObject):
         # 获取系统的剪切板
         self.clipboard = QGuiApplication.clipboard()
         self.config_service = config_service
+        self.auto_paste = AutoPasteController(self)
+        self._copied_clipboard_sequence = 0
+        self.clipboard.dataChanged.connect(self.auto_paste.cancel)
+        QGuiApplication.instance().aboutToQuit.connect(self.auto_paste.cancel)
         
         # 确定缓存目录
         import sys
@@ -144,10 +149,14 @@ class ClipboardService(QObject):
         将本地图片复制到系统剪切板（以文件和图像双重形式，确保聊天软件能识别表情并自适应气泡大小）
         - 若已是 GIF 格式，直接按原文件复制
         - 若是 PNG/JPG/WEBP 等静态图且开启了设置，则转为 1 帧 GIF 路径放入剪贴板
-        - 发生任何异常时自动回退至原图路径，确保复制操作绝对可靠
+        - 转换或复制异常时尝试回退至原图，失败返回 False，由调用方停止自动粘贴
         :param image_path: 图片绝对路径
         :return: bool 是否复制成功
         """
+        self.auto_paste.cancel()
+        self._copied_clipboard_sequence = 0
+        if not os.path.isfile(image_path):
+            return False
         try:
             mime_data = QMimeData()
             final_path = image_path
@@ -169,23 +178,36 @@ class ClipboardService(QObject):
             mime_data.setUrls([QUrl.fromLocalFile(final_path)])
             
             # 2. 放入图像数据 (这是兜底，某些只支持接收位图的场景)
-            image = QImage(final_path if os.path.exists(final_path) else image_path)
-            if not image.isNull():
-                mime_data.setImageData(image)
+            image = QImage(final_path)
+            if image.isNull():
+                raise ValueError("无法读取图片")
+            mime_data.setImageData(image)
                 
             self.clipboard.setMimeData(mime_data)
+            if QGuiApplication.platformName() == 'windows' and not self.clipboard.ownsClipboard():
+                raise RuntimeError("未能取得剪贴板所有权")
+            self._copied_clipboard_sequence = user32.GetClipboardSequenceNumber()
             return True
         except Exception as e:
             print(f"复制图片到剪切板失败: {e}")
             # 最终兜底尝试复制原图路径
             try:
+                if not os.path.isfile(image_path):
+                    return False
                 fallback_mime = QMimeData()
                 fallback_mime.setUrls([QUrl.fromLocalFile(image_path)])
                 img = QImage(image_path)
-                if not img.isNull():
-                    fallback_mime.setImageData(img)
+                if img.isNull():
+                    return False
+                fallback_mime.setImageData(img)
                 self.clipboard.setMimeData(fallback_mime)
+                if QGuiApplication.platformName() == 'windows' and not self.clipboard.ownsClipboard():
+                    return False
+                self._copied_clipboard_sequence = user32.GetClipboardSequenceNumber()
                 return True
             except Exception as fallback_err:
                 print(f"剪贴板兜底回退复制失败: {fallback_err}")
         return False
+
+    def paste_to_window(self, target):
+        return self.auto_paste.start(target, self._copied_clipboard_sequence)

@@ -1,12 +1,35 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows.Forms;
 
 internal static class LauncherStub
 {
+    private static string ForwardArguments(string[] args)
+    {
+        // Quote using Windows argv rules, including quotes and trailing slashes.
+        StringBuilder result = new StringBuilder();
+        foreach (string arg in args)
+        {
+            if (result.Length > 0) result.Append(' ');
+            result.Append('"');
+            int slashes = 0;
+            foreach (char c in arg)
+            {
+                if (c == '\\') { slashes++; continue; }
+                result.Append('\\', c == '"' ? slashes * 2 + 1 : slashes);
+                result.Append(c);
+                slashes = 0;
+            }
+            result.Append('\\', slashes * 2);
+            result.Append('"');
+        }
+        return result.ToString();
+    }
+
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
         string updateDirectory = Path.Combine(baseDirectory, ".update");
@@ -48,6 +71,7 @@ internal static class LauncherStub
             Process.Start(new ProcessStartInfo
             {
                 FileName = targetPath,
+                Arguments = ForwardArguments(args),
                 WorkingDirectory = baseDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true

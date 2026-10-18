@@ -9,7 +9,7 @@
 
 ## 发布
 
-1. 修改唯一版本来源 `version.json`（本次功能版本设为 `1.13.0`）。使用三段数字，修复也必须增加版本，不要用相同 tag 替换包。
+1. 修改唯一版本来源 `version.json`（本次功能版本设为 `1.13.1`）。使用三段数字，修复也必须增加版本，不要用相同 tag 替换包。
 2. 构建环境需安装 `pyinstaller`。运行 `build_nuitka.bat`（完整离线版）或 `build.bat`（轻量版）。
 3. 构建脚本生成独立 `SuzuEmojyUpdater.exe`、`release-manifest.json`、`dist/SuzuEmojy_Release.zip` 和 `.zip.sha256`。
 4. 创建与内置版本完全一致的 `vX.Y.Z` 稳定版 Release，上传固定名称 `SuzuEmojy_Release.zip`。

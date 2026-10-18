@@ -23,6 +23,12 @@ dwmapi = ctypes.windll.dwmapi
 # 显式声明 Win32 API 的参数类型，避免 64 位冻结程序中 HWND 被截断。
 user32.IsWindow.argtypes = [wintypes.HWND]
 user32.IsWindow.restype = wintypes.BOOL
+user32.IsZoomed.argtypes = [wintypes.HWND]
+user32.IsZoomed.restype = wintypes.BOOL
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.IsIconic.restype = wintypes.BOOL
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wintypes.BOOL
 user32.SetWindowPos.argtypes = [
     wintypes.HWND,
     wintypes.HWND,
@@ -108,6 +114,24 @@ class MainWindow(FramelessWindow):
             self.setFont(font)
             
         self.ensure_window_visible()
+        self._windowed_geometry = self.geometry()
+
+    def _remember_windowed_geometry(self):
+        if not hasattr(self, '_windowed_geometry'):
+            return
+        if self.isMaximized() or self.isMinimized() or self.isFullScreen():
+            return
+        hwnd = int(self.winId())
+        if not user32.IsZoomed(hwnd) and not user32.IsIconic(hwnd):
+            self._windowed_geometry = self.geometry()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._remember_windowed_geometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._remember_windowed_geometry()
 
     def ensure_window_visible(self):
         """
@@ -173,6 +197,20 @@ class MainWindow(FramelessWindow):
                 self.titleBar.closeBtn.setPressedColor(QColor(255, 255, 255))
                 self.titleBar.closeBtn.update()
 
+    def showNormal(self):
+        # 标题栏在新版 Qt 上用 Win32 SC_MAXIMIZE 最大化。仅调用 Qt
+        # showNormal() 可能保留 WS_MAXIMIZE 和最大化尺寸，边缘缩放也随之失效。
+        # 可见窗口直接走原生还原，让 Windows 通知 Qt 更新状态。
+        # 隐藏窗口交给 Qt 显示；混用两条路径会让延迟状态事件覆盖还原结果。
+        hwnd = int(self.winId())
+        if self.isVisible() and (user32.IsZoomed(hwnd) or user32.IsIconic(hwnd)):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            # 从“最大化后最小化”还原会先回到最大化，再还原一次才是普通窗口。
+            if user32.IsZoomed(hwnd):
+                user32.ShowWindow(hwnd, 9)
+            return
+        super().showNormal()
+
     def showEvent(self, event):
         super().showEvent(event)
         # FramelessWindow 已在初始化时启用系统动画，显示/还原时不要重写窗口样式。
@@ -197,12 +235,20 @@ class MainWindow(FramelessWindow):
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.ActivationChange:
+            if self.isActiveWindow() and getattr(self, 'clipboard', None) is not None:
+                self.clipboard.auto_paste.cancel()
             # 激活切换只重新确认置顶状态，不修改关闭按钮的正常 hover 状态。
             QTimer.singleShot(0, self.apply_window_flags)
 
     def closeEvent(self, event):
         """保存窗口状态和布局比例"""
+        # 原生最大化时 Qt normalGeometry() 可能带有边框偏差，
+        # 保存实际记录的普通窗口尺寸，避免下次启动铺满屏幕或逐次缩小。
         geo = self.geometry()
+        if self.isMaximized() or self.isMinimized() or self.isFullScreen():
+            geo = self._windowed_geometry
+        if not geo.isValid():
+            geo = self.normalGeometry()
         self.config.set("window_geometry", [geo.x(), geo.y(), geo.width(), geo.height()])
         if hasattr(self, 'about_interface'):
             self.about_interface.shutdown()
@@ -420,8 +466,8 @@ class MainWindow(FramelessWindow):
         else:
             # 在面板显示前，记录当前的前台窗口句柄
             hwnd = user32.GetForegroundWindow()
-            if hwnd and hwnd != int(self.winId()) and hwnd != int(self.quick_panel.winId()):
-                self.quick_panel.set_target_hwnd(hwnd)
+            target = hwnd if hwnd and hwnd not in (int(self.winId()), int(self.quick_panel.winId())) else None
+            self.quick_panel.set_target_hwnd(target)
             self.quick_panel.show_at_cursor()
 
     def _hide_after_paste(self):

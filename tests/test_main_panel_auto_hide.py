@@ -18,33 +18,32 @@ class MainPanelAutoHideTests(unittest.TestCase):
             storage=Mock(), is_selection_mode=selection,
             _last_clicked_path=None, _shift_selected_paths=set(),
             _anchor_from_selection_click=False, last_active_window=target,
-            hide_after_paste_requested=Mock(), show_success=Mock(),
-            simulate_paste=Mock(), set_selection_mode=Mock(),
+            hide_after_paste_requested=Mock(), show_success=Mock(), show_error=Mock(),
+            set_selection_mode=Mock(),
             _toggle_card_selection=Mock(),
         )
 
-    def test_enabled_hides_before_focus_and_schedules_paste(self):
+    def test_enabled_hides_before_starting_guarded_paste(self):
         view = self.make_view(enabled=True)
         events = []
         view.hide_after_paste_requested.emit.side_effect = lambda: events.append('hide')
-        with patch('fluent_ui.views.gallery_view.user32') as native, \
-                patch('fluent_ui.views.gallery_view.get_window_class_name', return_value='Chat'), \
-                patch('fluent_ui.views.gallery_view.QTimer.singleShot') as timer:
-            native.SetForegroundWindow.side_effect = lambda hwnd: events.append('focus')
-            GalleryInterface.on_image_clicked(view, 'emoji.gif')
-            self.assertEqual(events, ['hide', 'focus'])
-            native.SetForegroundWindow.assert_called_once_with(123)
-            timer.assert_called_once_with(100, view.simulate_paste)
+        view.clipboard.paste_to_window.side_effect = lambda hwnd: events.append('paste')
+        GalleryInterface.on_image_clicked(view, 'emoji.gif')
+        self.assertEqual(events, ['hide', 'paste'])
+        view.clipboard.paste_to_window.assert_called_once_with(123)
         view.storage.add_recent_image.assert_called_once_with('emoji.gif', 30)
 
     def test_default_keeps_panel_open(self):
         view = self.make_view()
-        with patch('fluent_ui.views.gallery_view.user32'), \
-                patch('fluent_ui.views.gallery_view.get_window_class_name', return_value='Chat'), \
-                patch('fluent_ui.views.gallery_view.QTimer.singleShot') as timer:
-            GalleryInterface.on_image_clicked(view, 'emoji.gif')
-            timer.assert_called_once()
+        GalleryInterface.on_image_clicked(view, 'emoji.gif')
+        view.clipboard.paste_to_window.assert_called_once_with(123)
         view.hide_after_paste_requested.emit.assert_not_called()
+
+    def test_hide_cannot_change_the_captured_paste_target(self):
+        view = self.make_view(enabled=True)
+        view.hide_after_paste_requested.emit.side_effect = lambda: setattr(view, 'last_active_window', 456)
+        GalleryInterface.on_image_clicked(view, 'emoji.gif')
+        view.clipboard.paste_to_window.assert_called_once_with(123)
 
     def test_copy_failure_and_selection_never_hide_or_paste(self):
         cases = [(False, False, Qt.NoModifier), (True, True, Qt.NoModifier),
@@ -52,17 +51,15 @@ class MainPanelAutoHideTests(unittest.TestCase):
         for copied, selection, modifiers in cases:
             with self.subTest(copied=copied, selection=selection, modifiers=modifiers):
                 view = self.make_view(True, copied, selection)
-                with patch('fluent_ui.views.gallery_view.QTimer.singleShot') as timer:
-                    GalleryInterface.on_image_clicked(view, 'emoji.gif', modifiers)
-                    timer.assert_not_called()
+                GalleryInterface.on_image_clicked(view, 'emoji.gif', modifiers)
+                view.clipboard.paste_to_window.assert_not_called()
                 view.hide_after_paste_requested.emit.assert_not_called()
                 view.storage.add_recent_image.assert_not_called()
 
     def test_no_target_still_copies_and_hides_like_quick_panel(self):
         view = self.make_view(enabled=True, target=None)
-        with patch('fluent_ui.views.gallery_view.QTimer.singleShot') as timer:
-            GalleryInterface.on_image_clicked(view, 'emoji.gif')
-            timer.assert_not_called()
+        GalleryInterface.on_image_clicked(view, 'emoji.gif')
+        view.clipboard.paste_to_window.assert_called_once_with(None)
         view.hide_after_paste_requested.emit.assert_called_once()
         view.show_success.assert_not_called()
 

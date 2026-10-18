@@ -1,7 +1,67 @@
+import argparse
+import ctypes
 import os
 import subprocess
 import sys
 import shutil
+from pathlib import Path
+from time import perf_counter
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def memory_capacity():
+    """Physical RAM for a conservative compiler concurrency default."""
+    if os.name != "nt":
+        return None
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+            (name, ctypes.c_ulonglong) for name in (
+                "total", "available", "page_total", "page_available",
+                "virtual_total", "virtual_available", "extended_available",
+            )
+        ]
+
+    status = MemoryStatus()
+    status.length = ctypes.sizeof(status)
+    if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return status.total
+    return None
+
+
+def default_jobs():
+    # Keep RAM for Windows, Python analysis and the linker. This is a heuristic,
+    # not a compiler memory limit; --jobs allows tuning for a particular machine.
+    ram = memory_capacity()
+    ram_jobs = max(1, (ram - 4 * 1024 ** 3) // (2 * 1024 ** 3)) if ram else 4
+    return min(os.cpu_count() or 1, ram_jobs)
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Build the standalone SuzuEmojy release without changing size optimizations.")
+    parser.add_argument("--jobs", type=int, default=default_jobs(), help="C compiler processes (default: bounded by CPU count and RAM)")
+    parser.add_argument("--clean", action="store_true", help="Recreate project intermediates and rebuild the updater; keep global compiler caches")
+    parser.add_argument("--dry-run", action="store_true", help="Print the build plan without changing files or compiling")
+    args = parser.parse_args(argv)
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    return args
+
+
+def prepare_build_directory(clean=False):
+    # Never mix previous standalone dependencies into a new release. Nuitka
+    # itself regenerates C/objects; retaining .build alone is not incremental C.
+    paths = [ROOT / "dist" / "main.dist"]
+    if clean:
+        paths.append(ROOT / "dist" / "main.build")
+    for path in paths:
+        if path.exists():
+            if path.is_symlink() or path.is_junction() or not path.resolve().is_relative_to(ROOT):
+                raise ValueError(f"Refusing to clean linked build directory: {path}")
+            print(f"Removing stale build output: {path}")
+            shutil.rmtree(path)
 
 
 def find_csc():
@@ -60,21 +120,8 @@ def build_launcher_stub(release_dir):
     return output_path
 
 
-def main():
-    # Fail early instead of discovering the updater build dependency after Nuitka.
-    subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], check=True)
-    print("====================================")
-    print("Building SuzuEmojy with Nuitka")
-    print("====================================")
-
-    # 清理 Nuitka 上一次的 standalone 产物，避免旧依赖残留到新发布包。
-    for path in ("dist/main.dist", "dist/main.build"):
-        if os.path.exists(path):
-            print(f"Removing stale build output: {path}")
-            shutil.rmtree(path)
-
-    # Nuitka command
-    cmd = [
+def nuitka_command(jobs, ffmpeg_exe):
+    return [
         sys.executable, "-m", "nuitka",
         "--standalone",
         "--windows-disable-console",
@@ -84,6 +131,7 @@ def main():
         "--output-dir=dist",
         "--output-filename=SuzuEmojy.exe",
         "--assume-yes-for-downloads",
+        f"--jobs={jobs}",
         "--include-package=qfluentwidgets",
         # services/fluent_ui 均通过入口和页面的显式导入自动跟踪，
         # 不再强制递归包含，避免把未使用模块带入发布包。
@@ -96,9 +144,9 @@ def main():
         "--nofollow-import-to=PySide6.QtMultimediaWidgets",
         "--nofollow-import-to=PySide6.QtPdf",
         "--nofollow-import-to=PySide6.QtPdfWidgets",
-        
+
         # imageio-ffmpeg 只用于定位 FFmpeg；发布包仅携带实际需要的单个可执行文件。
-        "--include-data-file=" + __import__("imageio_ffmpeg").get_ffmpeg_exe() + "=ffmpeg/ffmpeg.exe",
+        "--include-data-file=" + ffmpeg_exe + "=ffmpeg/ffmpeg.exe",
 
         # ---- 体积优化：禁止无用的 OpenCV/NumPy 整套依赖进入发布包 ----
         "--nofollow-import-to=cv2",
@@ -130,42 +178,68 @@ def main():
         "main.py"
     ]
 
-    print("Running command:", " ".join(cmd))
-    print("This may take a while, please wait...")
-    
-    # Run the build process
+
+def build_environment():
     env = os.environ.copy()
     # Clear existing CFLAGS/CCFLAGS to avoid conflicts
     for key in ["CFLAGS", "CCFLAGS", "CXXFLAGS", "LDFLAGS", "CPPFLAGS"]:
         if key in env:
             del env[key]
-            
+
     # Force x86_64_v3 architecture to enable AVX2 but avoid AVX-512 instructions
     # x86_64_v3 includes AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE, XSAVE
     # Note: Zig compiler requires underscores (x86_64_v3) instead of hyphens
     env["CFLAGS"] = "-march=x86_64_v3"
     env["CCFLAGS"] = "-march=x86_64_v3"
+    return env
 
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    
+
+def main(argv=None):
+    args = parse_args(argv)
+    os.chdir(ROOT)
+    import imageio_ffmpeg
+
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = nuitka_command(args.jobs, ffmpeg_exe)
+    print(f"Compiler processes: {args.jobs} (override with --jobs N)")
+    print("Compiler cache settings: preserved; updater: incremental; ZIP: DEFLATE level 6")
+    print("Running command:", subprocess.list2cmdline(cmd))
+    if args.dry_run:
+        print(f"Dry run only. Clean project intermediates: {args.clean}")
+        return
+
+    # Fail before an expensive compile if release prerequisites are missing.
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], check=True)
+    if not find_csc():
+        raise RuntimeError("找不到 csc.exe，无法生成发布包启动器。请安装 .NET Framework 4.x Developer Pack。")
+    for required in ("launcher_stub.cs", "ico.ico", ffmpeg_exe):
+        if not Path(required).is_file():
+            raise FileNotFoundError(required)
+    prepare_build_directory(args.clean)
+    started = perf_counter()
+    print("Building SuzuEmojy with Nuitka...")
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=build_environment())
+
     for line in process.stdout:
         print(line, end="")
-        
+
     process.wait()
-    
+    print(f"\nNuitka compilation: {perf_counter() - started:.1f}s")
+
     if process.returncode == 0:
         print("\n====================================")
         print("Nuitka Build Complete! Now preparing clean release folder...")
-        
+
         release_dir = "dist/SuzuEmojy_Release"
         bin_dir = os.path.join(release_dir, "bin")
-        
+
         # 1. 清理旧的 release 文件夹
         if os.path.exists(release_dir):
             shutil.rmtree(release_dir)
-            
+
         os.makedirs(release_dir)
-        
+
         # 2. 将 Nuitka 生成的 dist 移动为 bin 目录
         shutil.move("dist/main.dist", bin_dir)
 
@@ -179,7 +253,7 @@ def main():
             if os.path.isfile(optional_file):
                 print(f"Removing unused Qt PDF component: {optional_file}")
                 os.remove(optional_file)
-        
+
         # 3. 复制文档、图标和数据
         files_to_copy = ["README.md", "说明书.md", "ico.ico"]
         for f in files_to_copy:
@@ -207,13 +281,11 @@ def main():
         ):
             if os.path.isfile(stale_path):
                 os.remove(stale_path)
-        if os.path.isdir("build"):
-            shutil.rmtree("build")
-        
+
         print("\n====================================")
         print("Running AVX-512 verification...")
         print("====================================")
-        
+
         # 运行 AVX-512 检测脚本
         check_script = "check_avx512.py"
         if os.path.exists(check_script):
@@ -224,10 +296,11 @@ def main():
                 print("BUILD FAILED: AVX-512 instructions detected in the binary!")
                 print("====================================")
                 sys.exit(1)
-        
+
         print("\n====================================")
         from scripts.package_release import package_release
-        package_release(release_dir, "standalone")
+        package_release(release_dir, "standalone", clean=args.clean)
+        print(f"Total build and packaging: {perf_counter() - started:.1f}s")
         print("All Done!")
         print(f"Clean release package is ready at: {os.path.abspath(release_dir)}")
         print("====================================")
@@ -238,8 +311,4 @@ def main():
         sys.exit(process.returncode or 1)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
-        print("Usage: python build_nuitka.py")
-        print("Builds standalone SuzuEmojy release package using Nuitka.")
-        sys.exit(0)
     main()

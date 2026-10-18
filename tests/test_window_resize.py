@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QGridLayout, QSplitter
 from qfluentwidgets import ScrollArea
+from fluent_ui.components.virtual_grid_layout import VirtualGridLayout
 
 from fluent_ui.views.gallery_view import GalleryInterface
 from fluent_ui.main_window import MainWindow
@@ -39,7 +40,7 @@ class ResizeGallery(GalleryInterface):
         self.scroll_area.setWidgetResizable(True)
         self.splitter.addWidget(self.scroll_area)
         self.grid_container = QWidget()
-        self.gallery_layout = QGridLayout(self.grid_container)
+        self.gallery_layout = VirtualGridLayout(self.grid_container)
         self.gallery_layout.setSpacing(10)
         self.gallery_layout.setContentsMargins(16, 8, 16, 16)
         self.gallery_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
@@ -50,6 +51,11 @@ class ResizeGallery(GalleryInterface):
             card = QWidget()
             card.setFixedSize(120, 120)
             self._all_card_widgets.append(card)
+        self._virtual_gallery = SimpleNamespace(
+            cards=dict(enumerate(self._all_card_widgets)),
+            refresh=lambda: self.gallery_layout.configure(80, self._current_columns, 120),
+            schedule_thumbnails=Mock(), suspend=Mock(),
+        )
         self.splitter.setSizes([140, 800])
 
     def _rearrange_gallery(self, columns):

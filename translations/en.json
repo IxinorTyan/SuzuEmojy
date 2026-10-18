@@ -411,5 +411,9 @@
     "请等待导入、导出和后台任务结束后再更新": "Wait for imports, exports and background tasks to finish before updating.",
     "现在退出软件并安装更新？用户数据将保留。": "Exit now and install the update? Your data will be preserved.",
     "正在准备重启更新…": "Preparing to restart and update…",
-    "正在下载并校验更新…": "Downloading and verifying update…"
+    "正在下载并校验更新…": "Downloading and verifying update…",
+    "复制失败": "Copy failed",
+    "无法复制图片，请检查文件后重试。": "Could not copy the image. Check the file and try again.",
+    "未自动粘贴": "Automatic paste stopped",
+    "未能自动粘贴，请返回目标窗口手动粘贴。": "Could not paste automatically. Return to the target window and paste manually."
 }
