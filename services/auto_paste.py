@@ -26,6 +26,11 @@ user32.GetClipboardSequenceNumber.argtypes = []
 user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
 user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 user32.GetAsyncKeyState.restype = wintypes.SHORT
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.AttachThreadInput.restype = wintypes.BOOL
+kernel32 = ctypes.windll.kernel32
+kernel32.GetCurrentThreadId.argtypes = []
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -121,9 +126,30 @@ class AutoPasteController(QObject):
         self._elapsed.start()
         if user32.IsIconic(target):
             user32.ShowWindow(target, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(target)
+        self._restore_target_foreground()
         self._timer.start(100)
         return True
+
+    def _restore_target_foreground(self):
+        if user32.SetForegroundWindow(self._target):
+            return
+        # Windows can refuse the switch after a tool panel hides. Temporarily
+        # share the input queues, then detach before checking focus or sending
+        # any keys. Never force activation again from a delayed timer callback.
+        current_thread = kernel32.GetCurrentThreadId()
+        foreground = user32.GetForegroundWindow()
+        foreground_thread = (user32.GetWindowThreadProcessId(foreground, None)
+                             if foreground else 0)
+        threads = dict.fromkeys((self._identity[0], foreground_thread))
+        attached = []
+        try:
+            for thread in threads:
+                if thread and thread != current_thread and user32.AttachThreadInput(current_thread, thread, True):
+                    attached.append(thread)
+            user32.SetForegroundWindow(self._target)
+        finally:
+            for thread in reversed(attached):
+                user32.AttachThreadInput(current_thread, thread, False)
 
     def _fail(self):
         self.cancel()

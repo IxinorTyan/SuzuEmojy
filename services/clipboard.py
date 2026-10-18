@@ -15,9 +15,9 @@ class ClipboardService(QObject):
         self.config_service = config_service
         self.auto_paste = AutoPasteController(self)
         self._copied_clipboard_sequence = 0
-        self.clipboard.dataChanged.connect(self.auto_paste.cancel)
+        self.clipboard.dataChanged.connect(self._on_clipboard_changed)
         QGuiApplication.instance().aboutToQuit.connect(self.auto_paste.cancel)
-        
+
         # 确定缓存目录
         import sys
         if getattr(sys, 'frozen', False):
@@ -29,6 +29,14 @@ class ClipboardService(QObject):
             os.makedirs(self.cache_dir, exist_ok=True)
         except Exception as e:
             print(f"[WARNING] 创建 GIF 转换缓存目录失败: {e}")
+
+    def _on_clipboard_changed(self):
+        # Windows delivers our own WM_CLIPBOARDUPDATE after setMimeData returns.
+        # It can arrive after paste_to_window has started; only a replacement
+        # should cancel the request, not this delayed acknowledgement.
+        if (not self.clipboard.ownsClipboard()
+                or user32.GetClipboardSequenceNumber() != self._copied_clipboard_sequence):
+            self.auto_paste.cancel()
 
     def _get_config_service(self):
         if self.config_service:

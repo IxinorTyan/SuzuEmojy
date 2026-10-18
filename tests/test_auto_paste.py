@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -32,7 +33,8 @@ class AutoPasteTests(unittest.TestCase):
 
         def identity(hwnd, process_id):
             thread, process = self.identities[hwnd]
-            ctypes.cast(process_id, ctypes.POINTER(wintypes.DWORD)).contents.value = process
+            if process_id is not None:
+                ctypes.cast(process_id, ctypes.POINTER(wintypes.DWORD)).contents.value = process
             return thread
 
         def class_name(hwnd, buffer, length):
@@ -181,6 +183,36 @@ class AutoPasteTests(unittest.TestCase):
         self.native.ShowWindow.assert_called_once_with(123, 9)
         self.native.SetForegroundWindow.assert_called_once_with(123)
 
+    def test_refused_activation_temporarily_attaches_and_always_detaches(self):
+        self.native.SetForegroundWindow.return_value = False
+        self.native.GetForegroundWindow.return_value = 456
+        self.native.AttachThreadInput.return_value = True
+        with patch('services.auto_paste.kernel32') as kernel:
+            kernel.GetCurrentThreadId.return_value = 77
+            self.assertTrue(self.controller.start(123))
+        self.assertEqual(self.native.SetForegroundWindow.call_count, 2)
+        self.assertEqual([call.args for call in self.native.AttachThreadInput.call_args_list],
+                         [(77, 55, True), (77, 66, True), (77, 66, False), (77, 55, False)])
+        # A later focus change must not trigger more activation or paste into
+        # the unrelated foreground window.
+        self.check()
+        self.native.SendInput.assert_not_called()
+        self.assertEqual(self.native.SetForegroundWindow.call_count, 2)
+        self.native.GetForegroundWindow.return_value = 123
+        self.check()
+        self.native.SendInput.assert_called_once()
+
+    def test_refused_activation_skips_current_thread_and_failed_attach(self):
+        self.native.SetForegroundWindow.return_value = False
+        self.native.GetForegroundWindow.return_value = 456
+        self.native.AttachThreadInput.return_value = False
+        with patch('services.auto_paste.kernel32') as kernel:
+            kernel.GetCurrentThreadId.return_value = 55
+            self.assertTrue(self.controller.start(123))
+        self.native.AttachThreadInput.assert_called_once_with(55, 66, True)
+        self.check()
+        self.native.SendInput.assert_not_called()
+
     def test_held_modifiers_delay_paste_until_release(self):
         self.controller.start(123)
         self.native.GetAsyncKeyState.side_effect = lambda key: 0x8000 if key == 0x12 else 0
@@ -207,6 +239,54 @@ class AutoPasteTests(unittest.TestCase):
         self.assertEqual(count, 2)
         self.assertEqual([(i.data.ki.wVk, i.data.ki.dwFlags) for i in inputs], [(0x56, 2), (0x11, 2)])
         self.failed.assert_called_once()
+
+    def test_delayed_notification_for_copied_image_still_pastes_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder, 'image.png'))
+            image = QImage(8, 8, QImage.Format_ARGB32)
+            image.fill(0xffff0000)
+            self.assertTrue(image.save(path))
+            with patch('services.clipboard.user32', self.native):
+                service = ClipboardService({'convert_static_to_gif': False})
+                try:
+                    with patch.object(service.clipboard, 'ownsClipboard', return_value=True):
+                        self.assertTrue(service.copy_image_to_clipboard(path))
+                        self.assertTrue(service.paste_to_window(123))
+                        # Windows posts this notification after the click handler
+                        # has copied, hidden the panel and scheduled the paste.
+                        QTimer.singleShot(0, service.clipboard.dataChanged.emit)
+                        self.app.processEvents()
+                        self.assertEqual(service.auto_paste._target, 123)
+                        service.auto_paste._timer.stop()
+                        service.auto_paste._check_focus_and_paste()
+                        service.auto_paste._check_focus_and_paste()
+                        self.native.SendInput.assert_called_once()
+                finally:
+                    service.auto_paste.cancel()
+                    service.deleteLater()
+                    self.app.processEvents()
+
+    def test_clipboard_replacement_still_cancels_after_own_notification(self):
+        for still_owner in (False, True):
+            with self.subTest(still_owner=still_owner), patch('services.clipboard.user32', self.native):
+                self.native.GetClipboardSequenceNumber.return_value = 40
+                service = ClipboardService({})
+                try:
+                    service._copied_clipboard_sequence = 40
+                    self.assertTrue(service.paste_to_window(123))
+                    with patch.object(service.clipboard, 'ownsClipboard', return_value=True):
+                        service.clipboard.dataChanged.emit()
+                        self.assertEqual(service.auto_paste._target, 123)
+                    self.native.GetClipboardSequenceNumber.return_value = 41
+                    with patch.object(service.clipboard, 'ownsClipboard', return_value=still_owner):
+                        service.clipboard.dataChanged.emit()
+                    service.auto_paste._check_focus_and_paste()
+                    self.assertIsNone(service.auto_paste._target)
+                    self.native.SendInput.assert_not_called()
+                finally:
+                    service.auto_paste.cancel()
+                    service.deleteLater()
+                    self.app.processEvents()
 
 
 class PasteIntegrationTests(unittest.TestCase):

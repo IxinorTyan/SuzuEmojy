@@ -375,7 +375,10 @@ class GalleryRenderTests(unittest.TestCase):
         self.view.scroll_area.is_scrolling = False
         self.view._virtual_gallery.refresh()
         self.view._render_timer.stop()
-        self.view._render_chunk()
+        # Leave a partial batch regardless of how quickly this machine can
+        # create cards within the renderer's time budget.
+        with patch('fluent_ui.components.virtual_gallery.perf_counter', side_effect=[0, .01]):
+            self.view._render_chunk()
         self.assertLessEqual(len(self.view._all_card_widgets), 2)
         self.view.hide()
         self.view.show()
