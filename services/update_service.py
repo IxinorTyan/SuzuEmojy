@@ -10,9 +10,11 @@ import sys
 import threading
 import uuid
 import zipfile
+from urllib.parse import urlsplit
 
 import requests
 
+from services.update_errors import UpdateError, UpdateNetworkError, request_error
 from services.update_protocol import (
     MANIFEST, atomic_json, child, read_manifest, safe_name, sha256, version_key,
 )
@@ -22,6 +24,10 @@ API_URL = "https://api.github.com/repos/IxinorTyan/SuzuEmojy/releases/latest"
 ASSET_NAME = "SuzuEmojy_Release.zip"
 MAX_DOWNLOAD = 2 * 1024 ** 3
 MAX_EXTRACTED = 8 * 1024 ** 3
+# These proxies support release downloads; ghfast does not proxy the API.
+API_MIRRORS = ("https://gh-proxy.com/",)
+DOWNLOAD_MIRRORS = ("https://gh-proxy.com/", "https://ghfast.top/")
+REQUEST_TIMEOUT = (5, 12)
 
 
 def install_root():
@@ -37,7 +43,7 @@ def current_version(root=None):
         version = json.loads(((root or install_root()) / "version.json").read_text(encoding="utf-8"))["version"]
         version_key(version)
         return version
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError):
         return "unknown"
 
 
@@ -62,31 +68,74 @@ class UpdateService:
         if self.cancel.is_set():
             raise Cancelled()
 
-    def check(self):
+    def _sources(self, url, mirrors):
+        yield "GitHub", url
+        for mirror in mirrors:
+            yield urlsplit(mirror).hostname, mirror + url
+
+    def check(self, report=None):
+        attempts = []
+        for source, url in self._sources(API_URL, API_MIRRORS):
+            self._cancelled()
+            if report:
+                report(source)
+            try:
+                with requests.get(url, headers={"User-Agent": "SuzuEmojy-Updater", "Accept": "application/vnd.github+json"}, timeout=REQUEST_TIMEOUT) as response:
+                    response.raise_for_status()
+                    if not response.url.startswith("https://"):
+                        raise UpdateError("redirect")
+                    release = response.json()
+                    if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
+                        raise UpdateError("metadata", "Missing release tag_name")
+            except (requests.RequestException, ValueError) as error:
+                attempts.append((source, url, request_error(error)))
+                continue
+            self._cancelled()
+            result = self._parse_release(release)
+            if result:
+                result["source"] = source
+            return result
         self._cancelled()
-        with requests.get(API_URL, headers={"User-Agent": "SuzuEmojy-Updater", "Accept": "application/vnd.github+json"}, timeout=(8, 15)) as response:
-            response.raise_for_status()
-            release = response.json()
-        self._cancelled()
+        raise UpdateNetworkError("check", attempts)
+
+    def _parse_release(self, release):
         if release.get("draft") or release.get("prerelease"):
             raise ValueError("No stable release available")
         latest = release["tag_name"]
-        if version_key(latest) <= version_key(current_version(self.root)):
+        installed_version = current_version(self.root)
+        if installed_version == "unknown":
+            raise UpdateError("version", str(self.root / "version.json"))
+        if version_key(latest) <= version_key(installed_version):
             return None
-        assets = [a for a in release.get("assets", []) if a["name"] == ASSET_NAME and a.get("state") == "uploaded"]
+        assets = release.get("assets")
+        if not isinstance(assets, list) or not all(isinstance(asset, dict) for asset in assets):
+            raise UpdateError("release", "Invalid release assets")
+        assets = [a for a in assets if a.get("name") == ASSET_NAME and a.get("state") == "uploaded"]
         if len(assets) != 1:
             raise ValueError("Release does not contain " + ASSET_NAME)
         asset = assets[0]
         digest = asset.get("digest") or ""
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise ValueError("Release asset has no SHA-256 digest; use the release page")
-        url = asset["browser_download_url"]
-        if not url.startswith(RELEASES_URL + "/download/"):
+        url = asset.get("browser_download_url")
+        if not isinstance(url, str) or not url.startswith(RELEASES_URL + "/download/"):
             raise ValueError("Unexpected release download URL")
-        if not 0 < asset["size"] <= MAX_DOWNLOAD:
+        if type(asset.get("size")) is not int or not 0 < asset["size"] <= MAX_DOWNLOAD:
             raise ValueError("Invalid release size")
-        return {"version": latest.lstrip("v"), "notes": release.get("body") or "", "date": release.get("published_at", ""),
+        notes, date = release.get("body") or "", release.get("published_at") or ""
+        if not isinstance(notes, str) or not isinstance(date, str):
+            raise UpdateError("release", "Invalid release notes or publication date")
+        return {"version": latest.lstrip("v"), "notes": notes, "date": date,
                 "size": asset["size"], "url": url, "sha256": digest[7:]}
+
+    def installation_manifest(self):
+        try:
+            manifest = read_manifest(self.root)
+            if not child(self.root, "SuzuEmojyUpdater.exe").is_file():
+                raise FileNotFoundError(str(self.root / "SuzuEmojyUpdater.exe"))
+            return manifest
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise UpdateError("installation", str(error)) from error
 
     def ready(self):
         # Local inspection only; called when the user opens the update dialog.
@@ -103,9 +152,49 @@ class UpdateService:
             return None
         return item
 
-    def download(self, release, progress):
+    def _download_archive(self, release, archive, progress, report):
+        # Only project release URLs are sent to third-party mirrors.
+        mirrors = DOWNLOAD_MIRRORS if release["url"].startswith(RELEASES_URL + "/download/") else ()
+        attempts = []
+        for source, url in self._sources(release["url"], mirrors):
+            self._cancelled()
+            if report:
+                report(source)
+            progress(0)
+            try:
+                received = 0
+                with requests.get(url, stream=True, timeout=REQUEST_TIMEOUT, headers={"User-Agent": "SuzuEmojy-Updater"}) as response:
+                    response.raise_for_status()
+                    if not response.url.startswith("https://"):
+                        raise UpdateError("redirect")
+                    content_type = response.headers.get("Content-Type", "")
+                    if isinstance(content_type, str) and any(kind in content_type.lower() for kind in ("text/html", "application/json")):
+                        raise UpdateError("content", content_type)
+                    # Each source starts afresh; a failed source's partial bytes
+                    # must never be appended to the next source's download.
+                    with archive.open("wb") as output:
+                        for block in response.iter_content(256 * 1024):
+                            self._cancelled()
+                            received += len(block)
+                            if received > release["size"]:
+                                raise UpdateError("size", expected=release["size"], actual=received)
+                            output.write(block)
+                            progress(min(95, int(received * 95 / release["size"])))
+                self._cancelled()
+                if received != release["size"]:
+                    raise UpdateError("size", expected=release["size"], actual=received)
+                actual_hash = sha256(archive)
+                if actual_hash != release["sha256"]:
+                    raise UpdateError("hash", f'Expected SHA-256: {release["sha256"]}\nActual SHA-256: {actual_hash}')
+                return
+            except (requests.RequestException, UpdateError) as error:
+                attempts.append((source, url, request_error(error)))
         self._cancelled()
-        local = read_manifest(self.root)
+        raise UpdateNetworkError("download", attempts)
+
+    def download(self, release, progress, report=None):
+        self._cancelled()
+        local = self.installation_manifest()
         work = self.workspace
         directory = "stage-" + uuid.uuid4().hex
         stage = work / directory
@@ -115,22 +204,7 @@ class UpdateService:
         try:
             if shutil.disk_usage(work).free < release["size"] * 2:
                 raise OSError("Insufficient disk space")
-            received = 0
-            with requests.get(release["url"], stream=True, timeout=(8, 15), headers={"User-Agent": "SuzuEmojy-Updater"}) as response:
-                response.raise_for_status()
-                if not response.url.startswith("https://"):
-                    raise ValueError("Insecure download redirect")
-                with archive.open("wb") as output:
-                    for block in response.iter_content(256 * 1024):
-                        self._cancelled()
-                        received += len(block)
-                        if received > release["size"]:
-                            raise ValueError("Download exceeds expected size")
-                        output.write(block)
-                        progress(min(95, int(received * 95 / release["size"])))
-            self._cancelled()
-            if received != release["size"] or sha256(archive) != release["sha256"]:
-                raise ValueError("Download SHA-256/size verification failed")
+            self._download_archive(release, archive, progress, report)
             self.extract(archive, stage)
             incoming = read_manifest(stage, verify=True)
             if incoming["version"] != release["version"] or incoming["flavor"] != local["flavor"]:
@@ -147,9 +221,13 @@ class UpdateService:
             progress(100)
             return item
         finally:
-            archive.unlink(missing_ok=True)
+            # Cleanup must not replace the original network/disk diagnostic.
+            try:
+                archive.unlink(missing_ok=True)
+            except OSError:
+                pass
             if not completed:
-                shutil.rmtree(stage)
+                shutil.rmtree(stage, ignore_errors=True)
 
     def extract(self, archive, stage):
         with zipfile.ZipFile(archive) as package:
@@ -194,7 +272,7 @@ class UpdateService:
             raise ValueError("No prepared update")
         stage = child(self.workspace, item["directory"])
         incoming = read_manifest(stage, verify=True)
-        local = read_manifest(self.root)
+        local = self.installation_manifest()
         if incoming["flavor"] != local["flavor"] or incoming["version"] != item["version"]:
             raise ValueError("Prepared package mismatch")
         helper = self.workspace / "SuzuEmojyUpdater.exe"
@@ -204,6 +282,8 @@ class UpdateService:
             raise ValueError("Installed updater verification failed")
         handshake = self.workspace / "installer-ready"
         handshake.unlink(missing_ok=True)
+        error_log = self.workspace / "last-error.txt"
+        error_log.unlink(missing_ok=True)
         process = subprocess.Popen([str(helper), "--root", str(self.root), "--pid", str(os.getpid())], cwd=str(self.workspace))
         import time
         for _ in range(200):
@@ -212,4 +292,20 @@ class UpdateService:
             if process.poll() is not None:
                 break
             time.sleep(0.1)
-        raise RuntimeError("Updater did not become ready; application remains open")
+        detail = ""
+        if process.poll() is None:
+            # A late helper must not keep the executable locked or install later
+            # after the UI has already reported that preparation failed.
+            detail = "Installer readiness handshake was not received within 20 seconds.\n"
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                detail += f"Could not stop the unready updater: {error}\n"
+        detail += f"Updater exit code: {process.poll()}"
+        if error_log.is_file():
+            try:
+                detail += "\n" + error_log.read_text(encoding="utf-8", errors="replace")
+            except OSError as error:
+                detail += f"\nCould not read installer log: {error}"
+        raise UpdateError("installer", detail)

@@ -11,11 +11,12 @@ from qfluentwidgets import BodyLabel, PrimaryPushButton, ProgressBar, PushButton
 
 from services.i18n import t
 from services.update_service import Cancelled, RELEASES_URL, UpdateService, current_version
-from services.update_protocol import MANIFEST
+from services.update_errors import format_update_error
 
 
 class UpdateWorker(QThread):
     progress = Signal(int)
+    source = Signal(str)
 
     def __init__(self, operation, parent):
         super().__init__(parent)
@@ -26,11 +27,11 @@ class UpdateWorker(QThread):
 
     def run(self):
         try:
-            self.result = self.operation(self.progress.emit)
+            self.result = self.operation(self.progress.emit, self.source.emit)
         except Cancelled:
             self.cancelled = True
         except Exception as exc:
-            self.error = str(exc)
+            self.error = exc
 
 
 def active_tasks():
@@ -56,6 +57,7 @@ class UpdateDialog(QDialog):
         self.release = None
         self.prepared = None
         self.installing = False
+        self.phase = "check"
         self.setWindowTitle(t("软件更新"))
         self.setObjectName("updateDialog")
         self.setStyleSheet("QDialog#updateDialog { background: " + ("#202020" if isDarkTheme() else "#f9f9f9") + "; }")
@@ -66,6 +68,10 @@ class UpdateDialog(QDialog):
         self.status = BodyLabel(t("当前版本") + "：v" + current_version(self.service.root))
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.source_label = BodyLabel()
+        self.source_label.setWordWrap(True)
+        self.source_label.hide()
+        layout.addWidget(self.source_label)
         self.notes = TextEdit()
         self.notes.setReadOnly(True)
         layout.addWidget(self.notes)
@@ -82,13 +88,17 @@ class UpdateDialog(QDialog):
         self.cancel_button.hide()
         self.page_button = PushButton(t("打开发布页"))
         self.later_button = PushButton(t("稍后"))
+        self.copy_error_button = PushButton(t("复制错误详情"))
+        self.copy_error_button.hide()
         for button in (self.check_button, self.action_button, self.cancel_button, self.page_button, self.later_button):
             row.addWidget(button)
+        layout.addWidget(self.copy_error_button, alignment=Qt.AlignLeft)
         self.check_button.clicked.connect(self.check)
         self.action_button.clicked.connect(self.action)
         self.cancel_button.clicked.connect(self.service.cancel.set)
         self.page_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASES_URL)))
         self.later_button.clicked.connect(self.close)
+        self.copy_error_button.clicked.connect(lambda: QApplication.clipboard().setText(self.notes.toPlainText()))
         QApplication.instance().aboutToQuit.connect(self.shutdown)
 
     def open_manual(self):
@@ -100,22 +110,27 @@ class UpdateDialog(QDialog):
         try:
             self.prepared = self.service.ready()
         except Exception as exc:
-            self._error(str(exc))
+            self._error(exc)
             return
         if self.prepared:
             self._prepared(self.prepared)
         else:
             self.check()
 
-    def _run(self, operation, finished, cancellable=False):
+    def _run(self, operation, finished, cancellable=False, phase="check"):
         if self.worker is not None:
             return
         self.service.cancel.clear()
+        self.phase = phase
+        self.copy_error_button.hide()
+        self.source_label.clear()
+        self.source_label.hide()
         self.check_button.setEnabled(False)
         self.action_button.setEnabled(False)
         self.cancel_button.setVisible(cancellable)
         self.worker = UpdateWorker(operation, self)
         self.worker.progress.connect(self.progress.setValue)
+        self.worker.source.connect(self._source_changed)
 
         def complete():
             worker = self.worker
@@ -134,20 +149,28 @@ class UpdateDialog(QDialog):
         self.worker.finished.connect(complete)
         self.worker.start()
 
+    def _source_changed(self, source):
+        text = t("当前来源：{source}") if source == "GitHub" else t("GitHub 未成功，正在使用镜像源：{source}")
+        self.source_label.setText(text.format(source=source))
+        self.source_label.show()
+
     def _error(self, error):
         self.installing = False
         self.later_button.setEnabled(True)
         self.setWindowModality(Qt.NonModal)
         self.status.setText(t("更新失败，请重试或打开发布页"))
-        self.notes.setPlainText(error)
+        self.notes.setPlainText(format_update_error(error, self.phase))
+        self.copy_error_button.show()
         self.action_button.setEnabled(self.release is not None or self.prepared is not None)
 
     def check(self):
         if self.worker is not None:
             return
         self.release = None
+        self.prepared = None
+        self.action_button.setText(t("下载更新"))
         self.status.setText(t("正在检查更新…"))
-        self._run(lambda progress: self.service.check(), self._checked)
+        self._run(lambda progress, report: self.service.check(report=report), self._checked)
 
     def _checked(self, release):
         if not release:
@@ -159,9 +182,15 @@ class UpdateDialog(QDialog):
         self.status.setText(t("当前版本") + "：v" + current_version(self.service.root) + " → v" + release["version"] + " · " + release["date"][:10] + " · %.1f MB" % (release["size"] / 1024 ** 2))
         self.notes.setPlainText(release["notes"])
         self.action_button.setText(t("下载更新"))
-        self.action_button.setEnabled((self.service.root / MANIFEST).is_file())
-        if not (self.service.root / MANIFEST).is_file():
-            self.status.setText(self.status.text() + "\n" + t("源码运行仅支持检查，请使用正式发布包进行更新"))
+        try:
+            self.service.installation_manifest()
+        except Exception as error:
+            self.status.setText(self.status.text() + "\n" + t("当前安装无法自动更新，请查看下方原因。"))
+            self.notes.setPlainText(release["notes"] + "\n\n" + format_update_error(error, "download"))
+            self.copy_error_button.show()
+            self.action_button.setEnabled(False)
+        else:
+            self.action_button.setEnabled(True)
 
     def _prepared(self, item):
         self.prepared = item
@@ -183,12 +212,12 @@ class UpdateDialog(QDialog):
             self.later_button.setEnabled(False)
             self.setWindowModality(Qt.ApplicationModal)
             self.status.setText(t("正在准备重启更新…"))
-            self._run(lambda progress: self.service.launch_installer(), self._quit)
+            self._run(lambda progress, report: self.service.launch_installer(), self._quit, phase="install")
         elif self.release:
             self.progress.setValue(0)
             self.progress.show()
             self.status.setText(t("正在下载并校验更新…"))
-            self._run(lambda progress: self.service.download(self.release, progress), self._prepared, True)
+            self._run(lambda progress, report: self.service.download(self.release, progress, report=report), self._prepared, True, phase="download")
 
     def _quit(self, result):
         # Wait for any work that started while the installer was being prepared.

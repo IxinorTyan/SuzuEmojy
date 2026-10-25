@@ -1,4 +1,5 @@
 import os
+import subprocess
 import ctypes
 from ctypes import wintypes
 from PySide6.QtWidgets import (
@@ -19,6 +20,7 @@ from fluent_ui.components.responsive_scroll_area import ResponsiveScrollArea
 from fluent_ui.components.virtual_grid_layout import VirtualGridLayout
 from fluent_ui.components.virtual_gallery import VirtualGallery
 from services.auto_paste import user32
+from services.i18n import t
 
 
 FAILED_RETENTION_DAYS = 7
@@ -2021,7 +2023,7 @@ class GalleryInterface(QWidget):
     def _build_single_context_menu(self, widget):
         image_path = widget.image_path
         menu = RoundMenu(parent=self)
-        
+
         categories = self.storage.get_all_categories()
         is_sub_category = self.current_category in categories
         
@@ -2084,8 +2086,42 @@ class GalleryInterface(QWidget):
         delete_action = Action("彻底删除此表情", parent=menu)
         delete_action.triggered.connect(lambda: QTimer.singleShot(50, lambda: self.on_delete_requested(widget, image_path)))
         menu.addAction(delete_action)
+
+        menu.addSeparator()
+
+        reveal_action = Action(t("在资源管理器中显示"), parent=menu)
+        reveal_action.triggered.connect(lambda: self._show_image_in_explorer(image_path))
+        menu.addAction(reveal_action)
+
+        copy_path_action = Action(t("复制文件路径"), parent=menu)
+        copy_path_action.triggered.connect(lambda: self._copy_image_path(image_path))
+        menu.addAction(copy_path_action)
         
         return menu
+
+    def _show_image_in_explorer(self, image_path):
+        image_path = os.path.abspath(image_path)
+        if not os.path.isfile(image_path):
+            self.show_error(t("文件不存在"), image_path)
+            return
+
+        self.clipboard.auto_paste.cancel()
+        try:
+            # Keep the path quoted in Explorer's native command line, including
+            # spaces and commas. No command shell is involved.
+            subprocess.Popen(f'explorer.exe /select,"{image_path}"')
+        except OSError as error:
+            self.show_error(t("无法打开资源管理器"), str(error))
+
+    def _copy_image_path(self, image_path):
+        image_path = os.path.abspath(image_path)
+        if not os.path.isfile(image_path):
+            self.show_error(t("文件不存在"), image_path)
+            return
+
+        self.clipboard.auto_paste.cancel()
+        QApplication.clipboard().setText(image_path)
+        self.show_success(t("已复制文件路径"))
 
     def _build_batch_context_menu(self, paths):
         menu = RoundMenu(parent=self)

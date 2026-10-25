@@ -77,6 +77,7 @@
 #### 📂 自由整理与批量操作
 - **自由拖拽**：支持在图库内直接拖动图片自定义排序，拖拽图片至左侧分类夹快速分类。
 - **批量处理**：支持多选进行批量删除、批量导出、批量添加到子分类夹或移出分类夹。
+- **上传图片辅助**：在主图库右键表情，选择“在资源管理器中显示”可打开文件夹并选中图片；选择“复制文件路径”后，可将路径粘贴到平台上传窗口的“文件名”栏。
 
 <p align="center">
   <img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%8B%96%E5%8A%A8%E6%95%B4%E7%90%86.gif" width="80%" alt="拖拽整理">
@@ -294,6 +295,7 @@ Most importantly, the developer constantly switches between multiple accounts, b
 #### 📂 Flexible Organization & Batch Operations
 - **Drag-and-Drop Sorting**: Drag memes to customize order, or drag them directly into sidebar categories to reorganize.
 - **Batch Management**: Multi-select support for batch deletion, batch export, and batch moving between categories.
+- **Upload Helpers**: Right-click a sticker in the main gallery and choose "Show in File Explorer" to open its folder with the image selected, or "Copy file path" to paste its path into an upload dialog's "File name" field.
 
 <p align="center">
   <img src="https://github.com/IxinorTyan/SuzuEmojy/blob/main/assets/%E6%8B%96%E5%8A%A8%E6%95%B4%E7%90%86.gif" width="80%" alt="Drag & Drop">
