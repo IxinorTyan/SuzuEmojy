@@ -21,6 +21,7 @@ from fluent_ui.components.virtual_grid_layout import VirtualGridLayout
 from fluent_ui.components.virtual_gallery import VirtualGallery
 from services.auto_paste import user32
 from services.i18n import t
+from services.import_pipeline import ImportThread
 
 
 FAILED_RETENTION_DAYS = 7
@@ -67,119 +68,6 @@ class DownloadThread(QThread):
                 self.finished.emit(True, temp_path, "", self.url)
         except Exception as e:
             self.finished.emit(False, "", str(e), self.url)
-
-class ImportThread(QThread):
-    """后台异步导入文件的线程，防止批量导入时主线程卡死"""
-    progress = Signal(int, int) # current, total
-    finished = Signal(int, int, int) # saved_count, skipped_count, failed_count
-    
-    def __init__(self, filepaths, storage, target_category, delete_after=False, parent=None, file_categories=None):
-        super().__init__(parent)
-        self.filepaths = filepaths
-        self.storage = storage
-        self.target_category = target_category
-        self.file_categories = file_categories or {}
-        self.delete_after = delete_after
-        
-    def _handle_failed_import(self, filepath):
-        import os
-        import shutil
-        from datetime import datetime
-        if self.delete_after and os.path.exists(filepath):
-            abs_filepath = os.path.normcase(os.path.abspath(filepath))
-            abs_inbox = os.path.normcase(os.path.abspath(self.storage.inbox_dir))
-            if abs_filepath.startswith(abs_inbox) and not abs_filepath.startswith(os.path.normcase(os.path.abspath(self.storage.inbox_failed_dir))):
-                try:
-                    filename = os.path.basename(filepath)
-                    target_path = os.path.join(self.storage.inbox_failed_dir, filename)
-                    if os.path.exists(target_path):
-                        name, ext = os.path.splitext(filename)
-                        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                        target_path = os.path.join(self.storage.inbox_failed_dir, f"{name}_{timestamp}{ext}")
-                    shutil.move(filepath, target_path)
-                except Exception as e:
-                    print(f"[ERROR] 移动失败文件到 failed 目录失败: {e}")
-            else:
-                try:
-                    os.remove(filepath)
-                except Exception:
-                    pass
-
-    def run(self):
-        import os
-        saved_count = 0
-        skipped_count = 0
-        failed_count = 0
-        total = len(self.filepaths)
-        
-        from services.webm_converter import convert_video_to_gif
-        import tempfile
-        
-        for i, filepath in enumerate(self.filepaths):
-            is_webm = filepath.lower().endswith('.webm')
-            is_webp = filepath.lower().endswith('.webp')
-            
-            needs_conversion = False
-            if is_webm:
-                needs_conversion = True
-            elif is_webp:
-                # 检查是否是动态 webp
-                try:
-                    from PIL import Image
-                    with Image.open(filepath) as img:
-                        if getattr(img, "is_animated", False):
-                            needs_conversion = True
-                except Exception:
-                    pass
-                    
-            temp_gif_path = None
-            
-            if needs_conversion:
-                try:
-                    fd, temp_gif_path = tempfile.mkstemp(suffix=".gif")
-                    os.close(fd)
-                    convert_video_to_gif(filepath, temp_gif_path)
-                    process_path = temp_gif_path
-                except Exception as e:
-                    print(f"[ERROR] Video to GIF conversion failed: {e}")
-                    self._handle_failed_import(filepath)
-                    failed_count += 1
-                    self.progress.emit(i + 1, total)
-                    continue
-            else:
-                process_path = filepath
-                
-            saved_path, is_duplicate = self.storage.save_file(process_path)
-            
-            if temp_gif_path and os.path.exists(temp_gif_path):
-                try:
-                    os.remove(temp_gif_path)
-                except Exception:
-                    pass
-                    
-            if saved_path:
-                if is_duplicate:
-                    skipped_count += 1
-                else:
-                    saved_count += 1
-                    
-                category = self.file_categories.get(filepath, self.target_category)
-                if category not in ("全部表情", "未分类"):
-                    self.storage.add_image_to_category(saved_path, category)
-                    
-                if self.delete_after and os.path.exists(filepath):
-                    try:
-                        os.remove(filepath)
-                    except Exception:
-                        pass
-            else:
-                self._handle_failed_import(filepath)
-                failed_count += 1
-            
-            # 每处理一个文件汇报一次进度
-            self.progress.emit(i + 1, total)
-            
-        self.finished.emit(saved_count, skipped_count, failed_count)
 
 class CategoryListWidget(QListWidget):
     """支持拖拽排序的分类列表，依赖原生 InternalMove 机制防止数据丢失"""
@@ -847,6 +735,9 @@ class GalleryInterface(QWidget):
         
         self.download_threads = []
         self.import_thread = None
+        self._import_queue = []
+        self._import_shutting_down = False
+        QApplication.instance().aboutToQuit.connect(self.shutdown)
         self.setAcceptDrops(True)
         
         # 拖拽自动滚动定时器
@@ -1924,66 +1815,7 @@ class GalleryInterface(QWidget):
                 self._start_background_import(local_files)
 
     def _import_dropped_folders(self, folders, local_files):
-        if self.import_thread and self.import_thread.isRunning():
-            self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
-            return
-
-        # 同一批次共用一个线程，避免后续文件夹被“导入中”检查丢弃。
-        target_category = self.current_category
-        valid_images = list(local_files)
-        file_categories = {path: target_category for path in local_files}
-        folder_names = []
-        issues = []
-        total_files = len(local_files)
-        subdirs = 0
-        non_images = 0
-        for folder in folders:
-            folder_name = os.path.basename(os.path.normpath(folder)).strip() or folder
-            folder_names.append(folder_name)
-            folder_images = []
-            try:
-                with os.scandir(folder) as entries:
-                    for entry in entries:
-                        total_files += 1
-                        if entry.is_dir():
-                            subdirs += 1
-                        elif entry.is_file():
-                            if entry.name.lower().endswith(self.storage.SUPPORTED_FORMATS):
-                                folder_images.append(entry.path)
-                            else:
-                                non_images += 1
-            except OSError as e:
-                issues.append(f"文件夹 '{folder_name}' 扫描失败：{e}")
-            else:
-                if not folder_images:
-                    issues.append(f"文件夹 '{folder_name}' 中没有找到支持的图片文件")
-
-            if folder_images:
-                if folder_name:
-                    is_new = self.storage.add_category(folder_name)
-                    if is_new:
-                        self.sidebar.refresh_list(folder_name)
-                    else:
-                        self.sidebar.set_active_category(folder_name)
-                    
-                valid_images.extend(folder_images)
-                file_categories.update({path: folder_name for path in folder_images})
-
-        if valid_images:
-            folder_stats = {
-                'folder_name': '、'.join(folder_names),
-                'total_files': total_files,
-                'image_count': len(valid_images),
-                'non_images': non_images,
-                'subdirs': subdirs,
-                'issues': issues,
-            }
-            self._start_background_import(
-                valid_images, target_category=target_category,
-                folder_stats=folder_stats, file_categories=file_categories,
-            )
-        else:
-            self.show_error("导入失败", '\n'.join(issues))
+        self._start_background_import(local_files, folders=folders)
 
     def _reorder_widgets(self, new_order_paths):
         # Keep current filtering, but derive positions from the complete order.
@@ -2291,31 +2123,72 @@ class GalleryInterface(QWidget):
             self.show_success("批量删除标签成功", f"已从 {count} 个表情中移除了标签")
             self.set_selection_mode(False)
 
-    def _start_background_import(self, filepaths, delete_after=False, silent=False, target_category=None, folder_stats=None, file_categories=None):
-        if self.import_thread and self.import_thread.isRunning():
-            if not silent:
-                self.show_error("导入中", "当前有导入任务正在进行，请稍候...")
+    def _start_background_import(self, filepaths, delete_after=False, silent=False, target_category=None, folder_stats=None, file_categories=None, folders=None):
+        if self._import_shutting_down:
             return
-            
-        import_category = target_category if target_category else self.current_category
-        self.import_thread = ImportThread(filepaths, self.storage, import_category, delete_after, self, file_categories=file_categories)
-        self.import_thread.progress.connect(self._on_import_progress)
-        self.import_thread.finished.connect(lambda s, k, f: self._on_import_finished(s, k, f, silent, folder_stats))
-        
+        category = target_category if target_category is not None else self.current_category
+        request = (list(filepaths), delete_after, silent, category, folder_stats, file_categories, folders)
+        if self.import_thread is not None:
+            # The inbox poll can rediscover files belonging to an active/queued task.
+            if silent:
+                occupied = {os.path.normcase(os.path.abspath(p)) for p in self.import_thread.filepaths}
+                for queued in self._import_queue:
+                    occupied.update(os.path.normcase(os.path.abspath(p)) for p in queued[0])
+                request = ([p for p in filepaths if os.path.normcase(os.path.abspath(p)) not in occupied],
+                           *request[1:])
+                if not request[0] and not folders:
+                    return
+            self._import_queue.append(request)
+            if not silent:
+                self.show_success("已加入导入队列", f"等待中的任务：{len(self._import_queue)}")
+            return
+        worker = ImportThread(request[0], self.storage, category, delete_after, self,
+                              file_categories=file_categories, folders=folders)
+        self.import_thread = worker
+        worker.status.connect(self._on_import_status)
+        worker.result_counts = (0, 0, 0)
+        worker.completed.connect(lambda s, k, f: setattr(worker, 'result_counts', (s, k, f)))
+        # Use QThread's actual completion signal before releasing/replacing the worker.
+        worker.finished.connect(lambda: self._finish_import_task(worker, silent, folder_stats))
         if not silent:
             self._import_info_bar = InfoBar.info(
-                title="正在导入",
-                content=f"准备导入 {len(filepaths)} 个文件...",
-                orient=Qt.Horizontal,
-                isClosable=False,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=-1,
-                parent=self
-            )
+                title="正在导入", content="正在扫描文件夹…" if folders else f"准备导入 {len(filepaths)} 个文件…",
+                orient=Qt.Horizontal, isClosable=False, position=InfoBarPosition.TOP_RIGHT,
+                duration=-1, parent=self)
+            cancel = PushButton("取消", self._import_info_bar)
+            cancel.clicked.connect(worker.requestInterruption)
+            self._import_info_bar.addWidget(cancel)
         else:
             self._import_info_bar = None
-            
-        self.import_thread.start()
+        worker.start()
+
+    def _on_import_status(self, message):
+        if self._import_info_bar:
+            self._import_info_bar.contentLabel.setText(message)
+
+    def _finish_import_task(self, worker, silent, folder_stats):
+        stats = worker.folder_stats or folder_stats
+        if stats:
+            stats['issues'].extend(worker.issues)
+        if not self._import_shutting_down:
+            self.sidebar.refresh_list(self.current_category)
+            self._on_import_finished(*worker.result_counts, silent=silent, folder_stats=stats)
+            if worker.was_cancelled:
+                self.show_success("导入已取消", "已完成的图片已保留")
+            elif worker.issues and not stats:
+                self.show_error("部分文件处理失败", '\n'.join(worker.issues[:5]))
+        self.import_thread = None
+        if not self._import_shutting_down and self._import_queue:
+            request = self._import_queue.pop(0)
+            self._start_background_import(*request)
+        worker.deleteLater()
+
+    def shutdown(self):
+        self._import_shutting_down = True
+        self._import_queue.clear()
+        if self.import_thread is not None:
+            self.import_thread.requestInterruption()
+            self.import_thread.wait()
 
     def _on_import_progress(self, current, total):
         if hasattr(self, '_import_info_bar') and self._import_info_bar:
@@ -2333,16 +2206,19 @@ class GalleryInterface(QWidget):
             # 文件夹导入的详细统计弹窗
             msg = (
                 f"文件夹：{folder_stats['folder_name']}\n"
-                f"第一层文件总数：{folder_stats['total_files']}\n"
+                f"扫描文件总数：{folder_stats['total_files']}\n"
                 f"其中图片文件：{folder_stats['image_count']}\n"
                 f"成功导入：{saved_count}\n"
                 f"重复跳过：{skipped_count}\n"
                 f"解析失败：{failed_count}\n"
                 f"忽略非图片文件：{folder_stats['non_images']}\n"
-                f"忽略子文件夹：{folder_stats['subdirs']}"
+                f"扫描子文件夹：{folder_stats['subdirs']}"
             )
             if folder_stats.get('issues'):
-                msg += "\n\n" + '\n'.join(folder_stats['issues'])
+                issues = folder_stats['issues']
+                msg += "\n\n" + '\n'.join(issues[:10])
+                if len(issues) > 10:
+                    msg += f"\n另有 {len(issues) - 10} 条错误"
             from qfluentwidgets import MessageBox
             w = MessageBox("文件夹导入完成", msg, self.window())
             w.exec()

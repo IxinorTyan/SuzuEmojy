@@ -1037,6 +1037,23 @@ class StorageService:
         icons = self.get_all_category_icons()
         return icons.get(category_name, None)
 
+    @_storage_locked
+    def assign_missing_category_icon(self, category_name, filepath):
+        """Keep custom emoji/valid image icons; use the first committed resource otherwise."""
+        icon = self.get_category_icon(category_name)
+        if icon and (not any(icon.lower().endswith(ext) for ext in IMAGE_SUFFIXES)
+                     or os.path.isfile(icon)):
+            return
+        self.set_category_icon(category_name, filepath)
+
+    @_storage_locked
+    def order_imported_images(self, paths):
+        """Commit one stable source order after the batch, including partial cancellation."""
+        ordered = list(dict.fromkeys(paths))
+        imported = set(ordered)
+        if ordered:
+            self.save_order(ordered + [p for p in self.get_all_images() if p not in imported])
+
     # ==========================
     # 关键词元数据 (Metadata) - DB 与 JSON 双写双读
     # ==========================
@@ -1354,42 +1371,62 @@ class StorageService:
 
         return data_bytes, fmt, False
 
-    @_storage_locked
+    def prepare_file(self, source_path):
+        """Decode/convert/hash outside the storage lock; safe for parallel callers."""
+        with open(source_path, 'rb') as source:
+            return self._prepare_image(source.read(), source_path=source_path)
+
+    def _prepare_image(self, data_bytes, source_path=None, pil_source=None):
+        # No shared state is touched during preparation.
+        if pil_source is not None:
+            img = pil_source
+            is_animated = False
+            final_ext = '.png'
+        else:
+            norm_bytes, norm_fmt, is_norm_animated = self._convert_source_to_standard_bytes(data_bytes, source_path)
+            img = Image.open(io.BytesIO(norm_bytes))
+            is_animated = getattr(img, "is_animated", False) or is_norm_animated
+            final_ext = '.gif' if is_animated else '.png'
+
+        # 步骤 2：清洗与编码
+        if is_animated:
+            # 动态资源（GIF）保留原始帧与透明通道，对转换后的最终 GIF 执行哈希
+            final_bytes = norm_bytes
+            file_hash = self._calculate_bytes_hash(final_bytes)
+        else:
+            # 静态资源（静态 WebP/PNG/JPG/BMP 等）
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+
+            clean_img = Image.new('RGBA', img.size)
+            clean_img.paste(img, (0, 0))
+
+            output_io = io.BytesIO()
+            clean_img.save(output_io, format="PNG", optimize=True)
+            final_bytes = output_io.getvalue()
+            final_ext = '.png'
+
+            # 语义钉死：写入 image_features.md5 的值一律是 file_md5
+            file_hash = self._calculate_bytes_hash(final_bytes)
+
+        pixel_hash = self._calculate_pixel_hash(clean_img) if not is_animated else None
+        return final_bytes, final_ext, file_hash, pixel_hash, is_animated
+
     def _standardize_and_save(self, data_bytes, original_ext, source_path=None, pil_source=None, strict=False):
-        stage = "清洗失败"
         try:
-            # 步骤 1：格式归一化预处理
-            if pil_source is not None:
-                img = pil_source
-                is_animated = False
-                final_ext = '.png'
-            else:
-                norm_bytes, norm_fmt, is_norm_animated = self._convert_source_to_standard_bytes(data_bytes, source_path)
-                img = Image.open(io.BytesIO(norm_bytes))
-                is_animated = getattr(img, "is_animated", False) or is_norm_animated
-                final_ext = '.gif' if is_animated else '.png'
+            prepared = self._prepare_image(data_bytes, source_path, pil_source)
+            return self.commit_prepared(prepared, strict=strict)
+        except Exception as exc:
+            if strict:
+                raise
+            print(f"[ERROR] 图片处理失败: {exc}")
+            return None, False
 
-            # 步骤 2：清洗与编码
-            if is_animated:
-                # 动态资源（GIF）保留原始帧与透明通道，对转换后的最终 GIF 执行哈希
-                final_bytes = norm_bytes
-                file_hash = self._calculate_bytes_hash(final_bytes)
-            else:
-                # 静态资源（静态 WebP/PNG/JPG/BMP 等）
-                if img.mode != 'RGBA':
-                    img = img.convert('RGBA')
-
-                clean_img = Image.new('RGBA', img.size)
-                clean_img.paste(img, (0, 0))
-
-                output_io = io.BytesIO()
-                clean_img.save(output_io, format="PNG", optimize=True)
-                final_bytes = output_io.getvalue()
-                final_ext = '.png'
-
-                # 语义钉死：写入 image_features.md5 的值一律是 file_md5
-                file_hash = self._calculate_bytes_hash(final_bytes)
-
+    @_storage_locked
+    def commit_prepared(self, prepared, strict=False, promote_duplicate=True):
+        final_bytes, final_ext, file_hash, pixel_hash, is_animated = prepared
+        stage = "索引保存失败"
+        try:
             # 步骤 3：哈希查重与去重入库
             stage = "索引保存失败"
             # L1 快路径：用最终入库文件的 file_md5 在 _hashes_cache 中查找
@@ -1398,13 +1435,13 @@ class StorageService:
                 existing_path = self._to_abspath(existing_filename)
                 if os.path.exists(existing_path):
                     self._repair_saved_index(existing_path, file_hash, strict=strict)
-                    self.move_image_to_front(existing_path)
+                    if promote_duplicate:
+                        self.move_image_to_front(existing_path)
                     return existing_path, True
                 else:
                     del self._hashes_cache[file_hash]
 
             # L2 也扫描已落盘但缺少哈希记录的资源，支持重启后的恢复。
-            pixel_hash = self._calculate_pixel_hash(clean_img) if not is_animated else None
             skey = f"f:{file_hash}" if is_animated else (f"p:{pixel_hash}" if pixel_hash else None)
             if skey:
                 sync_index = self._get_sync_key_index()
@@ -1413,7 +1450,8 @@ class StorageService:
                     existing_path = self._to_abspath(existing_filename)
                     if os.path.exists(existing_path):
                         self._repair_saved_index(existing_path, file_hash, strict=strict)
-                        self.move_image_to_front(existing_path)
+                        if promote_duplicate:
+                            self.move_image_to_front(existing_path)
                         return existing_path, True
                     with self._sync_index_lock:
                         sync_index.pop(skey, None)
@@ -1443,7 +1481,6 @@ class StorageService:
 
             # 同步维护内存中的 sync_key 索引并持久化（强制覆盖，防止被失效旧键阻挡）
             if not is_animated:
-                pixel_hash = self._calculate_pixel_hash(clean_img)
                 if pixel_hash:
                     skey = f"p:{pixel_hash}"
                     with self._sync_index_lock:

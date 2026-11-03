@@ -46,14 +46,9 @@ def test_drop_multiple_folders_and_file_as_one_batch(tmp_path):
     event.accept.assert_called_once()
     view._start_background_import.assert_called_once()
     args, kwargs = view._start_background_import.call_args
-    assert {os.path.normpath(path) for path in args[0]} == {str(cat), str(dog), str(loose)}
-    categories = {os.path.normpath(path): category for path, category in kwargs['file_categories'].items()}
-    assert categories == {str(cat): '猫', str(dog): '狗', str(loose): '原分类'}
-    stats = kwargs['folder_stats']
-    assert stats['subdirs'] == 1
-    assert stats['non_images'] == 1
-    assert stats['image_count'] == 3
-    assert len(stats['issues']) == 1
+    assert [os.path.normpath(p) for p in args[0]] == [str(loose)]
+    assert [os.path.normpath(p) for p in kwargs['folders']] == [str(first), str(second), str(empty)]
+    view.storage.add_category.assert_not_called()
 
 
 def test_busy_import_does_not_create_categories(tmp_path):
@@ -62,8 +57,8 @@ def test_busy_import_does_not_create_categories(tmp_path):
     view.import_thread.isRunning.return_value = True
     view._import_dropped_folders([str(tmp_path)], [])
     view.storage.add_category.assert_not_called()
-    view._start_background_import.assert_not_called()
-    view.show_error.assert_called_once()
+    view._start_background_import.assert_called_once_with([], folders=[str(tmp_path)])
+    view.show_error.assert_not_called()
 
 
 def test_unreadable_folder_does_not_block_later_folder(tmp_path):
@@ -71,21 +66,19 @@ def test_unreadable_folder_does_not_block_later_folder(tmp_path):
     image.touch()
     view = make_view()
     view._import_dropped_folders([str(tmp_path / 'missing'), str(tmp_path)], [])
-    args, kwargs = view._start_background_import.call_args
-    assert args[0] == [str(image)]
-    assert len(kwargs['folder_stats']['issues']) == 1
+    view._start_background_import.assert_called_once_with([], folders=[str(tmp_path / 'missing'), str(tmp_path)])
 
 
 def test_import_thread_routes_duplicate_to_each_folder():
     storage = Mock()
-    storage.save_file.side_effect = [('saved.png', False), ('saved.png', True)]
+    storage.commit_prepared.side_effect = [('saved.png', False), ('saved.png', True)]
     worker = ImportThread(
         ['a.png', 'b.png'], storage, '原分类',
         file_categories={'a.png': '猫', 'b.png': '狗'},
     )
     finished = Mock()
     progress = Mock()
-    worker.finished.connect(finished)
+    worker.completed.connect(finished)
     worker.progress.connect(progress)
     worker.run()
     assert [call.args for call in storage.add_image_to_category.call_args_list] == [
@@ -97,7 +90,7 @@ def test_import_thread_routes_duplicate_to_each_folder():
 
 def test_single_file_import_keeps_default_category():
     storage = Mock()
-    storage.save_file.return_value = ('saved.png', False)
+    storage.commit_prepared.return_value = ('saved.png', False)
     worker = ImportThread(['a.png'], storage, '原分类')
     worker.run()
-    storage.add_image_to_category.assert_called_once_with('saved.png', '原分类')
+    storage.add_image_to_category.assert_called_once_with('saved.png', '原分类', strict=True)
