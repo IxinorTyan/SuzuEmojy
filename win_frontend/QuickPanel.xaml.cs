@@ -20,14 +20,14 @@ public partial class QuickPanel : Window
     internal event Action<Sticker>? StickerActivated;
     internal event Action<int>? ThumbnailSizeChanged;
 
-    internal QuickPanel(LibrarySnapshot library, QuickPanelResults results, bool offscreen = false)
+    internal QuickPanel(LibrarySnapshot library, QuickPanelResults results, bool offscreen = false, LibraryCommands? commands = null)
     {
         this.results = results;
         InitializeComponent();
         FluentTheme.Apply(this, library);
         ApplySize(library);
         appearance = PanelAppearance.Read(library);
-        preview = new PreviewPopup(this, library);
+        preview = new PreviewPopup(this, library, commands);
         RefreshWallpaper(library);
         gallery = new VirtualGallery(GalleryScroll, Cards, ReadThumbnailSize(library), GalleryLayout.Quick,
             item => StickerActivated?.Invoke(item), preview.Schedule, preview.Hide, offscreen);
@@ -98,7 +98,7 @@ public partial class QuickPanel : Window
     }
 
     private readonly record struct PanelAppearance(bool Dark, Colors Theme, WallpaperAsset? Wallpaper,
-        int Blur, int Brightness, int Opacity, int PreviewSize, int PreviewDelay)
+        int Blur, int Brightness, int Opacity, int PreviewSize, int PreviewDelay, bool SystemFont, bool DisableAnimations)
     {
         internal static PanelAppearance Read(LibrarySnapshot snapshot)
         {
@@ -107,7 +107,8 @@ public partial class QuickPanel : Window
                 snapshot.Number(WallpaperSurface.BlurKey, 0, 0, WallpaperSurface.MaxBlur),
                 snapshot.Number(WallpaperSurface.BrightnessKey, 0, -WallpaperSurface.MaxBrightness, WallpaperSurface.MaxBrightness),
                 snapshot.Number(WallpaperSurface.OverlayOpacityKey, WallpaperSurface.DefaultOpacity, 0, WallpaperSurface.MaxOpacity),
-                snapshot.Number("preview_size", 320, 80, 800), snapshot.Number("preview_delay", 500, 0, 5000));
+                snapshot.Number("preview_size", 320, 80, 800), snapshot.Number("preview_delay", 500, 0, 5000),
+                snapshot.Flag("use_system_font", false), snapshot.Flag("disable_animations", false));
         }
     }
 
@@ -122,9 +123,9 @@ public partial class QuickPanel : Window
         searchTimer.Stop();
         var items = results.Find(Search.Text);
         if (preserveIfUnchanged && items.Length == gallery.Items.Count &&
-            items.Zip(gallery.Items).All(pair => ReferenceEquals(pair.First, pair.Second) ||
-                (pair.First with { Categories = pair.Second.Categories }) == pair.Second &&
-                pair.First.Categories.SequenceEqual(pair.Second.Categories)))
+            items.Zip(gallery.Items, (first, second) => ReferenceEquals(first, second) ||
+                (first with { Categories = second.Categories }) == second &&
+                first.Categories.SequenceEqual(second.Categories)).All(equal => equal))
         {
             // The delayed search may still have changed the empty-state label.
             UpdateEmpty(items.Length);

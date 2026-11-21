@@ -9,7 +9,7 @@ internal static class WheelZoom
         Action<int> apply)
     {
         if (delta == 0 || (modifiers & ModifierKeys.Control) == 0) return false;
-        var next = Math.Clamp(current + Math.Sign(delta) * step, min, max);
+        var next = RuntimePrimitives.Clamp(current + Math.Sign(delta) * step, min, max);
         if (next != current) apply(next);
         return true; // Don't scroll the viewport when zoom has reached a limit.
     }

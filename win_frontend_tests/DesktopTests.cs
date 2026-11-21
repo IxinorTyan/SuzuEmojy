@@ -12,6 +12,33 @@ using SuzuEmojy.Windows.Desktop;
 
 internal static class DesktopTests
 {
+    internal static void CheckLoginStartup()
+    {
+        var store = new FakeStartup { Command = "older-install.exe --autostart", IsDisabledByWindows = true };
+        var command = LoginStartup.BuildCommand(@"D:\新目录 带空格\SuzuEmojy.Windows.exe", @"D:\自定义 图库\");
+        var startup = new LoginStartup(store, command);
+        Require(command == "\"D:\\新目录 带空格\\SuzuEmojy.Windows.exe\" --autostart --data \"D:\\自定义 图库\\\\\"",
+            "Login startup must quote Chinese/space paths and a trailing slash.");
+        Require(!startup.IsEnabled && store.IsDisabledByWindows, "Reading must not enable a system-disabled entry.");
+        startup.SetEnabled(false);
+        Require(store.Command == "older-install.exe --autostart", "Disabling must not delete an older installation's command.");
+        startup.SetEnabled(true);
+        Require(store.Command == command && startup.IsEnabled, "Explicit enable must register this installation.");
+        store.IsDisabledByWindows = true;
+        Require(!startup.IsEnabled, "Startup Apps disabled state must be respected.");
+        startup.SetEnabled(false);
+        Require(store.Command is null && store.IsDisabledByWindows, "Disabling must remove this command and preserve approval state.");
+    }
+
+    private sealed class FakeStartup : ILoginStartupStore
+    {
+        public string? Command { get; set; }
+        public bool IsDisabledByWindows { get; set; }
+        public string? ReadCommand() => Command;
+        public void WriteCommand(string? command) => Command = command;
+        public void ClearDisabled() => IsDisabledByWindows = false;
+    }
+
     internal static async Task CheckMainWindowPlacement(string output)
     {
         var primary = new DisplayArea("main", new(48, 0, 1872, 1040), true);
@@ -121,7 +148,7 @@ internal static class DesktopTests
             host.AddHook((nint _, int msg, nint keyId, nint data, ref bool handled) =>
             {
                 routed = handled = GlobalHotkey.Matches(msg, keyId, data, (int)id, digit);
-                return 0;
+                return IntPtr.Zero;
             });
             SendMessageW(host.Handle, 0x0312, id, keyData);
             Require(routed, "The real message-only WPF host must receive and dispatch its hotkey message.");
@@ -133,7 +160,7 @@ internal static class DesktopTests
         byte[] drop = FileClipboard.DropFilesPayload(path);
         Require(BinaryPrimitives.ReadUInt32LittleEndian(drop.AsSpan(0, 4)) == 20 &&
             BinaryPrimitives.ReadUInt32LittleEndian(drop.AsSpan(16, 4)) == 1 &&
-            Encoding.Unicode.GetString(drop.AsSpan(20)) == path + "\0\0", "CF_HDROP header or Unicode path is incorrect.");
+            Encoding.Unicode.GetString(drop, 20, drop.Length - 20) == path + "\0\0", "CF_HDROP header or Unicode path is incorrect.");
 
         byte[] bgra = [10, 20, 30, 128, 40, 50, 60, 255];
         var image = BitmapSource.Create(1, 2, 96, 96, PixelFormats.Bgra32, null, bgra, 4);

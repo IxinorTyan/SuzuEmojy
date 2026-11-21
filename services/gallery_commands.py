@@ -69,11 +69,14 @@ def _settings(root, values):
               "quick_panel_thumbnail_size": (40, 200), "recent_limit": (1, 300),
               "wallpaper_blur": (0, 40), "wallpaper_brightness": (-100, 100),
               "wallpaper_overlay_opacity": (0, 100)}
+    folders = {"qq_data_path", "qq_save_path", "tg_save_path", "tg_batch_save_path"}
     for key, value in values.items():
         valid = ((key in choices and isinstance(value, str) and value in choices[key])
                  or (key in flags and type(value) is bool)
                  or (key in ranges and type(value) is int and ranges[key][0] <= value <= ranges[key][1])
-                 or (key in {"global_hotkey", "quick_panel_hotkey"} and isinstance(value, str) and len(value) <= 60))
+                 or (key in {"global_hotkey", "quick_panel_hotkey"} and isinstance(value, str) and len(value) <= 60)
+                 or (key in folders and isinstance(value, str) and len(value) <= 32767
+                     and "\0" not in value and Path(value).is_absolute()))
         if not valid:
             raise ValueError(f"无效的设置项: {key}")
     current.update(values)
@@ -119,6 +122,17 @@ def run(root, request, progress=lambda *_, **__: None):
         return run_external(root, action, request, progress)
     if action == "settings":
         return _settings(root, request["settings"])
+    if action == "preview_animation":
+        from services.animation_preview import preview
+        paths = _images(root, paths)
+        if len(paths) != 1:
+            raise ValueError("动画预览需要一张图库图片")
+        return {"animation": preview(paths[0], request.get("limit", 320))}
+    if action in {"warm_indexes", "maintain_library"}:
+        from services.library_maintenance import backfill, maintain
+        if action == "warm_indexes":
+            return backfill(root)
+        return maintain(root, progress)
     if action in {"set_wallpaper", "clear_wallpaper"}:
         from services.window_wallpaper import set_wallpaper
         if action == "set_wallpaper" and not value:
@@ -204,6 +218,7 @@ def run(root, request, progress=lambda *_, **__: None):
     paths = [os.path.normcase(path) for path in _images(root, paths)]
     if action == "recent":
         storage.add_recent_image(paths[0], request["limit"])
+        return {"recent": [Path(path).name for path in storage.get_recent_images(request["limit"])]}
     elif action == "create_category":
         from services.import_pipeline import category_name
         name = category_name(value or "")
@@ -272,7 +287,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("data", type=Path)
     args = parser.parse_args()
-    sys.stdin.reconfigure(encoding="utf-8")
+    # .NET Framework can write the console encoding's UTF-8 preamble when it opens the redirected pipe.
+    sys.stdin.reconfigure(encoding="utf-8-sig")
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     request = json.load(sys.stdin)

@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace SuzuEmojy.Windows.Desktop;
 
-// Separate from config.json: moving the window must not start Python, refresh
+// Separate from config.json: moving the window must not refresh
 // the library, or race a write to shared Qt/WPF preferences.
 internal sealed class WindowPlacementStore(string data)
 {
@@ -34,7 +34,7 @@ internal sealed class WindowPlacementStore(string data)
             Directory.CreateDirectory(folder);
             using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write))
                 JsonSerializer.Serialize(file, placement);
-            File.Move(temporary, path, overwrite: true);
+            RuntimePrimitives.ReplaceFile(temporary, path);
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)

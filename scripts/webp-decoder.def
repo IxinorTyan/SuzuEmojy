@@ -1,0 +1,9 @@
+EXPORTS
+    WebPGetFeaturesInternal
+    WebPDecodeBGRAInto
+    WebPAnimDecoderOptionsInitInternal
+    WebPAnimDecoderNewInternal
+    WebPAnimDecoderGetInfo
+    WebPAnimDecoderGetNext
+    WebPAnimDecoderHasMoreFrames
+    WebPAnimDecoderDelete

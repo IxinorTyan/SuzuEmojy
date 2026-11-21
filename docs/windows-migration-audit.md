@@ -6,19 +6,25 @@
 
 | 用途 | 旧版能力与 Windows 2.0 的差异 | 核对入口 |
 | --- | --- | --- |
-| QQ 辅助操作 | 旧版的操作日志、路径帮助入口还没迁。WPF 已支持扫描、预览、导入、只导出和回收站清理。 | `fluent_ui/views/qq_scan_view.py`；`win_frontend/ExternalStickerPage.xaml.cs` |
-| TG 辅助操作 | 旧版有反选、日志、帮助、测试连通性、恢复默认和显式本地代理字段；WPF 有全选/清空和结果详情，允许用户填自己的 Token 与显式 HTTPS API 反代。**不建议**迁回内置 Token 或隐式反代。 | `fluent_ui/views/tg_sticker_view.py`；`win_frontend/ExternalStickerPage.xaml.cs` |
-| 设置与关于 | 启动到托盘的参数已支持，但开机自启动开关和 Windows 登录注册未接入。中英文切换、系统字体开关、侧栏提示开关、关于页和检查更新尚未迁移。导入导出页的资源站跳转也没迁移。 | `fluent_ui/views/setting_view.py`、`about_view.py`、`exchange_view.py`；`win_frontend/SettingsPage.xaml.cs`、`App.xaml.cs` |
-| 旧库维护 | Qt 启动会跑旧 JSON→SQLite 迁移、后台 sync_key 补齐、死链清理及全库去重索引。WPF 快照能读取旧 JSON/SQLite、导入仍查重、感知哈希页仍可手动扫描，但 WPF 启动没有串起上述维护任务。需要先用旧库副本验收迁移；不要默认打开预览就批量改库。 | `main.py`、`services/migration_manager.py`、`sync_migration.py`；`win_frontend/App.xaml.cs`、`services/gallery_snapshot.py` |
+| 设置与关于 | 已恢复开机自启动、系统字体和侧栏提示开关、关于页与资源站入口。简中、繁中、英语、日语切换仍未迁移。 | `fluent_ui/views/setting_view.py`、`about_view.py`、`exchange_view.py`；`win_frontend/SettingsPage.xaml.cs`、`AboutPage.xaml.cs` |
+| 就地安装更新 | 2.0 用 C# 手动检查和下载经校验的匹配稳定包；旧更新器只支持 1.x 的包布局和清单，2.0 就地替换、失败回滚尚未接入。 | `win_frontend/Runtime/WindowsReleaseService.cs`、`services/update_protocol.py`、`updater.py` |
 
 ## 已具备能力，仍有交互差异
 
 - 发送：两个热键唤出都支持复制后自动粘贴；普通打开或从托盘打开后，WPF 只复制，不向之前记住的窗口发按键。这是更保守的目标校验。
 - 分类内重排：Qt 在分类/筛选中按目标卡片修改全库顺序，WPF 当前将可见子集提交为排序序列，离开该视图时其他项的相对位置可能不同。另有拖到卡片左右半侧插入的细节差异。
-- QQ/TG 保存：Qt 保存目录可提前设置并复用；WPF 的 QQ 导出和 TG 下载仍在各次操作时选择目录，路径、确认和失败反馈粒度与旧界面不同。
+- QQ/TG：QQ 缓存和导出路径沿用旧版设置键；TG 下载和批量打包有各自的保存路径记忆。两页有可复制／清空的操作日志和使用帮助；TG 有反选、连通性测试、恢复默认及 HTTP／HTTPS／SOCKS5 代理。默认 Token 与 API 反代可通过本机环境变量提供，默认不显示，也不会写进图库或 ZIP。
 - 导入：WPF 已补本地／网页拖入、粘贴、导入队列和安全取消；网页下载也按队列依次处理，未照搬旧版的并行下载。ZIP 资源包写入仍不支持中途取消。收件箱已补自动导入，不自动清理 7 天前的失败文件。
-- 渲染和外观：Qt 的「单次渲染上限」设置未迁，WPF 按视口虚拟化；Qt 的系统 Mica 效果没有直接搬入。GIF 预览已覆盖；原格式动图预览应按格式单独验收，不能把 APNG 导入后转为 GIF 当作原格式播放。
+- 渲染和外观：Qt 的「单次渲染上限」设置未迁，WPF 按视口虚拟化；Qt 的系统 Mica 效果没有直接搬入。GIF、APNG 和动态 WebP 预览已覆盖；APNG／WebP 解码有预览资源上限。
+- 旧图库：首次启动在后台备份，再迁移旧 JSON、清理失效引用并建立相似图索引。版本回执防止下次启动重复执行；不重编码原图，不覆盖旧哈希。后续增量补齐 `sync_key`。
+- 编解码：常规 PNG/GIF、APNG、WebP、TGS、WebM 有原生路径，固定样本核对身份键和动画时序。少见格式、超出解码预算或 Windows 缺少对应解码器的图片可能无法预览或清洗。扫描会报告失败项，不再调用旧后端。真实历史图库及手机端的完整往返尚未全部覆盖。
 
 图库分类、批量标签/移动/删除/导出、查重清洗、ZIP v1 资源包导入导出及分卷、两套热键、窗口位置与归位、快捷窗口缩略图尺寸保存、QQ/TG 入库、QQ 独立导出及 TG 单包／批量打包都已有 WPF 入口。TG 单包按旧规则自定义 ID、复用同名分类并在确认后覆盖同名 ZIP；批量打包仍使用独立分类且不覆盖文件。
 
-建议优先补：QQ／TG 保存路径记忆和辅助操作。旧库启动维护、开机启动和自动更新应单独做迁移/权限验收。
+优先待补：2.0 就地升级与回滚。实际登录自启、干净 Win10 的解压包、真实聊天窗口兼容仍应单独验收。
+
+## 从旧版保留图库
+
+1.13.3 已使用 `features.db`、`metadata.db`、`categories.db`、`order.db` 和 `recent.db`。2.0 沿用这五个文件，原图仍在 `images/`，设置仍在 `config.json`。`features.db` 增加 `sync_key_checks` 记录已检查但不能生成同步键的文件；`recent.db` 兼容旧的 `used_at` 和 1.13.3 的 `updated_at`；新增的 `cache/similarity-v1.db` 是可重建的相似图缓存。
+
+便携 ZIP 不带 `data`。要沿用旧图库，关闭程序后，把完整旧 `data` 复制到外层的 `SuzuEmojy.exe` 旁，与 `bin/` 同级（或用 `--data` 指向副本）；不要只复制 `images/`。首次维护把迁移前的数据库和旧 JSON 保存到 `data/maintenance-backups/`，成功后写入 `.windows-library-maintenance-v1`。这不是全量图库备份，不包括原图和设置；升级前应保留整份旧 `data`，不要让新旧程序同时写同一份图库。

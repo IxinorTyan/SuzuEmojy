@@ -21,7 +21,7 @@
 > **专为 Windows 打造的本地表情包管理利器**  
 > 快速搜索、智能整理、一键发送，让收藏多年的表情包真正用起来。
 
-Windows 2.0（WPF）正在开发，尚未发布。见 [开发预览](docs/windows-native-frontend.md) 和 [本地封包](docs/windows-packaging.md)；下方使用说明对应 1.x。
+Windows 2.0（WPF）正在开发，尚未发布。新版解压即用，不依赖 Python 或 Qt。见 [开发预览](docs/windows-native-frontend.md) 和 [本地封包](docs/windows-packaging.md)；下方使用说明对应 1.x。
 
 💬 **QQ 交流群**：`834586488`（欢迎进群交流心得、反馈 Bug、催更以及分享好看好玩的表情包！）
 

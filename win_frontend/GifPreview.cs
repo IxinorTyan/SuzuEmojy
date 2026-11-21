@@ -1,10 +1,12 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Drawing = System.Drawing;
 using DrawingImaging = System.Drawing.Imaging;
+using SuzuEmojy.Windows.Controls;
 
 namespace SuzuEmojy.Windows;
 
@@ -17,6 +19,7 @@ internal sealed class GifPreview : IDisposable
     private readonly Drawing.Bitmap pixels;
     private readonly byte[]? delays;
     private int remaining, frame;
+    private readonly int plays;
     internal int FrameCount { get; }
     internal WriteableBitmap Bitmap { get; }
 
@@ -27,7 +30,8 @@ internal sealed class GifPreview : IDisposable
         FrameCount = frameCount;
         delays = Property(gif, 0x5100);
         var loop = Property(gif, 0x5101);
-        remaining = loop is { Length: >= 2 } ? BitConverter.ToUInt16(loop) : -1;
+        remaining = loop is { Length: >= 2 } ? BitConverter.ToUInt16(loop, 0) : -1;
+        plays = remaining == 0 ? 0 : Math.Max(1, remaining + 1);
         if (remaining == 0) remaining = int.MaxValue;
 
         double scale = Math.Min(1.0, (double)maxSide / Math.Max(gif.Width, gif.Height));
@@ -43,7 +47,7 @@ internal sealed class GifPreview : IDisposable
         Open(File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete), maxSide);
 
     // Owns the stream, including the no-animation and invalid-data paths.
-    internal static GifPreview? Open(Stream source, int maxSide)
+    internal static GifPreview? Open(Stream source, int maxSide, bool bounded = false)
     {
         Drawing.Image? gif = null;
         var keep = false;
@@ -54,6 +58,11 @@ internal sealed class GifPreview : IDisposable
                 return null;
             var frames = gif.GetFrameCount(DrawingImaging.FrameDimension.Time);
             if (frames < 2) return null;
+            if (bounded)
+            {
+                if (frames > 1200 || (long)gif.Width * gif.Height * frames > 160_000_000) return null;
+                maxSide = Math.Min(maxSide, (int)Math.Sqrt(4_000_000 / frames));
+            }
             var preview = new GifPreview(source, gif, frames, maxSide);
             keep = true;
             return preview;
@@ -69,6 +78,40 @@ internal sealed class GifPreview : IDisposable
 
     internal TimeSpan Delay => TimeSpan.FromMilliseconds(delays is { } samples && frame < samples.Length / 4
         ? Math.Max(20, 10.0 * BitConverter.ToUInt32(samples, frame * 4)) : 100);
+
+    // Decode/composite off the dispatcher, detach frame pixels and spend at
+    // most 16 MB on each preview regardless of frame count or requested size.
+    internal static PreviewFrames? DecodeFrames(Stream source, int maxSide, CancellationToken token)
+    {
+        using var owned = source;
+        if (source.Length > StickerPreviewMedia.AnimationLimit) return null;
+        token.ThrowIfCancellationRequested();
+        using var decoded = Open(source, maxSide, bounded: true);
+        if (decoded is null) return null;
+        var bitmap = decoded.Bitmap;
+        int w = bitmap.PixelWidth, h = bitmap.PixelHeight, stride = w * 4;
+        var pixels = new byte[stride * h];
+        var frames = new BitmapSource[decoded.FrameCount];
+        var times = new int[frames.Length];
+        for (int i = 0; i < frames.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            bitmap.CopyPixels(pixels, stride, 0);
+            var frame = BitmapSource.Create(w, h, 96, 96, PixelFormats.Pbgra32, null, pixels, stride);
+            frame.Freeze();
+            frames[i] = frame;
+            uint ticks = decoded.delays is { } delays && i < delays.Length / 4 ? BitConverter.ToUInt32(delays, i * 4) : 0;
+            times[i] = ticks is > 0 and <= ushort.MaxValue ? (int)ticks * 10 : 100;
+            if (i + 1 < frames.Length) decoded.Advance();
+        }
+        return new(frames, times, decoded.plays);
+    }
+
+    internal int SimilarityDelay(int index)
+    {
+        uint ticks = delays is { } samples && index < samples.Length / 4 ? BitConverter.ToUInt32(samples, index * 4) : 0;
+        return ticks is < 2 or > ushort.MaxValue ? 100 : (int)ticks * 10;
+    }
 
     internal bool Advance()
     {

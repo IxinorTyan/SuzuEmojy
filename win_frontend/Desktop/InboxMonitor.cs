@@ -69,7 +69,7 @@ internal sealed class InboxMonitor : IDisposable
                 if (staged && !(file.Name.Length > 33 && file.Name[32] == '_' &&
                     file.Name.Take(32).All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'))) continue;
                 long length, modified;
-                try { length = file.Length; modified = (file.LastWriteTimeUtc - DateTime.UnixEpoch).Ticks; }
+                try { length = file.Length; modified = (file.LastWriteTimeUtc - RuntimePrimitives.UnixEpoch).Ticks; }
                 catch (FileNotFoundException) { continue; }
                 if (length > 0) yield return new(file.Name, length, modified, staged);
             }
@@ -85,7 +85,7 @@ internal sealed class InboxMonitor : IDisposable
             // remained constant (e.g. a preallocated browser download).
             using var probe = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             return probe.Length == file.Length &&
-                (File.GetLastWriteTimeUtc(probe.SafeFileHandle) - DateTime.UnixEpoch).Ticks == file.Modified;
+                (RuntimePrimitives.LastWriteTimeUtc(probe.SafeFileHandle) - RuntimePrimitives.UnixEpoch).Ticks == file.Modified;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
     }).ToArray();

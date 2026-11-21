@@ -15,7 +15,9 @@ internal sealed class WindowsInput : IPastePlatform
     private static readonly int[] ModifierKeys = [0x10, 0x11, 0x12, 0x5B, 0x5C];
 
     public nint Foreground => GetForegroundWindow();
-    public uint OwnProcess => (uint)Environment.ProcessId;
+    public uint OwnProcess => GetCurrentProcessId();
+
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
     public uint ClipboardSequence => FileClipboard.Sequence;
     public bool ModifiersDown
     {

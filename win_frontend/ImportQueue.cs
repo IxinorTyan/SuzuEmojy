@@ -15,13 +15,13 @@ internal sealed record ImportRequest(LibraryCommand Command, bool ContainsFolder
 // clipboard bitmap) until its own request, rather than the entire queue, settles.
 internal sealed class ImportQueue(Func<ImportRequest, Task> run, Action<int> waitingChanged)
 {
-    private readonly Queue<(ImportRequest Request, TaskCompletionSource Completion)> pending = new();
+    private readonly Queue<(ImportRequest Request, TaskCompletionSource<bool> Completion)> pending = new();
     internal bool IsRunning { get; private set; }
     internal int WaitingCount => pending.Count;
 
     internal Task Enqueue(ImportRequest request)
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending.Enqueue((request, completion));
         if (IsRunning) waitingChanged(WaitingCount);
         else _ = Drain();
@@ -33,13 +33,14 @@ internal sealed class ImportQueue(Func<ImportRequest, Task> run, Action<int> wai
         IsRunning = true;
         try
         {
-            while (pending.TryDequeue(out var entry))
+            while (pending.Count > 0)
             {
+                var entry = pending.Dequeue();
                 try
                 {
                     waitingChanged(WaitingCount);
                     await run(entry.Request);
-                    entry.Completion.TrySetResult();
+                    entry.Completion.TrySetResult(true);
                 }
                 catch (Exception error) { entry.Completion.TrySetException(error); }
             }

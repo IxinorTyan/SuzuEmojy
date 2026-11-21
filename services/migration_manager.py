@@ -49,7 +49,8 @@ class MigrationManager:
         """
         return any(path.exists() for path in self.json_files.values())
 
-    def run_fast_migration(self, progress_callback: Optional[Callable[[str, float], None]] = None) -> bool:
+    def run_fast_migration(self, progress_callback: Optional[Callable[[str, float], None]] = None,
+                           *, selected=None) -> bool:
         """
         3. 方法 run_fast_migration(progress_callback=None)：
         逐个检查旧 JSON，若存在：
@@ -59,16 +60,18 @@ class MigrationManager:
         - 如果提供了 progress_callback(msg, percentage)，向其汇报当前进度的文本和百分比。
         """
         steps = [
-            ("哈希索引数据 (features.db)", self._migrate_hashes, 20.0),
-            ("关键词元数据 (metadata.db)", self._migrate_metadata, 40.0),
-            ("分类与图标数据 (categories.db)", self._migrate_categories, 60.0),
-            ("自定义排序数据 (order.db)", self._migrate_order, 80.0),
-            ("最近使用历史 (recent.db)", self._migrate_recent, 100.0),
+            ({"hashes"}, "哈希索引数据 (features.db)", self._migrate_hashes, 20.0),
+            ({"metadata"}, "关键词元数据 (metadata.db)", self._migrate_metadata, 40.0),
+            ({"categories", "category_icons"}, "分类与图标数据 (categories.db)", self._migrate_categories, 60.0),
+            ({"order"}, "自定义排序数据 (order.db)", self._migrate_order, 80.0),
+            ({"recent"}, "最近使用历史 (recent.db)", self._migrate_recent, 100.0),
         ]
 
         overall_success = True
 
-        for msg, migrate_func, percentage in steps:
+        for keys, msg, migrate_func, percentage in steps:
+            if selected is not None and not keys.intersection(selected):
+                continue
             if progress_callback:
                 try:
                     progress_callback(msg, percentage)
@@ -97,7 +100,7 @@ class MigrationManager:
 
         db_path = self.data_dir / "features.db"
         try:
-            with open(hashes_file, 'r', encoding='utf-8') as f:
+            with open(hashes_file, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             if isinstance(data, dict) and data:
@@ -144,7 +147,7 @@ class MigrationManager:
 
         db_path = self.data_dir / "metadata.db"
         try:
-            with open(metadata_file, 'r', encoding='utf-8') as f:
+            with open(metadata_file, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             if isinstance(data, dict) and data:
@@ -195,12 +198,12 @@ class MigrationManager:
         try:
             cat_data = {}
             if cat_file.exists():
-                with open(cat_file, 'r', encoding='utf-8') as f:
+                with open(cat_file, 'r', encoding='utf-8-sig') as f:
                     cat_data = json.load(f)
 
             icon_data = {}
             if icons_file.exists():
-                with open(icons_file, 'r', encoding='utf-8') as f:
+                with open(icons_file, 'r', encoding='utf-8-sig') as f:
                     icon_data = json.load(f)
 
             with sqlite3.connect(db_path) as conn:
@@ -281,7 +284,7 @@ class MigrationManager:
 
         db_path = self.data_dir / "order.db"
         try:
-            with open(order_file, 'r', encoding='utf-8') as f:
+            with open(order_file, 'r', encoding='utf-8-sig') as f:
                 order_list = json.load(f)
 
             if isinstance(order_list, list) and order_list:
@@ -317,7 +320,7 @@ class MigrationManager:
 
         db_path = self.data_dir / "recent.db"
         try:
-            with open(recent_file, 'r', encoding='utf-8') as f:
+            with open(recent_file, 'r', encoding='utf-8-sig') as f:
                 recent_list = json.load(f)
 
             if isinstance(recent_list, list) and recent_list:

@@ -4,7 +4,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media;
@@ -14,7 +13,7 @@ namespace SuzuEmojy.Windows.Desktop;
 
 internal sealed record ClipboardMedia(string Path, byte[]? DibV5);
 
-internal sealed class StickerSendMedia(string repository, string cache, bool convertStatic)
+internal sealed class StickerSendMedia(string cache, bool convertStatic)
 {
     internal async Task<ClipboardMedia> Prepare(string original, CancellationToken cancellation)
     {
@@ -24,13 +23,11 @@ internal sealed class StickerSendMedia(string repository, string cache, bool con
         {
             try
             {
-                var response = await PythonBridge.Run(repository, "services.send_media", TimeSpan.FromSeconds(4),
-                    cancellation, path, cache).ConfigureAwait(false);
-                if (JsonSerializer.Deserialize<string>(response) is { } gif && File.Exists(gif))
-                    path = gif;
+                var native = await Task.Run(() => StaticGifCache.TryPrepare(original, cache, cancellation), cancellation).ConfigureAwait(false);
+                if (native is not null) path = native;
             }
             catch (Exception error) when (error is Win32Exception or IOException or TimeoutException or
-                InvalidOperationException or JsonException)
+                InvalidOperationException)
             {
                 Trace.TraceWarning("Static GIF preparation failed: {0}", error.Message);
             }

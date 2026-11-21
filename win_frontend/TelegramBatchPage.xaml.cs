@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ public partial class TelegramBatchPage : UserControl
     private readonly Func<LibraryCommand, bool, CancellationToken, IProgress<LibraryProgress>?,
         Task<(LibraryResult Result, LibrarySnapshot? Snapshot)>> run;
     private readonly Action<LibrarySnapshot> accept;
+    private readonly Action<string>? rememberFolder;
     private readonly ObservableCollection<BatchRow> rows = [];
     private readonly OperationScope work = new();
     internal OperationScope PageWork => work;
@@ -23,12 +25,14 @@ public partial class TelegramBatchPage : UserControl
 
     internal TelegramBatchPage(LibraryCommand request, Func<LibraryCommand, bool, CancellationToken, IProgress<LibraryProgress>?,
         Task<(LibraryResult Result, LibrarySnapshot? Snapshot)>> run, Func<string, string?> chooseFolder,
-        Action<LibrarySnapshot> accept, Action<string> showDetails)
+        Action<LibrarySnapshot> accept, Action<string> showDetails, string? savedFolder = null, Action<string>? rememberFolder = null)
     {
         requestTemplate = request;
         this.run = run;
         this.accept = accept;
+        this.rememberFolder = rememberFolder;
         InitializeComponent();
+        Folder.Text = Directory.Exists(savedFolder) ? savedFolder : "";
         Packages.ItemsSource = rows;
         Browse.Click += (_, _) =>
         {
@@ -70,9 +74,11 @@ public partial class TelegramBatchPage : UserControl
     internal async Task RunBatch()
     {
         if (!Start.IsEnabled || IsRunning) return;
-        var links = Links.Text.Split(["\r\n", "\r", "\n"], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var links = Links.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim()).Where(line => line.Length > 0).ToArray();
         var destination = Folder.Text.Trim();
         if (links.Length == 0 || destination.Length == 0) return;
+        if (Directory.Exists(destination)) rememberFolder?.Invoke(Path.GetFullPath(destination));
         rows.Clear();
         foreach (string link in links)
             rows.Add(new BatchRow(string.IsNullOrEmpty(requestTemplate.BotToken) ? link : link.Replace(requestTemplate.BotToken, "***")));
@@ -140,13 +146,13 @@ public partial class TelegramBatchPage : UserControl
         public string Stage { get; private set; } = "等待中";
         public string Progress { get; private set; } = "";
         public string Detail { get; private set; } = "";
-        public string Summary => Detail.Split('\n', 2)[0];
+        public string Summary => Detail.Split(['\n'], 2)[0];
         internal bool IsFinal { get; private set; }
         public event PropertyChangedEventHandler? PropertyChanged;
 
         internal void Apply(string phase, int done, int total, string? detail, string? title = null)
         {
-            if (!string.IsNullOrWhiteSpace(title)) Title = title;
+            if (!string.IsNullOrWhiteSpace(title)) Title = title!;
             Stage = phase switch
             {
                 "parse" => "解析中", "parsed" => "等待下载", "download" => "下载中", "ready" => "等待入库",

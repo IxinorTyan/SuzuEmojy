@@ -23,7 +23,7 @@ def _storage_locked(method):
 
 
 class StorageService:
-    SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.webm', '.tgs')
+    SUPPORTED_FORMATS = ('.png', '.apng', '.jpg', '.jpeg', '.gif', '.webp', '.webm', '.tgs')
 
     def __init__(self, *, data_dir=None):
         import sys

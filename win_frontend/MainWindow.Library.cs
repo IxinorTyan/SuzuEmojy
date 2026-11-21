@@ -11,7 +11,7 @@ using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using SuzuEmojy.Windows.Controls;
-using Forms = System.Windows.Forms;
+using SuzuEmojy.Windows.Desktop;
 
 namespace SuzuEmojy.Windows;
 
@@ -25,6 +25,19 @@ public partial class MainWindow
     internal bool HasPendingWrite => LibraryBusy || inboxWork.IsBusy || imports.IsRunning;
     private bool CanQueueImport => commands is not null && (imports.IsRunning || !LibraryBusy);
     internal event Action<LibrarySnapshot>? LibraryChanged;
+
+    internal async Task RecordRecent(Sticker sticker, int limit)
+    {
+        if (commands is null) return;
+        var response = await commands.Run(new("recent", [sticker.Path], Limit: limit), reload: false);
+        if (response.Result.Recent is { } recent)
+        {
+            // Recents used to piggyback on a later settings-triggered gallery reload.
+            // Apply their own result without resetting the gallery or its selection.
+            preferences.Accept(preferences.Saved with { Recent = recent });
+            library = preferences.Effective;
+        }
+    }
 
     private void EnableLibraryActions()
     {
@@ -84,7 +97,7 @@ public partial class MainWindow
         if (!background)
         {
             preview.Hide();
-            Root.IsEnabled = false;
+            PageArea.IsEnabled = false;
         }
         IProgress<LibraryProgress>? progress = null;
         if (activity is { } display)
@@ -105,7 +118,7 @@ public partial class MainWindow
         catch (Exception error)
         {
             operation.StopReporting();
-            var message = error.Message.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
+            var message = error.Message.Split(['\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim();
             if (background) Trace.TraceWarning("{0}: {1}", title, message ?? error.Message);
             else
             {
@@ -119,7 +132,7 @@ public partial class MainWindow
             if (!background)
             {
                 ActivityProgress.Dismiss();
-                Root.IsEnabled = true;
+                PageArea.IsEnabled = true;
                 BusyProgress.Visibility = Visibility.Collapsed;
             }
         }
@@ -179,6 +192,7 @@ public partial class MainWindow
         }
         if (rebuildSidebar) BuildCategories();
         else MarkCategory();
+        if (updateSettings) RefreshCategoryToolTips();
         if (!updateSettings) FilterGallery(categoryChange: false, preserveScroll: preserveSelection);
         if (Pages.Page is ExchangePage exchange) exchange.SetCanExportSelected(library.Categories.Length > 0);
         LibraryChanged?.Invoke(preferences.Saved);
@@ -391,11 +405,7 @@ public partial class MainWindow
         Run(new("delete", items.Select(item => item.Path).ToArray()), "确认删除");
     }
 
-    private string? ChooseFolder(string title)
-    {
-        var picker = new OpenFolderDialog { Title = title };
-        return picker.ShowDialog(this) == true ? picker.FolderName : null;
-    }
+    private string? ChooseFolder(string title) => FolderPicker.Choose(this, title);
 
     private void ExportFiles(Sticker[] items)
     {
@@ -454,7 +464,7 @@ public partial class MainWindow
         }
         catch (Exception failure)
         {
-            error = failure.Message.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? failure.Message;
+            error = failure.Message.Split(['\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? failure.Message;
         }
         finally { ActivityProgress.Dismiss(); }
         if (error is not null) ReportIssue(title, error, MessageBoxImage.Error, inline: !request.ContainsFolder);
@@ -470,7 +480,7 @@ public partial class MainWindow
             return false;
         var result = await RunAction(new("import_inbox", InboxFiles: ready), "收件箱自动导入", background: true);
         if (result is { Count: > 0 } && OnGalleryPage)
-            GalleryNotice.Show("收件箱自动导入完成", $"成功添加 {result.Count} 个表情包");
+            GalleryNotice.Show("收件箱自动导入完成", $"成功添加 {result.Count} 个表情包", slideFromRight: true);
         if (result?.Warnings is { Length: > 0 } warnings) Trace.TraceWarning("Inbox: {0}", string.Join(Environment.NewLine, warnings));
         return true;
     }
@@ -494,8 +504,8 @@ public partial class MainWindow
                 summary += Environment.NewLine + string.Join(Environment.NewLine, warnings);
             GalleryNotice.Show("部分文件处理失败", summary, warning: true);
         }
-        else if (batch) GalleryNotice.Show("导入完成", FormatImportResult(result));
-        else if (result.Count > 0) GalleryNotice.Show("导入完成", $"成功添加了 {result.Count} 个表情包");
+        else if (batch) GalleryNotice.Show("导入完成", FormatImportResult(result), slideFromRight: result.Count > 0);
+        else if (result.Count > 0) GalleryNotice.Show("导入完成", $"成功添加了 {result.Count} 个表情包", slideFromRight: true);
         else if (result.Skipped > 0) GalleryNotice.Show("导入完成", "该图片已存在，已跳过保存");
     }
 

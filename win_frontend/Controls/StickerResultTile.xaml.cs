@@ -24,9 +24,7 @@ public partial class StickerResultTile : UserControl
         Open.Click += (_, _) => Opened?.Invoke(Keyboard.Modifiers);
         Toggle.Checked += (_, _) => Changed();
         Toggle.Unchecked += (_, _) => Changed();
-        MouseEnter += (_, _) => Paint();
-        MouseLeave += (_, _) => Paint();
-        IsKeyboardFocusWithinChanged += (_, _) => Paint();
+        FluentMotion.Focus(this, FocusSurface);
     }
 
     internal void SetSelected(bool selected)
@@ -45,8 +43,7 @@ public partial class StickerResultTile : UserControl
 
     private void Paint()
     {
-        Frame.SetResourceReference(Border.BorderBrushProperty, Toggle.IsChecked == true ? "Accent"
-            : IsMouseOver || IsKeyboardFocusWithin ? "CardEdge" : "PreviewEdge");
+        Frame.SetResourceReference(Border.BorderBrushProperty, Toggle.IsChecked == true ? "Accent" : "PreviewEdge");
         Frame.SetResourceReference(Border.BackgroundProperty, Toggle.IsChecked == true ? "SelectionSurface" : "PreviewSurface");
     }
 }

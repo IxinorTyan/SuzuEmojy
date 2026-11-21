@@ -33,8 +33,8 @@ internal static class CursorPlacement
         int x = cursor.X + gap, y = cursor.Y + gap;
         if (x + panel.Width > work.Right) x = cursor.X - gap - panel.Width;
         if (y + panel.Height > work.Bottom) y = cursor.Y - gap - panel.Height;
-        return new(Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - panel.Width)),
-            Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - panel.Height)));
+        return new(RuntimePrimitives.Clamp(x, work.Left, Math.Max(work.Left, work.Right - panel.Width)),
+            RuntimePrimitives.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - panel.Height)));
     }
 
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint window);

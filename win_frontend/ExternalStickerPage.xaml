@@ -45,10 +45,15 @@
         <DockPanel>
           <StackPanel x:Name="InspectorText" DockPanel.Dock="Top">
             <TextBlock x:Name="PreviewTitle" FontSize="15" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Ink}"/>
-            <TextBlock x:Name="PreviewInfo" Foreground="{DynamicResource Ink}" TextWrapping="Wrap"
-                       TextTrimming="CharacterEllipsis" MaxHeight="42" Margin="0,5,0,0"/>
           </StackPanel>
-          <Image x:Name="DetailImage" Stretch="Uniform" VerticalAlignment="Top" MaxHeight="280" Margin="0,8,0,0"/>
+          <Grid>
+            <TextBlock x:Name="InspectorEmpty" Foreground="{DynamicResource Ink}" Margin="0,5,0,0"/>
+            <DockPanel x:Name="InspectorBody" Visibility="Hidden">
+              <TextBlock x:Name="PreviewInfo" DockPanel.Dock="Top" Foreground="{DynamicResource Ink}" TextWrapping="Wrap"
+                       TextTrimming="CharacterEllipsis" MaxHeight="42" Margin="0,5,0,0"/>
+              <Image x:Name="DetailImage" Stretch="Uniform" VerticalAlignment="Top" MaxHeight="280" Margin="0,8,0,0"/>
+            </DockPanel>
+          </Grid>
         </DockPanel>
       </Border>
       <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"

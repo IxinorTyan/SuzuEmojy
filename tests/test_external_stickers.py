@@ -565,6 +565,46 @@ def test_tg_token_only_goes_to_expected_https_origin(tmp_path, monkeypatch):
     assert TGStickerDownloader.parse_sticker_input("https://t.me/addstickers/test_pack")
 
 
+def test_tg_connectivity_uses_explicit_routes_without_exposing_secrets(tmp_path, monkeypatch):
+    calls = []
+
+    class User:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"is_bot": True, "username": TOKEN}}
+
+    def get(session, url, **options):
+        calls.append((url, session.proxies, session.trust_env, options["allow_redirects"]))
+        return User()
+
+    monkeypatch.setattr("requests.Session.get", get)
+    proxy = "socks5h://user:password@127.0.0.1:1234"
+    request = dict(action="tg_test_connection", bot_token=TOKEN, api_proxy="https://explicit.invalid/api")
+    for invalid in ("file://127.0.0.1:1234", "socks5://127.0.0.1", "https://127.0.0.1:65536", "http://x:80?a=b"):
+        assert run(tmp_path, dict(request, network_proxy=invalid))["error"]
+    assert calls == []
+    assert run(tmp_path, dict(request, network_proxy=proxy)) == {}
+    assert calls == [(f"https://explicit.invalid/api/bot{TOKEN}/getMe",
+                      {"http": proxy, "https": proxy}, False, False)]
+    assert not any(tmp_path.iterdir())
+
+
+def test_sticker_picker_paths_use_existing_config_and_only_allow_absolute_directories(tmp_path):
+    import pytest
+    from services.gallery_snapshot import snapshot
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"qq_save_path": str(tmp_path), "appearance_mode": "dark"}), encoding="utf-8-sig")
+    assert snapshot(tmp_path)["settings"]["qq_save_path"] == str(tmp_path)
+    with pytest.raises(ValueError):
+        run(tmp_path, {"action": "settings", "settings": {"tg_save_path": "relative"}})
+    folders = {key: str(tmp_path / key) for key in ("qq_data_path", "qq_save_path", "tg_save_path", "tg_batch_save_path")}
+    assert run(tmp_path, {"action": "settings", "settings": folders}) == {}
+    assert snapshot(tmp_path)["settings"] == dict(folders, appearance_mode="dark")
+
+
 def test_tg_animated_thumbnail_without_thumbnail_id(tmp_path, monkeypatch):
     gif = BytesIO()
     first = Image.new("RGBA", (24, 40), "red")

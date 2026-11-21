@@ -6,7 +6,6 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -33,13 +32,22 @@ venv.bak/
 .vscode/
 *.code-workspace
 
-# Build & Release
+# Build, Release & Test Outputs
+dist/
+.pytest_cache/
+TestResults/
 SuzuEmojy_Release/
 /win_frontend/obj/
 /win_frontend/bin/
 /win_frontend_tests/obj/
 /win_frontend_tests/bin/
+/win_launcher/obj/
+/win_launcher/bin/
+/win_updater/obj/
+/win_updater/bin/
 *_wpftmp.csproj
+/nuitka-crash-report.xml
+/nuitka_help.txt
 *.spec
 mini_launcher.py
 

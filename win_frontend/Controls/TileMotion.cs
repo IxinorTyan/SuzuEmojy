@@ -42,11 +42,7 @@ internal static class TileMotion
     internal static void Move(Animatable target, DependencyProperty property, double from, double to, int ms)
     {
         if (Math.Abs(from - to) < .0001) return;
-        target.BeginAnimation(property, EaseOut(from, to, ms));
+        target.BeginAnimation(property, FluentMotion.Ease(from, to, ms));
     }
 
-    internal static DoubleAnimation EaseOut(double from, double to, int ms) => new(from, to, TimeSpan.FromMilliseconds(ms))
-    {
-        FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-    };
 }

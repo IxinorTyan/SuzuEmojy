@@ -28,7 +28,7 @@ internal sealed class QuickPanelResults
     {
         var query = input.Trim();
         return query.Length == 0 ? recent.ToArray() : library
-            .Where(item => item.Keywords.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(30).ToArray();
+            .Where(item => item.Keywords.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).Take(30).ToArray();
     }
 
     internal void Record(Sticker original)

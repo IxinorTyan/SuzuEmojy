@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using SuzuEmojy.Windows.Controls;
+using SuzuEmojy.Windows.Desktop;
 
 namespace SuzuEmojy.Windows;
 
@@ -15,11 +16,14 @@ public partial class MainWindow
         var page = new ExchangePage(ImportPackage, () => ExportZip(null), ExportSelected, SplitPackage,
             PickImportFiles, PickImportFolder, () => OpenSource(false), () => OpenSource(true), library.Categories.Length > 0);
         OpenPage(new("导入导出", page, Resume: () => page.SetCanExportSelected(library.Categories.Length > 0),
-            Work: galleryWork), exchangeButton);
+            Work: galleryWork, Tool: new("前往资源站", "external-link",
+                () => { if (!offscreen) DesktopLinks.Open(DesktopLinks.ResourceSite, error =>
+                    ReportIssue("前往资源站", error, MessageBoxImage.Warning, inline: false)); })), exchangeButton);
 
         void OpenSource(bool telegram)
         {
             if (LibraryBusy || Pages.Page is not ExchangePage) return;
+            string outputKey = telegram ? "tg_save_path" : "qq_save_path";
             var source = new ExternalStickerPage(telegram, MenuPalette, commands,
                 (snapshot, category) => AcceptSnapshot(snapshot, category, updateSettings: false),
                 ChooseFolder, library.Categories, current?.Name,
@@ -30,11 +34,16 @@ public partial class MainWindow
                         "请输入资源包 ID（同时作为收藏夹名称和 ZIP 文件名）：", title),
                     path => FluentDialog.Confirm(this, library, "覆盖资源包", "文件已存在，是否覆盖？\n" + path),
                     (ok, detail) => FluentDialog.ShowMessage(this, library, ok ? "资源包导出完成" : "资源包导出失败",
-                        detail, ok ? MessageBoxImage.None : MessageBoxImage.Error)));
+                        detail, ok ? MessageBoxImage.None : MessageBoxImage.Error)),
+                folders: new(library.String("qq_data_path", ""), library.String(outputKey, ""),
+                    path => SaveFolder("qq_data_path", path), path => SaveFolder(outputKey, path)),
+                details: offscreen ? null : new(
+                    help => FluentDialog.ShowMessage(this, library, "使用帮助", help),
+                    (log, clear) => FluentDialog.ShowDetails(this, library, "操作日志", log, clear)));
             var route = new PageRoute(telegram ? "下载 TG 贴纸" : "扫描 QQ 聊天表情", source,
                 Suspend: () => source.SuspendMedia(true), Resume: () => source.SuspendMedia(false),
                 Leave: source.Leave, HandleBack: source.TryGoBack, Work: source.PageWork);
-            if (Pages.Push(route) && !telegram && !offscreen) _ = source.Discover(null);
+            if (Pages.Push(route) && !telegram && !offscreen) _ = source.DiscoverInitial();
         }
 
         void OpenBatch(LibraryCommand request)
@@ -42,8 +51,15 @@ public partial class MainWindow
             if (LibraryBusy || Pages.Page is not ExternalStickerPage) return;
             var batch = new TelegramBatchPage(request, commands.Run, ChooseFolder,
                 snapshot => AcceptSnapshot(snapshot, null, updateSettings: false),
-                detail => { if (!offscreen) FluentDialog.ShowDetails(this, library, "结果 / 详情", detail); });
+                detail => { if (!offscreen) FluentDialog.ShowDetails(this, library, "结果 / 详情", detail); },
+                library.String("tg_batch_save_path", ""), path => SaveFolder("tg_batch_save_path", path));
             Pages.Push(new("批量打包 Telegram 贴纸", batch, Work: batch.PageWork));
+        }
+
+        void SaveFolder(string key, string path)
+        {
+            if (!string.Equals(library.String(key, ""), path, StringComparison.OrdinalIgnoreCase))
+                SaveSettings(new() { [key] = path });
         }
     }
 

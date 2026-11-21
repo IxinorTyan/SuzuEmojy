@@ -14,12 +14,18 @@ internal static class ClipboardImageSource
     private const string BrowserUrl = "UniformResourceLocatorW";
     private const string BrowserUrlAnsi = "UniformResourceLocator";
     private const string UriList = "text/uri-list";
-    private const RegexOptions HtmlOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+    private const RegexOptions BaseHtmlOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+#if NETFRAMEWORK
+    private const RegexOptions HtmlOptions = BaseHtmlOptions;
+#else
+    private const RegexOptions HtmlOptions = BaseHtmlOptions | RegexOptions.NonBacktracking;
+#endif
+    private static readonly TimeSpan HtmlTimeout = TimeSpan.FromMilliseconds(250);
     // CF_HTML can include a header; only an actual img element's src is a candidate.
     private static readonly Regex Tags = new(
-        """<!--[\s\S]*?-->|<img\b((?:"[^"]*"|'[^']*'|[^'"<>])*)>""", HtmlOptions);
+        """<!--[\s\S]*?-->|<img\b((?:"[^"]*"|'[^']*'|[^'"<>])*)>""", HtmlOptions, HtmlTimeout);
     private static readonly Regex Attributes = new(
-        """([^\s=/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?""", HtmlOptions);
+        """([^\s=/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?""", HtmlOptions, HtmlTimeout);
 
     internal static bool MayContainDropLink(IDataObject data) =>
         data.GetDataPresent(DataFormats.Html, false) || data.GetDataPresent(UriList, false) ||
@@ -38,7 +44,7 @@ internal static class ClipboardImageSource
             if (ordered.Count > 0) return ordered.ToArray();
         }
         return (HttpLink(ReadLinkData(data.GetData(BrowserUrl, false), Encoding.Unicode)) ??
-            HttpLink(ReadLinkData(data.GetData(BrowserUrlAnsi, false), Encoding.Latin1)) ?? HttpLink(Text(data))) is { } url
+            HttpLink(ReadLinkData(data.GetData(BrowserUrlAnsi, false), Encoding.GetEncoding(28591))) ?? HttpLink(Text(data))) is { } url
             ? [url] : [];
     }
 
@@ -54,20 +60,22 @@ internal static class ClipboardImageSource
 
     internal static Uri? FindLink(string? html, string? text)
     {
-        if (html is { Length: > 0 and <= 1_000_000 })
+        try
         {
+            if (html is null || html.Length is 0 or > 1_000_000) return HttpLink(text);
             foreach (Match tag in Tags.Matches(html))
             {
                 if (!tag.Groups[1].Success) continue;
                 foreach (Match attribute in Attributes.Matches(tag.Groups[1].Value))
                 {
                     if (!attribute.Groups[1].Value.Equals("src", StringComparison.OrdinalIgnoreCase)) continue;
-                    var source = attribute.Groups.Values.Skip(2).FirstOrDefault(value => value.Success)?.Value;
+                    var source = attribute.Groups.Cast<Group>().Skip(2).FirstOrDefault(value => value.Success)?.Value;
                     if (HttpLink(WebUtility.HtmlDecode(source)) is { } link) return link;
                     break;
                 }
             }
         }
+        catch (RegexMatchTimeoutException) { /* Fall back to the plain-text URL. */ }
         return HttpLink(text);
     }
 

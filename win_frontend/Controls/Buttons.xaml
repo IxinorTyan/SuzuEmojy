@@ -31,22 +31,46 @@
         <ControlTemplate TargetType="Button">
           <Grid>
             <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="5"/>
+            <Border x:Name="HoverSurface" Background="{DynamicResource Hover}" CornerRadius="5" Visibility="Hidden" IsHitTestVisible="False"/>
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            <Border x:Name="SelectionOutline" CornerRadius="5" BorderThickness="1" IsHitTestVisible="False"/>
           </Grid>
           <ControlTemplate.Triggers>
+            <Trigger Property="primitives:Selector.IsSelected" Value="True">
+              <Setter TargetName="Surface" Property="Background" Value="{DynamicResource CategorySelectedSurface}"/>
+              <Setter Property="FontWeight" Value="SemiBold"/>
+            </Trigger>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/>
+              <Setter TargetName="HoverSurface" Property="Visibility" Value="Visible"/>
             </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True">
-              <Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/>
-            </Trigger>
-            <Trigger Property="primitives:Selector.IsSelected" Value="True">
-              <Setter TargetName="SelectionOutline" Property="BorderBrush" Value="{DynamicResource CategoryOutline}"/>
-              <Setter Property="FontWeight" Value="SemiBold"/>
+              <Setter TargetName="HoverSurface" Property="Visibility" Value="Visible"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="FluentGalleryCardButton" TargetType="Button">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border Background="Transparent">
+            <Grid>
+              <Border x:Name="CardHover" Background="{DynamicResource Hover}" BorderBrush="{DynamicResource CardEdge}"
+                      CornerRadius="8" BorderThickness="1" Visibility="Hidden" IsHitTestVisible="False"/>
+              <ContentPresenter IsHitTestVisible="False"/>
+            </Grid>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="CardHover" Property="Visibility" Value="Visible"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="CardHover" Property="Visibility" Value="Visible"/>
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>

@@ -30,6 +30,9 @@ public partial class SettingsPage : UserControl
     internal event Action<bool>? HotkeyRecordingChanged;
     internal event Action<bool>? WallpaperRequested;
     internal event Action<string, int>? WallpaperTonePreview;
+    internal event Action<string>? StartupError;
+    internal event Action<OperationProgress>? MaintenanceRequested;
+    internal event Action? AboutRequested;
     internal bool IsRecordingHotkey => hotkeyFields.Values.Any(field => field.IsKeyboardFocusWithin);
 
     private const string Pin = "M3,10 L6,7 L6,3 L9,1 L15,7 L13,10 L9,10 L6,13 Z M4.5,11.5 L1,15";
@@ -44,8 +47,9 @@ public partial class SettingsPage : UserControl
     private const string Send = "M1,7 L15,1 10,15 7,9 Z M7,9 L15,1";
     private const string Clock = "M8,1 A7,7 0 1 0 8.01,1 M8,4 V8 L11,9";
     private const string Terminal = "M1,2 H15 V14 H1 Z M4,5 L7,8 L4,11 M9,11 H12";
+    private const string Font = "M1,14 L6,2 L11,14 M3,10 H9 M13,6 H16 M14.5,6 V14";
 
-    internal SettingsPage(LibrarySnapshot library, FluentMenuPalette menuPalette)
+    internal SettingsPage(LibrarySnapshot library, FluentMenuPalette menuPalette, LoginStartup? startup = null)
     {
         this.menuPalette = menuPalette;
         InitializeComponent();
@@ -55,6 +59,7 @@ public partial class SettingsPage : UserControl
         Heading("窗口设置");
         Flag(library, "always_on_top", "主窗口始终置顶", "让表情包管理器始终显示在其他窗口之上", Pin, true);
         Flag(library, "hide_main_after_paste", "粘贴后自动隐藏主面板", "点击表情复制并尝试粘贴后隐藏主面板，仍可通过快捷键或托盘呼出", Hide, false);
+        if (startup is not null) StartupSwitch(startup);
         Range(library, "preview_size", "预览浮窗大小", "设置悬停时弹出的大图的像素尺寸", Zoom, 320, 80, 800, 10);
         Range(library, "quick_panel_width", "快速面板宽度", "设置快速表情调用面板的宽度（像素）", Fit, 360, 250, 800, 10);
         Range(library, "quick_panel_height", "快速面板高度", "设置快速表情调用面板的高度（像素）", Fit, 480, 150, 1000, 10);
@@ -75,6 +80,8 @@ public partial class SettingsPage : UserControl
             palettes.Children.Add(column);
         }
         Card("主题颜色", "为浅色和深色模式分别设置强调色和背景色", PaletteIcon, palettes, wide: true);
+        Flag(library, "use_system_font", "使用系统默认字体", null, Font, false);
+        Flag(library, "disable_animations", "关闭动画", null, Hide, false);
         Range(library, "thumbnail_size", "缩略图大小", null, Zoom, 120, 40, 300, 10);
         Range(library, "sidebar_icon_size", "列表模式下侧边栏图标大小", "设置左侧分类列表图标的尺寸", Folder, 20, 12, 40, 1);
         Flag(library, "show_setting_button", "显示设置入口", "在主面板右上角显示快速进入设置的按钮", Paint, true);
@@ -99,12 +106,44 @@ public partial class SettingsPage : UserControl
             level => WallpaperTonePreview?.Invoke(WallpaperSurface.OverlayOpacityKey, level), WallpaperOptions);
 
         Heading("高级设置");
+        Flag(library, "show_sidebar_tooltip", "图标模式悬浮提示", "在侧边栏折叠为仅图标模式时，鼠标悬停显示分类名称", Folder, true);
         Flag(library, "convert_static_to_gif", "发送时将静态图转为GIF",
             "复制或发送 PNG/JPG/WEBP 等静态图时自动转为 1 帧 GIF 格式，避免在 QQ 等聊天软件中显示为超大原图", Send, true);
         Range(library, "preview_delay", "悬停预览延迟", "设置鼠标悬停多久后弹出大图预览", Clock, 500, 0, 5000, 50);
         Range(library, "recent_limit", "最近使用记录上限", "设置快速面板中显示的最近使用表情数量", Clock, 30, 1, 300, 1);
         Hotkey(library, "global_hotkey", "唤醒快捷键", "设置全局唤醒和隐藏主面板的快捷键", "ctrl+shift+e");
         Hotkey(library, "quick_panel_hotkey", "快速面板快捷键", "设置全局唤醒快速表情调用面板的快捷键", "alt+2");
+
+        var maintenance = new Button { Content = "维护…", Style = (Style)FindResource("FluentPushButton") };
+        var progress = new OperationProgress { Margin = new Thickness(0, 6, 0, 0) };
+        maintenance.Click += (_, _) => MaintenanceRequested?.Invoke(progress);
+        Card("旧图库维护", "备份旧数据、迁移到 SQLite、清理失效记录并补全索引", Folder, maintenance);
+        group.Children.Add(progress);
+
+        Heading("关于软件");
+        var about = new Button { Content = "打开", Style = (Style)FindResource("FluentPushButton") };
+        about.Click += (_, _) => AboutRequested?.Invoke();
+        Card("关于软件", null, Terminal, about);
+    }
+
+    private void StartupSwitch(LoginStartup startup)
+    {
+        var input = new CheckBox { Style = (Style)FindResource("FluentSwitch") };
+        static bool Expected(Exception e) => e is System.IO.IOException or UnauthorizedAccessException or System.Security.SecurityException;
+        void Refresh()
+        {
+            try { input.IsChecked = startup.IsEnabled; input.IsEnabled = true; input.ToolTip = null; }
+            catch (Exception error) when (Expected(error)) { input.IsEnabled = false; input.ToolTip = error.Message; }
+        }
+        Refresh();
+        input.Loaded += (_, _) => Refresh();
+        input.Click += (_, _) =>
+        {
+            try { startup.SetEnabled(input.IsChecked == true); }
+            catch (Exception error) when (Expected(error)) { StartupError?.Invoke(error.Message); }
+            Refresh();
+        };
+        Card("开机自启动", "登录 Windows 后自动启动到托盘；移动程序后请重新开启此选项", Clock, input);
     }
 
     internal void SetWallpaperState(bool hasAsset, bool visible)
@@ -173,7 +212,7 @@ public partial class SettingsPage : UserControl
         if (wide) wideCards.Add(card);
     }
 
-    private void Flag(LibrarySnapshot library, string key, string label, string details, string icon, bool fallback)
+    private void Flag(LibrarySnapshot library, string key, string label, string? details, string icon, bool fallback)
     {
         var input = new CheckBox { Style = (Style)FindResource("FluentSwitch"), IsChecked = library.Flag(key, fallback) };
         input.Checked += (_, _) => Queue(key, true);
@@ -201,7 +240,7 @@ public partial class SettingsPage : UserControl
         System.Windows.Automation.AutomationProperties.SetName(number, label);
         void Set(int next)
         {
-            next = Math.Clamp(next, low, high);
+            next = RuntimePrimitives.Clamp(next, low, high);
             number.Text = next.ToString(CultureInfo.InvariantCulture);
             if (next == value) return;
             value = next;
@@ -253,8 +292,8 @@ public partial class SettingsPage : UserControl
         foreach (var card in wideCards) card.SetCompact(ActualWidth < 540);
         foreach (var (number, rail) in ranges)
         {
-            number.Width = Math.Clamp(ActualWidth - 540, 122, 200);
-            rail.Width = Math.Clamp(ActualWidth - 614, 95, 246);
+            number.Width = RuntimePrimitives.Clamp(ActualWidth - 540, 122, 200);
+            rail.Width = RuntimePrimitives.Clamp(ActualWidth - 614, 95, 246);
             rail.Visibility = ActualWidth >= 680 ? Visibility.Visible : Visibility.Collapsed;
         }
     }

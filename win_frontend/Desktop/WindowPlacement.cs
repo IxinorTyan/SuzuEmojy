@@ -63,8 +63,8 @@ internal static class WindowPlacement
     private static SavedWindowPlacement Center(Size requested, DisplayArea primary)
     {
         var work = primary.WorkArea;
-        int width = Math.Clamp(requested.Width, 1, work.Width);
-        int height = Math.Clamp(requested.Height, 1, work.Height);
+        int width = RuntimePrimitives.Clamp(requested.Width, 1, work.Width);
+        int height = RuntimePrimitives.Clamp(requested.Height, 1, work.Height);
         return new(work.Left + (work.Width - width) / 2, work.Top + (work.Height - height) / 2, width, height, primary.Id);
     }
 }

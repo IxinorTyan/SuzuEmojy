@@ -23,10 +23,10 @@ internal readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
     {
         uint modifiers = 0, key = 0;
         chord = default;
-        var parts = text.Trim().ToLowerInvariant().Split('+', StringSplitOptions.TrimEntries);
+        var parts = text.Trim().ToLowerInvariant().Split('+');
         for (int i = 0; i < parts.Length; i++)
         {
-            var part = parts[i];
+            var part = parts[i].Trim();
             uint flag = part switch { "alt" => 1, "ctrl" => 2, "shift" => 4, "win" => 8, _ => 0 };
             if (flag != 0)
             {
@@ -37,7 +37,7 @@ internal readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
             if (i != parts.Length - 1) return false;
             if (part.Length == 1 && part[0] is >= 'a' and <= 'z') key = (uint)char.ToUpperInvariant(part[0]);
             else if (part.Length == 1 && part[0] is >= '0' and <= '9') key = part[0];
-            else if (part.Length is 2 or 3 && part[0] == 'f' && int.TryParse(part.AsSpan(1), out int f) &&
+            else if (part.Length is 2 or 3 && part[0] == 'f' && int.TryParse(part.Substring(1), out int f) &&
                      f is >= 1 and <= 24 and not 12)
                 key = (uint)(0x6F + f); // F12 is reserved by the debugger.
             else key = NamedKeys.GetValueOrDefault(part);
@@ -73,7 +73,7 @@ internal readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
         if ((modifiers & 4) != 0) parts.Add("shift");
         if ((modifiers & 8) != 0) parts.Add("win");
         parts.Add(button);
-        var formatted = string.Join('+', parts);
+        var formatted = string.Join("+", parts);
         if (!TryParse(formatted, out _)) return false;
         text = formatted;
         return true;
@@ -82,7 +82,7 @@ internal readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
 
 internal sealed class GlobalHotkey : IDisposable
 {
-    private static readonly nint MessageOnlyParent = new(-3); // HWND_MESSAGE
+    private static readonly nint MessageOnlyParent = (nint)(-3); // HWND_MESSAGE
     private const int HotkeyMessage = 0x0312;
     private const uint NoRepeat = 0x4000;
     private readonly HwndSource source;

@@ -15,6 +15,9 @@ namespace SuzuEmojy.Windows;
 internal sealed record TelegramPackagePrompts(
     Func<string, string?> AskId, Func<string, bool> ConfirmOverwrite, Action<bool, string> ShowResult);
 
+internal sealed record StickerPageFolders(string Source, string Output, Action<string> SaveSource, Action<string> SaveOutput);
+internal sealed record StickerPageDetails(Action<string> ShowHelp, Action<string, Action> ShowLog);
+
 public partial class ExternalStickerPage : UserControl
 {
     private readonly bool telegram;
@@ -31,9 +34,13 @@ public partial class ExternalStickerPage : UserControl
     private readonly Button? scan;
     private readonly FluentChoice? format;
     private FluentChoice? account, kind, category;
-    private readonly TextBox? sourceLink, apiProxy;
+    private readonly TextBox? sourceLink, apiProxy, networkProxy;
+    internal WrapPanel ConnectionOptions { get; } = new() { Visibility = Visibility.Collapsed };
     private readonly PasswordBox? token;
     private readonly CheckBox? zip;
+    private readonly StickerPageFolders? folders;
+    private readonly TextBox outputFolder;
+    private readonly Queue<string> log = new();
     private ExternalAccount[] sources = [];
     private ExternalSticker[] stickers = [];
     private string? directory, packName, packTitle, packUrl;
@@ -46,16 +53,18 @@ public partial class ExternalStickerPage : UserControl
     internal ExternalStickerPage(bool telegram, FluentMenuPalette palette, LibraryCommands commands,
         Action<LibrarySnapshot, string?> accept, Func<string, string?> chooseFolder,
         IEnumerable<Category> categories, string? current, Func<string?>? askCategory = null,
-        Action<LibraryCommand>? openBatch = null, TelegramPackagePrompts? packagePrompts = null)
+        Action<LibraryCommand>? openBatch = null, TelegramPackagePrompts? packagePrompts = null,
+        StickerPageFolders? folders = null, StickerPageDetails? details = null)
         : this(telegram, palette, commands.Run, accept, chooseFolder, categories, current, askCategory, openBatch,
-            packagePrompts) { }
+            packagePrompts, folders, details) { }
 
     internal ExternalStickerPage(bool telegram, FluentMenuPalette palette,
         Func<LibraryCommand, bool, CancellationToken, IProgress<LibraryProgress>?,
             Task<(LibraryResult Result, LibrarySnapshot? Snapshot)>> run,
         Action<LibrarySnapshot, string?> accept, Func<string, string?> chooseFolder,
         IEnumerable<Category> categories, string? current, Func<string?>? askCategory = null,
-        Action<LibraryCommand>? openBatch = null, TelegramPackagePrompts? packagePrompts = null)
+        Action<LibraryCommand>? openBatch = null, TelegramPackagePrompts? packagePrompts = null,
+        StickerPageFolders? folders = null, StickerPageDetails? details = null)
     {
         this.telegram = telegram;
         prefix = telegram ? "tg" : "qq";
@@ -64,7 +73,9 @@ public partial class ExternalStickerPage : UserControl
         this.accept = accept;
         this.chooseFolder = chooseFolder;
         this.packagePrompts = packagePrompts;
+        this.folders = folders;
         InitializeComponent();
+        SetupMediaMotion();
         masonry = new(Scroller, Tiles, item => item.Width > 0 && item.Height > 0 ? (double)item.Height / item.Width : 1, MakeTile);
         masonry.Attach();
         masonry.ViewportChanged += RequestVisible;
@@ -76,9 +87,12 @@ public partial class ExternalStickerPage : UserControl
             sourceLink = TextField("贴纸包链接或包名");
             sourceLink.MaxLength = 1024;
             token = new PasswordBox { Style = (Style)FindResource("FluentPasswordField"), Width = 172, MaxLength = 256 };
-            Field(Options, "Bot Token", token);
-            apiProxy = TextField("API 反代（可选，将接收 Bot Token）");
+            Field(ConnectionOptions, "Bot Token", token);
+            apiProxy = TextField("API 反代（可选，将接收 Bot Token）", ConnectionOptions);
             apiProxy.MaxLength = 512;
+            networkProxy = TextField("本地代理", ConnectionOptions);
+            networkProxy.MaxLength = 512;
+            networkProxy.ToolTip = "http://127.0.0.1:7890 / socks5://127.0.0.1:1080";
             ButtonIn(Options, "解析贴纸包", () => _ = Parse(), primary: true);
             if (openBatch is not null)
                 ButtonIn(Options, "批量打包", () =>
@@ -87,7 +101,12 @@ public partial class ExternalStickerPage : UserControl
                 });
             sourceLink.TextChanged += (_, _) => ClearResults();
             apiProxy.TextChanged += (_, _) => ClearResults();
+            networkProxy.TextChanged += (_, _) => ClearResults();
             token.PasswordChanged += (_, _) => ClearResults();
+            ButtonIn(Options, "测试连通性", () => _ = TestConnection());
+            ButtonIn(Options, "高级配置", () => ConnectionOptions.Visibility = ConnectionOptions.Visibility == Visibility.Visible
+                ? Visibility.Collapsed : Visibility.Visible);
+            ButtonIn(ConnectionOptions, "恢复默认", ResetConnection);
             format = Choice("auto", [("auto", "自动"), ("original", "原始格式"), ("png", "PNG"), ("gif", "GIF")]);
             Field(Options, "下载格式", format);
             zip = new CheckBox { Content = "打包为 ZIP 压缩文件", IsChecked = true, VerticalAlignment = VerticalAlignment.Center,
@@ -122,7 +141,20 @@ public partial class ExternalStickerPage : UserControl
             selectedActions.Add(ButtonIn(Actions, "导出所选", () => _ = Save(false, false)));
             ButtonIn(Actions, "导出全部", () => _ = Save(true, false));
         }
+        outputFolder = TextField("保存路径");
+        outputFolder.IsReadOnly = true;
+        outputFolder.Text = folders?.Output ?? "";
+        ButtonIn(Options, "浏览…", () => SelectOutputFolder(forcePicker: true));
+        if (details is not null)
+        {
+            ButtonIn(Options, "操作日志", () => details.ShowLog(string.Join("\n\n", log), log.Clear));
+            ButtonIn(Options, "使用帮助", () => details.ShowHelp(telegram
+                ? "输入 Telegram 贴纸包链接或包名。没有配置默认 Bot Token 时，请在高级配置中填写。\n\n直连失败时可填写本地代理，或使用自己信任的 HTTPS API 反代。Bot Token 会发送给所填的 API 反代。"
+                : "请先登录过 QQ 并加载表情。自动检测没有找到账号时，可手动选择 QQ 聊天数据所在的文件夹。\n\n选择账号和缓存分类后点击扫描，再导入或导出表情。扫描到的缓存可能比 QQ 中显示的表情多。"));
+        }
+        if (telegram) Options.Children.Add(ConnectionOptions);
         ButtonIn(Actions, "全选", () => Select(stickers.Select(item => item.Index)));
+        if (telegram) ButtonIn(Actions, "反选", InvertSelection);
         ButtonIn(Actions, "清空选择", () => Select([]));
         if (!telegram)
         {
@@ -134,10 +166,21 @@ public partial class ExternalStickerPage : UserControl
         UpdateSelection();
     }
 
-    private TextBox TextField(string label)
+    private string? SelectOutputFolder(bool forcePicker = false)
+    {
+        if (busy || left || cleanup is not null) return null;
+        if (!forcePicker && Directory.Exists(outputFolder.Text)) return outputFolder.Text;
+        var folder = chooseFolder(telegram ? "选择下载文件夹" : "选择导出文件夹");
+        if (folder is null) return null;
+        outputFolder.Text = folder;
+        folders?.SaveOutput(folder);
+        return folder;
+    }
+
+    private TextBox TextField(string label, Panel? parent = null)
     {
         var field = new TextBox { Style = (Style)FindResource("FluentField"), Width = 225 };
-        Field(Options, label, field);
+        Field(parent ?? Options, label, field);
         return field;
     }
 
@@ -176,7 +219,17 @@ public partial class ExternalStickerPage : UserControl
             _ => Status.Text = $"已新建分类：{name}", reload: true, target: name);
     }
 
-    internal async Task Discover(string? folder)
+    internal async Task DiscoverInitial()
+    {
+        if (folders is { Source: { Length: > 0 } saved } && Directory.Exists(saved))
+        {
+            await Discover(saved, remember: false);
+            if (sources.Length != 0) return;
+        }
+        await Discover(null, remember: false);
+    }
+
+    internal async Task Discover(string? folder, bool remember = true)
     {
         if (telegram || busy || left || cleanup is not null) return;
         ClearResults();
@@ -188,6 +241,7 @@ public partial class ExternalStickerPage : UserControl
             directory = result.Destination;
             sources = result.Sources ?? [];
             SetQQOptions();
+            if (remember && sources.Length != 0 && directory is not null) folders?.SaveSource(directory);
             Status.Text = sources.Length > 0 ? directory : "未找到 QQ 缓存";
         });
     }
@@ -221,7 +275,8 @@ public partial class ExternalStickerPage : UserControl
     }
 
     private LibraryCommand Request(string action, ExternalSticker[]? items = null) => telegram
-        ? new($"tg_{action}", Value: packName, Items: items, BotToken: token!.Password, ApiProxy: apiProxy!.Text)
+        ? new($"tg_{action}", Value: packName, Items: items, BotToken: token!.Password,
+            ApiProxy: apiProxy!.Text, NetworkProxy: networkProxy!.Text)
         : new($"qq_{action}", Value: directory, Items: items, Account: account?.Value, Kind: kind?.Value ?? "");
 
     internal async Task Scan()
@@ -236,6 +291,22 @@ public partial class ExternalStickerPage : UserControl
         if (busy || left || !telegram) return;
         ClearResults();
         await Execute(Request("parse") with { Value = sourceLink!.Text }, "正在解析贴纸包…", LeavePolicy.CancelOnLeave, SetResults);
+    }
+
+    internal async Task TestConnection()
+    {
+        if (busy || left || !telegram) return;
+        await Execute(Request("test_connection"), "正在测试连通性…", LeavePolicy.CancelOnLeave,
+            _ => Status.Text = "Telegram 连接成功。");
+    }
+
+    private void ResetConnection()
+    {
+        if (busy || left || !telegram) return;
+        token!.Clear();
+        apiProxy!.Clear();
+        networkProxy!.Clear();
+        Status.Text = "已恢复默认网络设置。";
     }
 
     private void ClearResults()
@@ -272,6 +343,9 @@ public partial class ExternalStickerPage : UserControl
         UpdateSelection();
     }
 
+    internal void InvertSelection() => Select(stickers.Where(item => !selected.Contains(item.Index))
+        .Select(item => item.Index).ToArray());
+
     private void UpdateSelection()
     {
         Summary.Text = $"{(string.IsNullOrEmpty(packTitle) ? "" : packTitle + " · ")}共 {stickers.Length} 张，已选 {selected.Count} 张";
@@ -285,7 +359,7 @@ public partial class ExternalStickerPage : UserControl
         if (!telegram || left || busy || stickers.Length == 0 || packName is null || packUrl is null) return;
         if (packagePrompts is null || packagePrompts.AskId(packTitle ?? packName) is not { } input) return;
         var id = input.Trim();
-        if (id.Length is 0 or > 251 || id.EndsWith('.') || id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+        if (id.Length is 0 or > 251 || id.EndsWith(".", StringComparison.Ordinal) || id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
             id.ToLowerInvariant() is "全部表情" or "未分类" or "新建分类" or "全部" or "最近" or "all" ||
             Regex.IsMatch(id.Split('.')[0].TrimEnd(), @"\A(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)\z",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
@@ -317,7 +391,7 @@ public partial class ExternalStickerPage : UserControl
         var items = all ? stickers : stickers.Where(item => selected.Contains(item.Index)).ToArray();
         if (items.Length == 0) return;
         string? destination = null;
-        if (!import && (destination = chooseFolder(telegram ? "选择下载文件夹" : "选择导出文件夹")) is null) return;
+        if (!import && (destination = SelectOutputFolder()) is null) return;
         string? target = !import ? null : telegram ? $"TG_{packName}" : category?.Value;
         var command = telegram
             ? Request("download", items) with { Destination = destination, Kind = import ? "library" : "files",
@@ -373,16 +447,18 @@ public partial class ExternalStickerPage : UserControl
             if (result.Error is { } error)
                 Status.Text = string.Join("\n", new[] { error }.Concat(result.Warnings ?? []));
             else complete(result);
+            RecordLog(activity, (command.Action is "tg_parse" or "qq_scan") && result.Error is null);
         }
         catch (OperationCanceledException) when (operation.Token.IsCancellationRequested)
         {
             // A cancellable write can be cancelled before it acquires the command gate.
-            if (canCancel) complete(new(0, 0, 0, null, null, null, null, Cancelled: 1));
+            if (canCancel) { complete(new(0, 0, 0, null, null, null, null, Cancelled: 1)); RecordLog(activity); }
         }
         catch (Exception)
         {
             if (!left) Status.Text = command.Action == "create_category"
                 ? "新建分类失败，请检查名称是否已存在或不合法。" : "操作失败，请重试";
+            if (!left) RecordLog(activity);
         }
         finally
         {
@@ -391,6 +467,15 @@ public partial class ExternalStickerPage : UserControl
             Work.Dismiss();
             if (!left) _ = LoadVisible();
         }
+    }
+
+    private void RecordLog(string activity, bool includesResults = false)
+    {
+        string text = includesResults && Results.Visibility == Visibility.Visible ? Summary.Text : Status.Text;
+        foreach (var secret in new[] { token?.Password, apiProxy?.Text, networkProxy?.Text })
+            if (!string.IsNullOrWhiteSpace(secret)) text = text.Replace(secret!.Trim(), "***");
+        if (log.Count == 100) log.Dequeue();
+        log.Enqueue($"{DateTime.Now:HH:mm:ss} {activity}\n{text}");
     }
 
     internal void Leave()

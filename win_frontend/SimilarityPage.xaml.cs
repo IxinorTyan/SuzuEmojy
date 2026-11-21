@@ -21,7 +21,7 @@ public partial class SimilarityPage : UserControl
     private readonly Action<LibrarySnapshot> publishLibrary;
     private readonly FluentChoice scope, kind;
     private readonly DispatcherTimer rematch = new() { Interval = TimeSpan.FromMilliseconds(180) };
-    private readonly GifPlayback hoverPlayback = new(), inspectorPlayback = new();
+    private readonly GifPlayback hoverPlayback, inspectorPlayback;
     private readonly HashSet<string> selected = new(StringComparer.OrdinalIgnoreCase);
     private readonly OperationScope work = new();
     internal OperationScope PageWork => work;
@@ -45,6 +45,8 @@ public partial class SimilarityPage : UserControl
     internal SimilarityPage(LibrarySnapshot library, FluentMenuPalette menuPalette, LibraryCommands commands, Action<LibrarySnapshot> publishLibrary)
     {
         this.commands = commands;
+        hoverPlayback = new(commands);
+        inspectorPlayback = new(commands);
         this.publishLibrary = publishLibrary;
         stickers = ByPath(library);
         InitializeComponent();
@@ -190,7 +192,7 @@ public partial class SimilarityPage : UserControl
     private void MovePage(int step)
     {
         if (Busy || Confirming) return;
-        page = Math.Clamp(page + step, 0, PageCount - 1);
+        page = RuntimePrimitives.Clamp(page + step, 0, PageCount - 1);
         RenderPage();
     }
 
@@ -227,7 +229,7 @@ public partial class SimilarityPage : UserControl
     private async Task RemoveSelected()
     {
         if (Busy || !Confirming || selected.Count == 0) return;
-        var paths = selected.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var paths = selected.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
         using var operation = work.Begin(LeavePolicy.FinishBeforeLeaving);
         SetConfirmation(false);
         Progress.Value = 0;
@@ -269,7 +271,7 @@ public partial class SimilarityPage : UserControl
         .Where(item => stickers.ContainsKey(item.Path) && File.Exists(item.Path)).ToArray()).Where(group => group.Length > 1).ToArray());
 
     private static string DescribeError(Exception error) =>
-        error.Message.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? error.Message;
+        error.Message.Split(['\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? error.Message;
 
     private void FocusIfActive(Control target)
     {
@@ -340,7 +342,7 @@ public partial class SimilarityPage : UserControl
             Style = (Style)FindResource("FluentPushButton"), Padding = new Thickness(0), BorderThickness = new Thickness(0) };
         System.Windows.Automation.AutomationProperties.SetName(button, Path.GetFileName(item.Path));
         button.Click += (_, _) => OpenPicture(index);
-        button.MouseEnter += (_, _) => { if (image.Source is not null) PlayHover(image, item.Path); };
+        button.MouseEnter += (_, _) => PlayHover(image, item.Path);
         button.MouseLeave += (_, _) => { if (hovered == image) StopHover(); };
         stack.Children.Add(button);
         var text = new TextBlock { Text = Description(item), TextWrapping = TextWrapping.Wrap, FontSize = 11,
@@ -405,7 +407,7 @@ public partial class SimilarityPage : UserControl
     private void MovePicture(int step)
     {
         if (!Reviewing) return;
-        int next = Math.Clamp(pictureIndex + step, 0, entries.Length - 1);
+        int next = RuntimePrimitives.Clamp(pictureIndex + step, 0, entries.Length - 1);
         if (next != pictureIndex) _ = DisplayPicture(next);
     }
 
@@ -461,8 +463,9 @@ public partial class SimilarityPage : UserControl
 
     private void PlayLargePicture()
     {
-        if (Reviewing && LargePicture.Source is not null)
-            inspectorPlayback.Play(LargePicture, entries[pictureIndex].Image.Path, PreviewPixels(680));
+        if (Reviewing)
+            inspectorPlayback.Play(LargePicture, entries[pictureIndex].Image.Path, PreviewPixels(680),
+                () => MissingLarge.Visibility = Visibility.Collapsed);
     }
 
     private void PlayHover(Image picture, string path)

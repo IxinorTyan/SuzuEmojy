@@ -8,7 +8,9 @@ using System.Windows.Input;
 namespace SuzuEmojy.Windows.Controls;
 
 internal sealed record PageRoute(string Title, FrameworkElement View, Action? Suspend = null, Action? Resume = null,
-    Action? Leave = null, Func<bool>? HandleBack = null, OperationScope? Work = null);
+    Action? Leave = null, Func<bool>? HandleBack = null, OperationScope? Work = null, PageTool? Tool = null);
+
+internal sealed record PageTool(string Label, string Glyph, Action Invoke);
 
 // Owns the page stack; a suspended view keeps its state until it is either resumed or removed.
 public partial class FluentPageHost : UserControl
@@ -16,13 +18,18 @@ public partial class FluentPageHost : UserControl
     private sealed record Entry(PageRoute Route, string Caption, string BackLabel);
     private readonly List<Entry> stack = [];
     private Button? rootOpener;
-    internal FrameworkElement? Page => stack.Count == 0 ? null : stack[^1].Route.View;
+    private readonly PageMotion transitions;
+    internal FrameworkElement? Page => stack.Count == 0 ? null : stack[stack.Count - 1].Route.View;
     internal bool HasBlockingOperation => stack.Any(entry => entry.Route.Work?.BlocksLeave == true);
     internal event Action? RootClosed;
+    internal event Action? RootClosing;
 
     public FluentPageHost()
     {
         InitializeComponent();
+        transitions = new(this, PreviousBody);
+        FluentMotion.Observe(this, transitions.Reset);
+        Unloaded += (_, _) => transitions.Reset();
         Back.Click += (_, _) => RequestBack();
         PreviewKeyDown += (_, e) =>
         {
@@ -43,7 +50,7 @@ public partial class FluentPageHost : UserControl
         }
         else
         {
-            var parent = stack[^1].Route;
+            var parent = stack[stack.Count - 1].Route;
             parent.Suspend?.Invoke();
             back = "返回" + parent.Title;
         }
@@ -57,8 +64,8 @@ public partial class FluentPageHost : UserControl
     internal void SetCaption(string title, string backLabel)
     {
         if (stack.Count == 0) return;
-        stack[^1] = stack[^1] with { Caption = title, BackLabel = backLabel };
-        ApplyCaption(stack[^1]);
+        stack[stack.Count - 1] = stack[stack.Count - 1] with { Caption = title, BackLabel = backLabel };
+        ApplyCaption(stack[stack.Count - 1]);
     }
 
     private void ApplyCaption(Entry entry)
@@ -72,6 +79,7 @@ public partial class FluentPageHost : UserControl
     {
         if (stack.Count == 0) return true;
         if (HasBlockingOperation) return false;
+        RootClosing?.Invoke();
         while (stack.Count != 0) PopCurrent();
         PresentCurrent();
         return true;
@@ -80,9 +88,9 @@ public partial class FluentPageHost : UserControl
     internal void ReplaceCurrent(FrameworkElement expected, PageRoute replacement)
     {
         if (Page != expected) return;
-        var current = stack[^1];
-        stack[^1] = current with { Route = replacement, Caption = replacement.Title };
-        PresentCurrent();
+        var current = stack[stack.Count - 1];
+        stack[stack.Count - 1] = current with { Route = replacement, Caption = replacement.Title };
+        PresentCurrent(animate: false);
         replacement.Resume?.Invoke();
         FocusBack();
     }
@@ -90,43 +98,58 @@ public partial class FluentPageHost : UserControl
     internal void RequestBack()
     {
         if (stack.Count == 0) return;
-        var route = stack[^1].Route;
+        var route = stack[stack.Count - 1].Route;
         if (route.HandleBack?.Invoke() == true) return;
         if (route.Work?.BlocksLeave == true)
         {
             if (route.Work.WaitsForCancellation) route.Work.RequestCancel();
             return;
         }
+        if (stack.Count == 1) RootClosing?.Invoke();
         PopCurrent();
         PresentCurrent();
         if (stack.Count == 0) return;
-        stack[^1].Route.Resume?.Invoke();
+        stack[stack.Count - 1].Route.Resume?.Invoke();
         FocusBack();
     }
 
     private void PopCurrent()
     {
-        var route = stack[^1].Route;
+        var route = stack[stack.Count - 1].Route;
         stack.RemoveAt(stack.Count - 1);
         route.Work?.RequestCancel();
         route.Leave?.Invoke();
     }
 
-    private void PresentCurrent()
+    private void PresentCurrent(bool animate = true)
     {
+        var previous = animate && PageBody.Content is not null && Page is not null ? transitions.Capture(RouteSurface) : null;
         PageBody.Content = Page;
+        PageTools.Content = stack.LastOrDefault()?.Route.Tool is { } tool ? CreateTool(tool) : null;
         Visibility = stack.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (stack.Count > 0)
         {
-            ApplyCaption(stack[^1]);
+            ApplyCaption(stack[stack.Count - 1]);
+            transitions.Swap(previous, RouteSurface);
         }
         else
         {
+            transitions.Reset();
             var opener = rootOpener;
             rootOpener = null;
             RootClosed?.Invoke();
             if (Window.GetWindow(this)?.IsActive == true && opener is { IsVisible: true }) opener.Focus();
         }
+    }
+
+    private Button CreateTool(PageTool tool)
+    {
+        var button = new Button { Width = 36, Height = 36, ToolTip = tool.Label,
+            Style = (Style)FindResource("ToolButton") };
+        button.Content = FluentGlyph.Create(tool.Glyph, 16, button);
+        System.Windows.Automation.AutomationProperties.SetName(button, tool.Label);
+        button.Click += (_, _) => tool.Invoke();
+        return button;
     }
 
     private void FocusBack()

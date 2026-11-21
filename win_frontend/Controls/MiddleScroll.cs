@@ -67,7 +67,7 @@ internal sealed class MiddleScroll : IDisposable
         var delta = gesture.Drag(e.GetPosition(scroll));
         if (delta != 0)
         {
-            dragTarget = Math.Clamp(dragTarget + delta, 0, scroll.ScrollableHeight);
+            dragTarget = RuntimePrimitives.Clamp(dragTarget + delta, 0, scroll.ScrollableHeight);
             scroll.ScrollToVerticalOffset(dragTarget);
         }
         e.Handled = true;
@@ -114,11 +114,11 @@ internal sealed class MiddleScroll : IDisposable
     private void Tick(object? sender, EventArgs e)
     {
         long now = Stopwatch.GetTimestamp();
-        var delta = gesture.Advance(Mouse.GetPosition(scroll), Stopwatch.GetElapsedTime(lastTick, now).TotalSeconds);
+        var delta = gesture.Advance(Mouse.GetPosition(scroll), (now - lastTick) / (double)Stopwatch.Frequency);
         lastTick = now;
         if (delta != 0)
         {
-            var target = Math.Clamp(scroll.VerticalOffset + delta, 0, scroll.ScrollableHeight);
+            var target = RuntimePrimitives.Clamp(scroll.VerticalOffset + delta, 0, scroll.ScrollableHeight);
             if (target != scroll.VerticalOffset) scroll.ScrollToVerticalOffset(target);
         }
     }

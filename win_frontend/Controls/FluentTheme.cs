@@ -5,6 +5,10 @@ namespace SuzuEmojy.Windows.Controls;
 
 internal static class FluentTheme
 {
+    private static readonly FontFamily DefaultFont = new("Segoe UI, Microsoft YaHei");
+    internal static FontFamily InterfaceFont(LibrarySnapshot library) =>
+        library.Flag("use_system_font", false) ? SystemFonts.MessageFontFamily : DefaultFont;
+
     internal static void Apply(Window window, LibrarySnapshot library)
     {
         var resources = window.Resources;
@@ -19,7 +23,7 @@ internal static class FluentTheme
         resources["CardEdge"] = Brush(dark ? "#26FFFFFF" : "#1F000000");
         resources["ScrollThumb"] = Brush(dark ? "#99FFFFFF" : "#80000000");
         resources["CategorySurface"] = Brush(dark ? "#330078D4" : "#1A0078D4");
-        resources["CategoryOutline"] = Brush(dark ? "#60FFFFFF" : "#55000000");
+        resources["CategorySelectedSurface"] = Brush(dark ? "#23FFFFFF" : "#19000000");
         resources["SearchSurface"] = Brush(dark ? "#13FFFFFF" : "#B3FFFFFF");
         resources["SearchUnderline"] = Brush(dark ? "#50FFFFFF" : "#66000000");
         resources["SettingCardSurface"] = Brush(dark ? "#0DFFFFFF" : "#99FFFFFF");
@@ -42,6 +46,8 @@ internal static class FluentTheme
         resources["SelectionSurface"] = new SolidColorBrush(Color.FromArgb(dark ? (byte)71 : (byte)31,
             accent.R, accent.G, accent.B));
         window.Foreground = (Brush)resources["Ink"];
+        window.FontFamily = InterfaceFont(library);
+        window.SetValue(FluentMotion.DisabledProperty, library.Flag("disable_animations", false));
     }
 
     internal static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));

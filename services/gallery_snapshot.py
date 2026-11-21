@@ -13,13 +13,13 @@ from services.exchange_icons import IMAGE_SUFFIXES, resolve_icon_path
 from services.window_wallpaper import snapshot_wallpaper
 
 
-GALLERY_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".webm", ".tgs"})
+GALLERY_SUFFIXES = frozenset({".png", ".apng", ".jpg", ".jpeg", ".gif", ".webp", ".webm", ".tgs"})
 RESERVED_CATEGORIES = {"全部表情", "未分类", "新建分类"}
 
 
 def _json(path, kind):
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return kind()
     return value if isinstance(value, kind) else kind()
@@ -108,7 +108,7 @@ def snapshot(data_dir):
         "images": [
             {"path": str(p), "name": p.name, "keywords": keywords.get(os.path.normcase(p.name), ""),
              "categories": by_image.get(os.path.normcase(p.name), []),
-             "animated": p.suffix.lower() in (".gif", ".webp")}
+             "animated": p.suffix.lower() in (".gif", ".apng", ".webp")}
             for p in paths
         ],
     }

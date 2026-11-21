@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using SuzuEmojy.Windows.Controls;
 
 namespace SuzuEmojy.Windows;
@@ -17,27 +18,53 @@ public partial class ExternalStickerPage
     private const int ThumbnailBatch = 6, ThumbnailCache = 96;
     private readonly VirtualMasonry<ExternalSticker> masonry;
     private readonly GifPlayback playback = new();
+    private readonly DispatcherTimer hoverIntent = new() { Interval = TimeSpan.FromMilliseconds(300) };
+    private MotionReveal detailReveal = null!;
     private readonly Dictionary<string, BitmapSource?> cached = new();
     private readonly Queue<string> decoded = new();
     private IReadOnlyList<ExternalSticker> viewport = [];
-    private ExternalSticker? inspected, queuedDetail;
+    private ExternalSticker? inspected, queuedDetail, pinned, hovering;
+    private FrameworkElement? hoverTile;
+    private CancellationTokenSource? readingDetail;
     private int sourceVersion, detailVersion;
     private int? selectionAnchor;
     private bool loadingThumbs, loadingDetail, compact, mediaSuspended;
     private bool inspectorInitialized;
+
+    private void SetupMediaMotion()
+    {
+        detailReveal = new(this, InspectorBody);
+        InspectorEmpty.Text = telegram ? "未选中贴纸" : "未选中表情";
+        FluentMotion.Observe(this, detailReveal.Snap);
+        hoverIntent.Tick += (_, _) =>
+        {
+            hoverIntent.Stop();
+            if (hoverTile is { IsMouseOver: true, IsVisible: true } && !busy && !left && !mediaSuspended) Inspect(hovering);
+        };
+    }
 
     private StickerResultTile MakeTile(ExternalSticker item)
     {
         var tile = new StickerResultTile(item, selected.Contains(item.Index));
         if (cached.TryGetValue(item.Id, out var still)) tile.Picture.Source = still;
         tile.Opened += modifiers => Activate(item, modifiers);
+        tile.MouseEnter += (_, _) =>
+        {
+            if (!tile.IsLoaded || busy || left || mediaSuspended) return;
+            hovering = item;
+            hoverTile = tile;
+            hoverIntent.Stop();
+            hoverIntent.Start();
+        };
+        tile.MouseLeave += (_, _) => EndHover(tile);
+        tile.Unloaded += (_, _) => EndHover(tile);
         tile.Toggled += chosen =>
         {
             if (chosen) selected.Add(item.Index);
             else selected.Remove(item.Index);
             selectionAnchor = item.Index;
             UpdateSelection();
-            Inspect(item);
+            Pin(item);
         };
         return tile;
     }
@@ -57,7 +84,23 @@ public partial class ExternalStickerPage
             selectionAnchor = item.Index;
         }
         UpdateSelection();
-        Inspect(item);
+        Pin(item);
+    }
+
+    private void Pin(ExternalSticker item)
+    {
+        hoverIntent.Stop();
+        pinned = selected.Contains(item.Index) ? item : null;
+        Inspect(pinned ?? hovering);
+    }
+
+    private void EndHover(FrameworkElement tile)
+    {
+        if (!ReferenceEquals(hoverTile, tile)) return;
+        hoverIntent.Stop();
+        hoverTile = null;
+        hovering = null;
+        if (!left && !mediaSuspended) Inspect(pinned);
     }
 
     private void RequestVisible(IReadOnlyList<ExternalSticker> items)
@@ -69,7 +112,15 @@ public partial class ExternalStickerPage
     internal void SuspendMedia(bool suspend)
     {
         mediaSuspended = suspend;
-        if (suspend) playback.Stop();
+        if (suspend)
+        {
+            readingDetail?.Cancel();
+            hoverIntent.Stop();
+            hoverTile = null;
+            hovering = null;
+            Inspect(pinned);
+            playback.Stop();
+        }
         else
         {
             _ = LoadVisible();
@@ -78,6 +129,7 @@ public partial class ExternalStickerPage
                 inspected = null;
                 Inspect(item);
             }
+            else _ = LoadDetail();
         }
     }
 
@@ -98,7 +150,8 @@ public partial class ExternalStickerPage
                 if (left || version != sourceVersion) continue;
                 foreach (var item in batch)
                 {
-                    var still = Decode(results.FirstOrDefault(row => row.Id == item.Id)?.Data);
+                    var media = results.FirstOrDefault(row => row.Id == item.Id);
+                    var still = media?.Still ?? Decode(media?.Data);
                     cached[item.Id] = still;
                     decoded.Enqueue(item.Id);
                     foreach (var tile in masonry.Realized.Values.OfType<StickerResultTile>().Where(tile => tile.Item.Id == item.Id))
@@ -117,15 +170,26 @@ public partial class ExternalStickerPage
         finally { loadingThumbs = false; }
     }
 
-    private void Inspect(ExternalSticker item)
+    private void Inspect(ExternalSticker? item)
     {
-        if (inspected?.Index == item.Index) return;
+        if (inspected?.Index == item?.Index) return;
         inspected = queuedDetail = item;
         detailVersion++;
-        playback.Stop();
+        readingDetail?.Cancel();
+        playback.Stop(restoreStill: false);
+        if (item is null)
+        {
+            detailReveal.Hide(ClearInspection);
+            return;
+        }
         DetailImage.Source = cached.GetValueOrDefault(item.Id);
         PreviewInfo.Text = Describe(item, "正在加载预览…");
         UpdateInspectorLayout(ActualWidth);
+        detailReveal.Show(() =>
+        {
+            InspectorEmpty.Visibility = Visibility.Hidden;
+            InspectorBody.Visibility = Visibility.Visible;
+        });
         _ = LoadDetail();
     }
 
@@ -139,11 +203,17 @@ public partial class ExternalStickerPage
             {
                 queuedDetail = null;
                 int version = detailVersion;
-                var media = (await ReadMedia(Request("detail", [item]))).FirstOrDefault(result => result.Id == item.Id);
+                using var request = new CancellationTokenSource();
+                readingDetail = request;
+                var media = (await ReadMedia(Request("detail", [item]), request.Token)).FirstOrDefault(result => result.Id == item.Id);
+                readingDetail = null;
                 if (left || version != detailVersion) continue;
-                var still = Decode(media?.Data);
+                if (mediaSuspended) { queuedDetail = item; break; }
+                var still = media?.Still ?? Decode(media?.Data);
                 if (still is not null) DetailImage.Source = still;
-                if (!mediaSuspended && media?.Animation is { } animation)
+                if (!mediaSuspended && media?.Native is { } frames)
+                    playback.Play(DetailImage, frames);
+                else if (!mediaSuspended && media?.Animation is { } animation)
                 {
                     try { playback.Play(DetailImage, Convert.FromBase64String(animation), 380); }
                     catch (FormatException) { }
@@ -154,10 +224,9 @@ public partial class ExternalStickerPage
         finally { loadingDetail = false; }
     }
 
-    private async Task<ExternalPreview[]> ReadMedia(LibraryCommand command)
+    private async Task<ExternalPreview[]> ReadMedia(LibraryCommand command, CancellationToken token = default)
     {
-        // Supersede stale results without killing a converter mid-cleanup.
-        try { return (await run(command, false, CancellationToken.None, null)).Result.Previews ?? []; }
+        try { return (await run(command, false, token, null)).Result.Previews ?? []; }
         catch (Exception) { return []; }
     }
 
@@ -197,21 +266,32 @@ public partial class ExternalStickerPage
             Inspector.Height = narrow ? 112 : double.NaN;
             Inspector.Margin = narrow ? new Thickness(0, 0, 0, 10) : new Thickness(12, 0, 0, 0);
         }
-        Inspector.Visibility = narrow && inspected is null ? Visibility.Collapsed : Visibility.Visible;
+        // Keep the inspector slot stable: its appearance must not push the
+        // hovered tile out from under the pointer and immediately close it.
     }
 
     private void ResetMedia()
     {
         sourceVersion++;
         detailVersion++;
+        readingDetail?.Cancel();
         selectionAnchor = null;
-        inspected = queuedDetail = null;
+        inspected = queuedDetail = pinned = hovering = null;
+        hoverTile = null;
+        hoverIntent.Stop();
         viewport = [];
         cached.Clear();
         decoded.Clear();
         playback.Stop();
-        DetailImage.Source = null;
-        PreviewInfo.Text = telegram ? "未选中贴纸" : "未选中表情";
+        detailReveal.Hide(ClearInspection, immediate: true);
         UpdateInspectorLayout(ActualWidth);
+    }
+
+    private void ClearInspection()
+    {
+        DetailImage.Source = null;
+        PreviewInfo.Text = "";
+        InspectorBody.Visibility = Visibility.Hidden;
+        InspectorEmpty.Visibility = Visibility.Visible;
     }
 }

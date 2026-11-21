@@ -45,7 +45,7 @@ public partial class MainWindow : Window
         this.offscreen = offscreen;
         imports = new(RunImport, UpdateImportQueueCount);
         InitializeComponent();
-        Pages.RootClosed += () => GalleryPage.Visibility = Visibility.Visible;
+        SetupPageTransitions();
         layoutSave.Tick += (_, _) => FlushLayoutSettings();
         FluentTheme.Apply(this, library);
         Wallpaper.ImageVisibilityChanged += UpdateWallpaperSettings;
@@ -53,7 +53,7 @@ public partial class MainWindow : Window
         Topmost = library.Flag("always_on_top", true);
         gridCategories = library.Flag("sidebar_is_grid_mode", false);
         SetSidebarWidth();
-        GalleryPage.SizeChanged += (_, e) => SidebarWidth.MaxWidth = Math.Clamp(e.NewSize.Width - 104, 60, 400);
+        GalleryPage.SizeChanged += (_, e) => SidebarWidth.MaxWidth = RuntimePrimitives.Clamp(e.NewSize.Width - 104, 60, 400);
         LayoutUpdated += SidebarResized;
         SidebarScroll.PreviewMouseWheel += (_, e) =>
             e.Handled = ApplySidebarWheel(e.Delta, Keyboard.Modifiers, e.GetPosition(SidebarScroll));
@@ -96,12 +96,13 @@ public partial class MainWindow : Window
         Search.KeyDown += (_, e) => {
             if (e.Key == Key.Enter) { searchTimer.Stop(); FilterGallery(); e.Handled = true; }
         };
-        preview = new PreviewPopup(this, library);
+        preview = new PreviewPopup(this, library, commands);
         middleScroll = new MiddleScroll(this, GalleryScroll, preview.Hide);
+        Caption.MouseEnter += (_, _) => middleScroll.Stop();
         gallery = new VirtualGallery(GalleryScroll, Cards, library.Number("thumbnail_size", 120, 40, 300), GalleryLayout.Main,
             ActivateSticker, (item, card) =>
             {
-                if (!middleScroll.Active && !selecting && !LibraryBusy) preview.Schedule(item, card);
+                if (!middleScroll.Active && !selecting) preview.Schedule(item, card);
             }, preview.Hide, offscreen, GalleryMotion);
         gallery.SizeChanged += preview.Hide;
         gallery.ZoomChanged += size => SetLayoutSetting("thumbnail_size", size);
@@ -121,6 +122,7 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             Pages.TryClose();
+            pageTransition.Reset();
             searchTimer.Stop();
             layoutSave.Stop();
             GalleryNotice.Dismiss();
@@ -207,7 +209,7 @@ public partial class MainWindow : Window
 
     private void SaveSidebarWidth()
     {
-        int width = Math.Clamp((int)Math.Round(SidebarWidth.ActualWidth), 60, 400);
+        int width = RuntimePrimitives.Clamp((int)Math.Round(SidebarWidth.ActualWidth), 60, 400);
         if (!gridCategories && width < 140)
         {
             width = width < 100 ? 60 : 140;
@@ -264,6 +266,7 @@ public partial class MainWindow : Window
                 IsEnabled = category.Name != "新建分类" || commands is not null
             };
             System.Windows.Automation.AutomationProperties.SetName(button, category.Name);
+            ToolTipService.SetIsEnabled(button, iconsOnly && library.Flag("show_sidebar_tooltip", true));
             // Align rows to the left without interfering with the button hit region.
             var row = new StackPanel { Orientation = Orientation.Horizontal,
                 HorizontalAlignment = iconsOnly ? HorizontalAlignment.Center : HorizontalAlignment.Left };
@@ -300,6 +303,12 @@ public partial class MainWindow : Window
         MarkCategory();
     }
 
+    private void RefreshCategoryToolTips()
+    {
+        bool enabled = iconsOnly && library.Flag("show_sidebar_tooltip", true);
+        foreach (var (button, _) in categoryButtons) ToolTipService.SetIsEnabled(button, enabled);
+    }
+
     private void MarkCategory()
     {
         foreach (var (button, category) in categoryButtons)
@@ -329,8 +338,8 @@ public partial class MainWindow : Window
         }
         gallery.SetItems(library.Images.Where(item =>
             (current is null || item.Categories.Contains(current.Name)) &&
-            (query.Length == 0 || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-             item.Keywords.Contains(query, StringComparison.OrdinalIgnoreCase)) &&
+            (query.Length == 0 || item.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+             item.Keywords.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) &&
             (!noTags || string.IsNullOrWhiteSpace(item.Keywords)) &&
             (!unclassified || item.Categories.Length == 0) &&
             (animated == still || item.Animated == animated)).ToArray(), categoryChange, preserveScroll);

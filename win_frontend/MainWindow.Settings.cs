@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using SuzuEmojy.Windows.Controls;
+using SuzuEmojy.Windows.Desktop;
 
 namespace SuzuEmojy.Windows;
 
@@ -15,6 +16,7 @@ public partial class MainWindow
     private Task settingsSave = Task.CompletedTask;
     private string? mainHotkeyError, quickHotkeyError;
     private SettingsPage? settingsPage;
+    internal LoginStartup? StartupRegistration { get; set; }
     internal bool OnSettingsPage => Pages.Page is SettingsPage;
     internal bool RecordingHotkey => OnSettingsPage && settingsPage?.IsRecordingHotkey == true;
     internal event Action<bool>? HotkeyRecordingChanged;
@@ -69,7 +71,7 @@ public partial class MainWindow
 
     private SettingsPage CreateSettingsPage()
     {
-        var page = new SettingsPage(library, MenuPalette);
+        var page = new SettingsPage(library, MenuPalette, StartupRegistration);
         page.SetWallpaperState(library.Wallpaper is not null, Wallpaper.HasImage);
         page.SetHotkeyStatus(mainHotkeyError, quickHotkeyError);
         page.HotkeyRecordingChanged += recording => HotkeyRecordingChanged?.Invoke(recording);
@@ -92,7 +94,45 @@ public partial class MainWindow
             ApplyWallpaperTone();
         };
         page.ShortcutConflict += () => { if (!offscreen) FluentDialog.ShowMessage(this, library, "快捷键冲突", "两个快捷键不能相同"); };
+        page.StartupError += message => ReportIssue("开机自启动", message, MessageBoxImage.Error, inline: false);
+        page.MaintenanceRequested += progress => { if (!offscreen) _ = MaintainLibrary(progress); };
+        page.AboutRequested += () =>
+        {
+            if (commands is null) return;
+            var about = new AboutPage(commands.Updates);
+            OpenPage(new("关于软件", about, Leave: about.Cancel, Work: about.PageWork));
+        };
         return page;
+    }
+
+    private async Task MaintainLibrary(OperationProgress progress)
+    {
+        const string title = "旧图库维护";
+        if (LibraryBusy || commands is null || !FluentDialog.Confirm(this, library, title,
+                "备份索引和原始数据记录后，迁移旧数据、清理失效记录，并重建索引。不会删除图片。继续吗？")) return;
+        FlushSettings();
+        while (savingSettings) await settingsSave;
+        if (!OnSettingsPage || LibraryBusy) return;
+        using var operation = galleryWork.Begin(LeavePolicy.FinishBeforeLeaving);
+        progress.Begin(title, "正在备份…");
+        try
+        {
+            var response = await commands.Run(new("maintain_library"), reload: true, progress: operation.Progress(update =>
+                progress.Report(update with { Detail = update.Detail ?? (update.Phase switch
+                {
+                    "migration" => "正在迁移旧数据…", "cleanup" => "正在清理失效记录…",
+                    "index" or "scan" => $"正在补全索引：{update.Current} / {update.Total}", _ => null,
+                }) })));
+            operation.StopReporting();
+            if (response.Snapshot is { } snapshot) AcceptSnapshot(snapshot, null, updateSettings: false);
+            var result = response.Result;
+            var message = result.Error ?? (result.Failed == 0 ? "维护完成。" : $"维护已完成，有 {result.Failed} 张图片未能编入索引。");
+            if (result.Destination is { } backup) message += "\n备份位置：" + backup;
+            FluentDialog.ShowMessage(this, library, title, message,
+                result.Error is null ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        catch (Exception error) { ReportIssue(title, error.Message.Trim(), MessageBoxImage.Error, inline: false); }
+        finally { progress.Dismiss(); }
     }
 
     internal async Task<bool> ChangeWallpaper(string? path)
@@ -136,11 +176,10 @@ public partial class MainWindow
         {
             while (preferences.TakeWrite() is { } values)
             {
-                var response = await writer.Run(new("settings", Settings: values), reload: true);
-                var snapshot = response.Snapshot ?? throw new InvalidOperationException(response.Result.Error ?? "无法读取已保存的设置。");
+                var persisted = await writer.SaveSettings(values);
                 // A reply to an earlier wheel step must not undo a newer on-screen size.
                 preferences.Acknowledge(values);
-                AcceptSnapshot(snapshot, null, updateSettings: true);
+                AcceptSnapshot(preferences.Saved with { Settings = persisted }, null, updateSettings: true);
             }
         }
         catch (Exception error)

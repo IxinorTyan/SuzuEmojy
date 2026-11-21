@@ -47,7 +47,7 @@ public partial class OperationProgress : UserControl
         if (!Bar.IsIndeterminate)
         {
             Bar.Maximum = update.Total;
-            Bar.Value = Math.Clamp(update.Current, 0, update.Total);
+            Bar.Value = RuntimePrimitives.Clamp(update.Current, 0, update.Total);
         }
         Detail.Text = update.Detail ?? (update.Phase == "import" ? $"正在处理: {update.Current} / {update.Total}" : Detail.Text);
     }

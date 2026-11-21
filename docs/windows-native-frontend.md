@@ -1,17 +1,17 @@
 # Windows 原生前端预览
 
-这是 Windows 2.0 的独立 WPF 预览入口，不替换现有的 Qt 版。`main.py` 和现有发布流程保持原样。SQLite 和 JSON 沿用原格式。WPF 按需启动短命的 Python 子进程来读写图库，不加载 Qt，也不启动常驻 Python 服务。原有配色表由两套前端共用。
+这是 Windows 2.0 的独立 WPF 预览入口。SQLite 和 JSON 沿用原格式；图库、清洗、媒体、QQ／TG 和更新检查由 C# 与原生组件完成。应用和本地封包工具都不使用 Python 或 Qt；1.x 源码保留作历史对照。
 
 ## 试用
 
-需要 .NET 8 Desktop Runtime、Python、Pillow 和可用的 Python 源码目录。TG 下载需要 `requests`；WebM 和 TGS 转换也需要对应的旧版转换依赖。在仓库根目录运行：
+完整试用请优先使用 [解压即用的本地封包](windows-packaging.md)，它已带齐原生编解码器。仅调试界面时，可在仓库根目录构建：
 
 ```powershell
-dotnet build win_frontend/SuzuEmojy.Windows.csproj -c Release -o dist/win-frontend-category-submenu-preview
+dotnet build win_frontend/SuzuEmojy.Windows.csproj -c Release -p:UseSystemWindowsRuntime=true -o dist/win-frontend-category-submenu-preview
 .\dist\win-frontend-category-submenu-preview\SuzuEmojy.Windows.exe
 ```
 
-默认使用仓库的 `data` 目录。第一次试用建议传 `--data <图库副本目录>`。如果 Python 不在 PATH，可以给试用进程设置 `SUZU_PYTHON` 指定 Python 路径。**本版支持写入和删除，请勿让 Qt 与 WPF 同时写同一图库。** 单帧 GIF 缓存在对应数据目录的 `cache/gif_output`。
+源码构建默认使用仓库的 `data` 目录。第一次试用建议传 `--data <图库副本目录>`。**请勿让 1.x 与 2.0 同时写同一图库。** 单帧 GIF 缓存在对应数据目录的 `cache/gif_output`。
 
 已迁：
 
@@ -66,15 +66,23 @@ QQ 扫描结果的「导入到」旁可以新建并选中图库分类，不改�
 
 在支持粘贴图片的输入框里按快捷键，再点选表情。两个面板共用发送路径：剪贴板同时提供文件路径和可解码时的位图兜底。开启 `convert_static_to_gif` 时，静态图按旧设置转换为单帧 GIF；GIF、APNG、动态 WebP 保留原文件。面板显示前记录原来的前台窗口和可识别的原生输入控件。选图后短暂等待原窗口恢复焦点，最多自动粘贴一次；若窗口身份、输入控件或剪贴板变化，或者修饰键未及时释放，则不发送按键。普通打开和从托盘打开只复制。
 
-开机启动的系统注册、内置更新和正式发布包尚未迁移。位图兜底取决于本机编解码器；APNG 手动或自动导入会转为可预览的 GIF，但直接存在图库内的原格式 APNG／动态 WebP 尚无完整的动画预览。
+设置中的「开机自启动」注册当前 Windows 用户登录项，保留显式指定的 `--data`。移动程序后重新启用；单独传入 `--autostart` 不会写注册表。
 
-需要在源码目录外试用时，用 [Windows 2.0 本地封包工具](windows-packaging.md) 生成携带 Python 和精简 FFmpeg 的 ZIP；它不是 1.x 更新包，也不上传发布。
+主面板、快捷面板及相似图检查器可以预览原格式 APNG（包括 `.png`）和动态 WebP。预览用内置解码器合成原帧，保留透明度、帧延时和循环次数，不修改源文件。超出预览资源预算的文件不解码动画；手动或自动导入的 APNG 仍按原流程转为 GIF。剪贴板位图兜底仍取决于本机编解码器。
+
+第一次打开旧图库会在后台备份已有数据库与 JSON（`maintenance-backups/`），再迁移旧索引、清理失效引用并建立相似图缓存。完成后写入图库内的版本回执，后续启动不再重复迁移或备份。不重编码或删除旧图片，也不覆盖旧 MD5、dHash 和 pHash。日常只按文件大小和修改时间增量补齐兼容的 `sync_key`；设置中的「旧图库维护」仍可手动执行。
+
+设置 → 关于软件支持手动检查和下载经过 SHA-256 校验的 Windows 2.x 稳定包，不在启动时联网。下载后解压到新目录，复制旧图库或通过 `--data` 指向图库副本。目前不使用 1.x 更新器就地覆盖，也不将预览包当作更新包。
+
+本地预览 ZIP 不是 1.x 更新包，封包工具不会上传发布。
 
 ## 交互迁移验收
 
 以现有 Qt 前端为交互基准。除用户明确要求的改动（例如主图库固定从左上角排列）外，更换技术栈不改变操作方式。每条路径按旧版核对入口和快捷键、成功／重复／失败反馈、是否阻断操作，以及焦点、滚动和返回行为。入口能用不等于交互已经迁完。
 
 未迁入口及同功能仍存在的交互差异，见 [旧版功能迁移核对](windows-migration-audit.md)。例如主面板普通打开后，WPF 不会向此前记录的窗口自动粘贴。
+
+手机端的 ZIP v1 协议不变。`ResourceIdentityV1` 保留静态 PNG 的 RGBA 像素键和 GIF 文件键，`LibrarySimilarity` 复用 `similarity-v1` 缓存。测试程序的 `--identity-fixtures <Android app/src/androidTest/assets/hashtest>` 对照 Android 固定基准；样本通过不代表验证了所有编解码输入。旧版程序更新器不参与图库维护。
 
 ## 结构
 
@@ -87,12 +95,12 @@ QQ 扫描结果的「导入到」旁可以新建并选中图库分类，不改�
 - 页面任务通过 `OperationScope` 声明离页策略：只读扫描用 `CancelOnLeave`，不可中断的写入用 `FinishBeforeLeaving`，可安全收尾的 QQ 导出和 TG 批量写入用 `CancelAndWait`。宿主管理返回时的取消／阻拦和整栈退出预检；任务租约过滤取消或结束后的迟到进度，`OperationProgress` 负责显示和发出取消请求。
 - `PreferenceState` 分开维护本地预览、待写设置和已保存快照。较早的保存回复不覆盖更新的滚轮预览，失败时恢复已保存值。快捷面板尺寸和主题原地更新，不因设置保存丢掉搜索；自身的缩略图尺寸读取有效值，其他设置仍读取已保存的快照。
 - 新建分类、重命名、分类选择和确认窗口共用 `FluentDialog`，与页面共享 `FluentFields`；导入导出动作卡片与设置页共用 `SettingCard`。两者不依赖 Qt 界面，分类写入仍走 `LibraryCommands`。
-- QQ 和 TG 共用 `VirtualMasonry` 瀑布流、详细预览和选择，通过 `services/external_stickers.py` 调用旧扫描器／下载器。卡片按视口创建和回收；缩略图、详细预览和导入各走独立通道。WPF 的 TG 单包和批量打包共用原文件下载、清洗入库和 ZIP 组装，只区分分类命名与文件发布规则。Qt 批量也共用 `services/tg_batch_export.py`，两套前端的资源包由 `services/tg_package_zip.py` 统一装配。
+- QQ 和 TG 共用 `VirtualMasonry` 瀑布流、详细预览和选择；扫描和下载分别由 `QqCacheScanner` 和 `TelegramStickerClient` 完成。TG 单包和批量打包共用原文件下载、清洗入库和 v1 ZIP 组装。
 - `StickerPreview` 统一主面板和快速面板的圆角悬停预览，使用随浅深主题变化的淡细描边。只要主面板仍在鼠标下可见，即使它不在前台也能悬停预览，不夺取焦点；快捷窗口的失焦收起行为不变。`InlineNotice` 提供不抢焦点、自动消失的图库内提示。
 - `Desktop/DesktopSession.cs` 组装托盘、快捷键和点击复制。全局快捷键由单独的不可见消息窗口接收，不依赖主面板是否显示。`PanelWake` 保管当次快捷唤出的目标，`AutoPaste` 验证目标后才交给 Win32 输入层。
-- 两个面板共用 `FluentTheme`、`VirtualGallery` 和 `PreviewPopup`，布局参数由各自视图决定。`QuickPanelResults` 管理快速搜索与会话最近使用。`services/send_media.py` 是 Qt 与 WPF 共用的静态转换服务，不依赖 UI 框架。
-- `LibraryCommands` 串行化同一 WPF 实例的工作，使用 UTF-8 JSON 调用 `services/gallery_commands.py`。图库读写、导入、资源包和相似度沿用无 Qt 的服务；去重进度以独立消息回传，取消只结束扫描子进程，已经提交的 `similarity-v1.db` 特征缓存可复用。删除不在写入中途取消。
-- `ClipboardImageSource` 解析剪贴板和拖拽数据；`services/network_image.py` 下载至临时文件，限制协议与响应大小。`ImportQueue` 串行分发手动导入，让同一进度组件显示取消和等待数。`OperationScope` 与 Python 端的取消标记协作，让工作在安全边界结束。`InboxMonitor` 在后台观察收件箱，`services/inbox_import.py` 复查并暂存确认的文件。普通文件、链接和收件箱入口都交给同一个 `ImportJob` 清洗、转码、查重。
+- 两个面板共用 `FluentTheme`、`VirtualGallery`、`PreviewPopup` 和 `StickerSendMedia`。`QuickPanelResults` 管理快速搜索与会话最近使用。
+- `LibrarySnapshotReader` 只读打开 SQLite，保留旧 JSON 兼容读取。`LibraryCommands` 串行化写入，媒体预览分通道；原生模块直接接收取消信号并在安全边界结束，已提交的 `similarity-v1.db` 继续可用。
+- `ClipboardImageSource` 解析剪贴板和拖拽数据；`LinkedImageImport` 限制下载协议与响应大小。`ImportQueue` 调度手动导入，`InboxLibraryImport` 复查并暂存收件箱文件。普通文件、链接和收件箱最终共用 `LocalImageImport` 清洗、转码和查重。
 
 ## 不弹窗的验证
 
@@ -106,7 +114,7 @@ dotnet build win_frontend_tests/SuzuEmojy.Windows.Tests.csproj -c Release -o dis
 python -B -m pytest -q tests/test_gallery_commands.py tests/test_gallery_snapshot.py tests/test_send_media.py tests/test_external_stickers.py tests/test_qq_apng_conversion.py tests/test_import_sources.py
 ```
 
-`wpf-fixture` 应使用未存在过的目录。深色模式另建一份带 `--dark` 的测试库，其他操作相同。Qt 使用自己的 offscreen 后端，WPF 直接渲染未显示的视图树；两套测试都输出图库、单图预览、筛选菜单、快速面板、设置页和新建分类 PNG。WPF 额外验证单个搜索结果左上对齐、导入反馈不弹窗、设置窄窗口布局，以及设置真实写入测试库。测试只向自己的不可见消息窗口发送合成 `WM_HOTKEY`，唤出后的自动粘贴使用假窗口、假剪贴板序号和假时钟，不注册系统快捷键或托盘，也不访问真实剪贴板。实机快捷键、实窗定位、托盘交互和聊天软件粘贴仍待手动验证。
+`wpf-fixture` 应使用未存在过的目录。上述 Python 命令只生成历史对照夹具和运行 1.x 测试，不属于 2.0 运行或封包流程。设置 `SUZU_LEGACY_REFERENCE` 选用一个旧版参考后端，可额外运行跨版本对照。不设置时，WPF 测试不会调用 Python。测试只在离屏视图和本进程不可见的窗口验证热键流程，不注册系统快捷键、托盘，也不访问真实剪贴板。真实聊天软件和屏幕环境还需实机验收。
 
 WPF 也输出滚动侧栏和托盘菜单的离屏 PNG，并验证侧栏滑块拖动、选中末尾分类、托盘动作绑定，以及已创建的托盘和图库菜单随浅深模式及主题色更新。此测试不会实际打开托盘弹出窗口。
 

@@ -259,6 +259,12 @@ class TGStickerDownloader:
             raise missing_error
         raise RuntimeError(f"请求 Telegram API [{method}] 失败: {last_err}")
 
+    def check_bot_connection(self) -> None:
+        """Use the same origin, transport and redirect policy as sticker requests."""
+        result = self._request_api("getMe")
+        if not isinstance(result, dict) or result.get("is_bot") is not True:
+            raise RuntimeError("Invalid Telegram bot response")
+
     def test_connection(self) -> Dict[str, Any]:
         """
         测试网络连通性 (自动检测官方直连与代理通道)

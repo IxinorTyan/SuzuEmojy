@@ -27,7 +27,7 @@
     <Setter Property="Background" Value="Transparent"/>
   </Style>
   <Style x:Key="FluentMenu" TargetType="ContextMenu">
-    <Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei"/>
+    <Setter Property="FontFamily" Value="{DynamicResource FluentMenuFont}"/>
     <Setter Property="FontSize" Value="14"/>
     <Setter Property="Foreground" Value="{DynamicResource FluentMenuInk}"/>
     <Setter Property="UseLayoutRounding" Value="True"/>

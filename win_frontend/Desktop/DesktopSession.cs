@@ -21,16 +21,18 @@ internal sealed class DesktopSession : IDisposable
     private readonly LibraryCommands commands;
     private readonly QuickPanelResults results;
     private StickerSendMedia sendMedia;
-    private readonly string repository, cache;
+    private readonly string cache;
     private readonly WindowsInput input = new();
     private readonly AutoPaste paste;
     private readonly DispatcherTimer timer;
     private readonly DispatcherTimer wakeTimer;
+    private readonly DispatcherTimer closeTimer;
     private readonly PanelWake wake = new();
     private Window? openingPanel;
     private readonly nint handle;
     private readonly MainWindowPlacement placement;
     private readonly InboxMonitor inbox;
+    private readonly CancellationTokenSource maintenance = new();
     private readonly HwndSource hotkeyMessages;
     private readonly TrayIcon? tray;
     private GlobalHotkey? hotkey, quickHotkey;
@@ -42,20 +44,21 @@ internal sealed class DesktopSession : IDisposable
     private bool recordingHotkey;
     private bool disposed, exiting, exitRequested;
 
-    internal DesktopSession(MainWindow window, LibrarySnapshot settings, string repository, string data, LibraryCommands commands)
+    internal DesktopSession(MainWindow window, LibrarySnapshot settings, string data, LibraryCommands commands)
     {
         this.window = window;
         this.settings = settings;
         this.commands = commands;
-        this.repository = repository;
         cache = Path.Combine(data, "cache", "gif_output");
         results = new QuickPanelResults(settings);
-        sendMedia = new StickerSendMedia(repository, cache, settings.Flag("convert_static_to_gif", true));
+        sendMedia = new StickerSendMedia(cache, settings.Flag("convert_static_to_gif", true));
         paste = new AutoPaste(input, TimeProvider.System);
         timer = new DispatcherTimer(DispatcherPriority.Input, window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(20) };
         timer.Tick += OnPasteTick;
         wakeTimer = new DispatcherTimer(DispatcherPriority.Input, window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(250) };
         wakeTimer.Tick += FinishActivation;
+        closeTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(100) };
+        closeTimer.Tick += FinishClosing;
         placement = new MainWindowPlacement(window, new WindowPlacementStore(data));
         inbox = new InboxMonitor(data, window.Dispatcher, window.ImportInbox);
         handle = placement.Handle;
@@ -121,7 +124,7 @@ internal sealed class DesktopSession : IDisposable
             settings.String("quick_panel_hotkey", "alt+2") != snapshot.String("quick_panel_hotkey", "alt+2");
         bool sendFormatChanged = settings.Flag("convert_static_to_gif", true) != snapshot.Flag("convert_static_to_gif", true);
         settings = snapshot;
-        if (sendFormatChanged) sendMedia = new StickerSendMedia(repository, cache, settings.Flag("convert_static_to_gif", true));
+        if (sendFormatChanged) sendMedia = new StickerSendMedia(cache, settings.Flag("convert_static_to_gif", true));
         if (bindingsChanged) BindHotkeys();
         quickPanel?.RefreshFromLibrary(snapshot, window.QuickThumbnailSize);
     }
@@ -135,6 +138,7 @@ internal sealed class DesktopSession : IDisposable
 
     internal void Start(bool autostart)
     {
+        _ = WarmIndexes(maintenance.Token);
         inbox.Start();
         if (!autostart || tray is null)
         {
@@ -143,6 +147,20 @@ internal sealed class DesktopSession : IDisposable
             window.ShowHotkeyStatus(mainHotkeyError, quickHotkeyError, announce: true);
         }
         else if ((mainHotkeyError ?? quickHotkeyError) is { } message) tray.NotifyHotkeysUnavailable(message);
+    }
+
+    private async Task WarmIndexes(CancellationToken cancellation)
+    {
+        try
+        {
+            var repair = await commands.Run(new("startup_maintenance"), reload: true, cancellation);
+            if (disposed || cancellation.IsCancellationRequested) return;
+            if (repair.Result.Error is { } error) Trace.TraceWarning("Could not maintain the old library: {0}", error);
+            if (repair.Snapshot is { } snapshot) window.AcceptSnapshot(snapshot, null, updateSettings: false, preserveSelection: true);
+            await commands.Run(new("warm_indexes"), reload: false, cancellation);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { Trace.TraceWarning("Could not warm library indexes: {0}", error.Message); }
     }
 
     private void ShowMain()
@@ -199,7 +217,7 @@ internal sealed class DesktopSession : IDisposable
 
     private QuickPanel CreateQuickPanel()
     {
-        var panel = new QuickPanel(settings, results);
+        var panel = new QuickPanel(settings, results, commands: commands);
         quickPanel = panel;
         panel.ThumbnailSizeChanged += window.SetQuickThumbnailSize;
         quickActivate = sticker => CopySticker(panel, sticker, hide: true);
@@ -309,7 +327,7 @@ internal sealed class DesktopSession : IDisposable
         pendingRecents++;
         try
         {
-            await commands.Run(new("recent", [sticker.Path], Limit: settings.Number("recent_limit", 30, 1, 300)), reload: false);
+            await window.RecordRecent(sticker, settings.Number("recent_limit", 30, 1, 300));
         }
         catch (Exception error) { Trace.TraceWarning("Cannot save recent sticker: {0}", error.Message); }
         finally
@@ -366,12 +384,30 @@ internal sealed class DesktopSession : IDisposable
     {
         placement.Flush();
         window.FlushSettings();
-        if (!exiting && (window.HasPendingWrite || pendingRecents != 0)) { e.Cancel = true; return; }
+        if (DefersWindowClose(exiting, window.HasPendingWrite, pendingRecents))
+        {
+            // FlushSettings can start a write during Closing. Preserve the
+            // request so the user does not have to click × again.
+            e.Cancel = true;
+            closeTimer.Start();
+            return;
+        }
+        closeTimer.Stop();
         CancelSend();
         ClearWake();
         if (exiting || tray is null) return;
         e.Cancel = true;
         window.Hide();
+    }
+
+    internal static bool DefersWindowClose(bool exiting, bool hasPendingWrite, int pendingRecents) =>
+        !exiting && (hasPendingWrite || pendingRecents != 0);
+
+    private void FinishClosing(object? sender, EventArgs e)
+    {
+        if (DefersWindowClose(exiting, window.HasPendingWrite, pendingRecents)) return;
+        closeTimer.Stop();
+        window.Close();
     }
 
     private void Exit()
@@ -391,9 +427,13 @@ internal sealed class DesktopSession : IDisposable
         SystemEvents.UserPreferenceChanged -= SystemPreferenceChanged;
         placement.Dispose();
         inbox.Dispose();
+        maintenance.Cancel();
+        maintenance.Dispose();
         CancelSend();
         ClearWake();
         timer.Tick -= OnPasteTick;
+        closeTimer.Stop();
+        closeTimer.Tick -= FinishClosing;
         wakeTimer.Tick -= FinishActivation;
         window.StickerActivated -= CopyMainSticker;
         window.Activated -= WindowActivated;

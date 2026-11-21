@@ -8,6 +8,8 @@
           BorderThickness="1" CornerRadius="8" Padding="6">
     <Grid>
       <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="26"/></Grid.RowDefinitions>
+      <Border x:Name="FocusSurface" Grid.RowSpan="2" CornerRadius="8" Opacity="0" IsHitTestVisible="False"
+              Margin="-6" Background="{DynamicResource Hover}" BorderBrush="{DynamicResource CardEdge}" BorderThickness="1"/>
       <Button x:Name="Open" Background="Transparent" BorderThickness="0" Cursor="Hand">
         <Button.Template>
           <ControlTemplate TargetType="Button">

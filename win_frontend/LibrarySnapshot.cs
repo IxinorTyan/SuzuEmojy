@@ -16,15 +16,8 @@ internal sealed record WallpaperAsset(string Path, string Revision);
 internal sealed record LibrarySnapshot(Dictionary<string, JsonElement> Settings,
     Dictionary<string, Palette> Themes, Category[] Categories, Sticker[] Images, string[] Recent, WallpaperAsset? Wallpaper = null)
 {
-    internal static async Task<LibrarySnapshot> ReadAsync(string repository, string data)
-    {
-        var result = await PythonBridge.Run(repository, "services.gallery_snapshot", TimeSpan.FromSeconds(20),
-            CancellationToken.None, data);
-        return JsonSerializer.Deserialize<LibrarySnapshot>(result, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true, MaxDepth = 32
-        }) ?? throw new InvalidOperationException("无法读取图库。");
-    }
+    internal static Task<LibrarySnapshot> ReadAsync(string data, CancellationToken cancellation = default) =>
+        Task.Run(() => LibrarySnapshotReader.Read(data, cancellation), cancellation);
 
     internal string String(string key, string fallback) =>
         Settings.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.String
@@ -38,7 +31,7 @@ internal sealed record LibrarySnapshot(Dictionary<string, JsonElement> Settings,
 
     internal int Number(string key, int fallback, int low, int high) =>
         Settings.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.Number &&
-        value.TryGetInt32(out var number) ? Math.Clamp(number, low, high) : fallback;
+        value.TryGetInt32(out var number) ? RuntimePrimitives.Clamp(number, low, high) : fallback;
 
     internal bool Dark => String("appearance_mode", String("theme_mode", "system")) switch
     {

@@ -8,7 +8,7 @@ namespace SuzuEmojy.Windows.Controls;
 internal sealed class FluentMenuPalette
 {
     internal ResourceDictionary Resources { get; } = new();
-    private (bool Dark, Colors Theme)? applied;
+    private (bool Dark, Colors Theme, FontFamily Font)? applied;
 
     internal FluentMenuPalette(LibrarySnapshot library) => Apply(library);
 
@@ -16,8 +16,10 @@ internal sealed class FluentMenuPalette
     {
         bool dark = library.Dark;
         var theme = library.Theme(dark);
-        if (applied == (dark, theme)) return;
-        applied = (dark, theme);
+        var font = FluentTheme.InterfaceFont(library);
+        if (applied == (dark, theme, font)) return;
+        applied = (dark, theme, font);
+        Resources["FluentMenuFont"] = font;
         var canvas = (Color)ColorConverter.ConvertFromString(theme.Bg);
         var accent = (Color)ColorConverter.ConvertFromString(theme.Accent);
         var neutral = (Color)ColorConverter.ConvertFromString(dark ? "#2B2B2B" : "#F9F9F9");

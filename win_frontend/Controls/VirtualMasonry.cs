@@ -64,7 +64,7 @@ internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
             int shortest = 0;
             for (int i = 1; i < count; i++)
                 if (heights[i] < heights[shortest]) shortest = i;
-            double height = Math.Clamp((cellWidth - 14) * aspect(items[index]), 62, 250) + 38;
+            double height = RuntimePrimitives.Clamp((cellWidth - 14) * aspect(items[index]), 62, 250) + 38;
             var bounds = new Rect(shortest * (cellWidth + Gap), heights[shortest], cellWidth, height);
             columns[shortest].Add(new(index, bounds));
             heights[shortest] = bounds.Bottom + Gap;

@@ -90,6 +90,17 @@ internal sealed class VirtualGallery : IDisposable
         };
         scroll.PreviewMouseWheel += (_, e) => e.Handled = ApplyWheel(e.Delta, Keyboard.Modifiers, e.GetPosition(scroll));
         scroll.IsVisibleChanged += (_, _) => { if (scroll.IsVisible || offscreen) Schedule(); else Clear(); };
+        FluentMotion.Observe(surface, () =>
+        {
+            if (FluentMotion.Enabled(surface)) return;
+            switchingCategory = false;
+            ClearExits();
+            foreach (var card in live.Values)
+            {
+                card.Button.RenderTransform = Transform.Identity;
+                card.Thumbnail.BeginAnimation(UIElement.OpacityProperty, null);
+            }
+        });
     }
 
     internal void SetItems(IEnumerable<Sticker> items, bool categoryChange = false, bool preserveScroll = false)
@@ -97,7 +108,7 @@ internal sealed class VirtualGallery : IDisposable
         Items.Clear();
         Items.AddRange(items);
         resetScroll = !preserveScroll;
-        switchingCategory = categoryChange && motionLayer is not null && SystemParameters.ClientAreaAnimation;
+        switchingCategory = categoryChange && motionLayer is not null && FluentMotion.Enabled(surface);
         ResetZoom();
         Schedule();
     }
@@ -108,7 +119,7 @@ internal sealed class VirtualGallery : IDisposable
         unhover();
         if (!resetScroll && placedGrid is { } grid && Items.Count != 0)
         {
-            var now = Environment.TickCount64;
+            var now = RuntimePrimitives.MonotonicMilliseconds;
             zoomAnchor = pointer is { } at && wheelGesture is { } gesture && now - gesture.Time < 300 &&
                 (at - gesture.Point).LengthSquared <= 64 ? gesture.Anchor : FindAnchor(grid, pointer);
             wheelGesture = pointer is { } point ? (point, now, zoomAnchor.Value) : null;
@@ -159,12 +170,12 @@ internal sealed class VirtualGallery : IDisposable
         var oldOffset = previous?.Offset ?? scroll.VerticalOffset;
         var offset = resetScroll ? 0 : zoomAnchor is { } at
             ? layout.Top + at.Index / cols * stride + at.Fraction * size - at.ViewY : scroll.VerticalOffset;
-        offset = Math.Clamp(offset, 0, Math.Max(0, fullHeight - height));
+        offset = RuntimePrimitives.Clamp(offset, 0, Math.Max(0, fullHeight - height));
         if (Math.Abs(offset - scroll.VerticalOffset) > .01)
             scroll.ScrollToVerticalOffset(offset);
         // Apply the extent and scroll request before the next paint. A render
         // scheduled by the resulting ScrollChanged will see this same offset.
-        bool animateLayout = SystemParameters.ClientAreaAnimation &&
+        bool animateLayout = FluentMotion.Enabled(surface) &&
             (switchingCategory || (!resetScroll && previous is { } old && old.Size != size));
         // Only realized rows need controls or decoded bitmaps, even for large libraries.
         int first = Math.Min(Items.Count, Math.Max(0, (int)((offset - layout.Top) / stride) - 1) * cols);
@@ -216,7 +227,7 @@ internal sealed class VirtualGallery : IDisposable
         var viewY = pointer?.Y ?? 0;
         var localY = grid.Offset + viewY - layout.Top;
         int row = Math.Max(0, (int)Math.Floor(localY / grid.RowStride));
-        int col = Math.Clamp((int)Math.Floor(((pointer?.X ?? grid.Left) - grid.Left) / grid.ColumnStride), 0, grid.Columns - 1);
+        int col = RuntimePrimitives.Clamp((int)Math.Floor(((pointer?.X ?? grid.Left) - grid.Left) / grid.ColumnStride), 0, grid.Columns - 1);
         int index = Math.Min(Items.Count - 1, row * grid.Columns + col);
         // If the pointer is in a gap, keep the gap anchored as well.
         var fraction = (localY - (index / grid.Columns) * grid.RowStride) / grid.Size;
@@ -260,7 +271,7 @@ internal sealed class VirtualGallery : IDisposable
         waitingToFade = false;
         foreach (var ghost in motionLayer!.Children.OfType<Border>().ToArray())
         {
-            var fade = TileMotion.EaseOut(1, 0, 160);
+            var fade = FluentMotion.Ease(1, 0, 160);
             ghost.Opacity = 0;
             fade.Completed += (_, _) => motionLayer.Children.Remove(ghost);
             ghost.BeginAnimation(UIElement.OpacityProperty, fade);
@@ -298,22 +309,12 @@ internal sealed class VirtualGallery : IDisposable
             Width = size, Height = size, Cursor = Cursors.Hand, Content = frame,
             Padding = new Thickness(0),
         };
-        // The card is the entire hit target; no pointer-over animations or button chrome.
-        if (CardTemplate is null)
-        {
-            var root = new FrameworkElementFactory(typeof(Border));
-            root.SetValue(Border.BackgroundProperty, Brushes.Transparent);
-            root.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter)));
-            CardTemplate = new ControlTemplate(typeof(Button)) { VisualTree = root };
-        }
-        button.Template = CardTemplate;
+        button.SetResourceReference(FrameworkElement.StyleProperty, "FluentGalleryCardButton");
         System.Windows.Automation.AutomationProperties.SetName(button, item.Name);
         var card = new Card(item, button, frame, mark, image);
         Point? dragOrigin = null;
-        button.MouseEnter += (_, _) => { Paint(card, card.Item); hover(card.Item, button); };
-        button.MouseLeave += (_, _) => { Paint(card, card.Item); unhover(); };
-        button.GotKeyboardFocus += (_, _) => Paint(card, card.Item);
-        button.LostKeyboardFocus += (_, _) => Paint(card, card.Item);
+        button.MouseEnter += (_, _) => hover(card.Item, button);
+        button.MouseLeave += (_, _) => unhover();
         button.Click += (_, _) => { unhover(); activate(card.Item); };
         // Create lazily and retain it only on the currently realized card.
         if (ContextMenuFor is not null) button.ContextMenuOpening += (_, args) =>
@@ -352,16 +353,13 @@ internal sealed class VirtualGallery : IDisposable
         return card;
     }
 
-    private static ControlTemplate? CardTemplate;
-
     private void Paint(Card card, Sticker item)
     {
         var picked = selection.Contains(item);
-        var hover = card.Button.IsMouseOver || card.Button.IsKeyboardFocused;
-        if (picked || hover) card.Surface.SetResourceReference(Border.BackgroundProperty, picked ? "SelectionSurface" : "Hover");
+        if (picked) card.Surface.SetResourceReference(Border.BackgroundProperty, "SelectionSurface");
         else card.Surface.Background = Brushes.Transparent;
         card.Surface.BorderThickness = new Thickness(picked ? 2 : 1);
-        if (picked || hover) card.Surface.SetResourceReference(Border.BorderBrushProperty, picked ? "Accent" : "CardEdge");
+        if (picked) card.Surface.SetResourceReference(Border.BorderBrushProperty, "Accent");
         else card.Surface.BorderBrush = Brushes.Transparent;
         ((Border)card.Mark.Parent).Visibility = picked ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -387,7 +385,7 @@ internal sealed class VirtualGallery : IDisposable
         if (card.FadeOnLoad)
         {
             card.FadeOnLoad = false;
-            card.Thumbnail.BeginAnimation(UIElement.OpacityProperty, TileMotion.EaseOut(0, 1, 125));
+            if (FluentMotion.Enabled(surface)) card.Thumbnail.BeginAnimation(UIElement.OpacityProperty, FluentMotion.Ease(0, 1, 125));
         }
         if (waitingToFade) StartExit();
     }
@@ -514,6 +512,8 @@ internal static class MediaThumbnail
         try
         {
             using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (NativeWebp.Available && NativeWebp.IsWebp(stream))
+                return NativeWebp.ResizeStill(NativeWebp.Still(NativeWebp.Read(stream, CancellationToken.None), CancellationToken.None), size);
             var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
             var frame = decoder.Frames[0];
             var width = frame.PixelWidth;
@@ -530,7 +530,7 @@ internal static class MediaThumbnail
             return bitmap;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or
-            ArgumentException or NotSupportedException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+            ArgumentException or NotSupportedException or InvalidOperationException or FormatException or System.Runtime.InteropServices.COMException)
         {
             return null;
         }

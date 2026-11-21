@@ -5,8 +5,10 @@
     <ResourceDictionary Source="Buttons.xaml"/>
   </UserControl.Resources>
   <Grid>
+   <Grid x:Name="RouteSurface">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-    <StackPanel Orientation="Horizontal" Margin="36,10,36,12">
+    <DockPanel Margin="36,10,36,12">
+      <ContentControl x:Name="PageTools" DockPanel.Dock="Right" VerticalAlignment="Center"/>
       <Button x:Name="Back" Width="36" Height="36" Style="{StaticResource ToolButton}"
               ToolTip="返回主面板" AutomationProperties.Name="返回主面板">
         <Path Data="M14,8 H2 M2,8 L8,2 M2,8 L8,14" Width="16" Height="16" Stretch="Uniform"
@@ -14,7 +16,9 @@
       </Button>
       <TextBlock x:Name="Heading" VerticalAlignment="Center" Margin="12,0,0,0" FontSize="28"
                  Foreground="{DynamicResource Ink}"/>
-    </StackPanel>
+    </DockPanel>
     <ContentControl x:Name="PageBody" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
+   </Grid>
+    <Image x:Name="PreviousBody" Stretch="Fill" IsHitTestVisible="False" Visibility="Collapsed"/>
   </Grid>
 </UserControl>

@@ -372,8 +372,23 @@ def _telegram(request):
             valid = False
         if not valid:
             raise ValueError("API 反代地址必须为 HTTPS")
-    return TGStickerDownloader(bot_token=token, cf_proxy=proxy, timeout=10, retries=1,
-                               prefer_direct=not proxy, allow_proxy_fallback=False, allow_redirects=False)
+    network = (request.get("network_proxy") or "").strip()
+    if network:
+        try:
+            url = urlsplit(network)
+            valid = (url.scheme in {"http", "https", "socks5", "socks5h"} and url.hostname
+                     and url.port and not (url.query or url.fragment or re.search(r"[\s\\]", network))
+                     and url.path in {"", "/"})
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("本地代理需要有效的 HTTP、HTTPS 或 SOCKS5 地址和端口")
+    downloader = TGStickerDownloader(bot_token=token, cf_proxy=proxy, network_proxy=network or None,
+                                     timeout=10, retries=1, prefer_direct=not proxy,
+                                     allow_proxy_fallback=False, allow_redirects=False)
+    if network:
+        downloader.session.trust_env = False  # An explicit proxy takes precedence over environment proxies.
+    return downloader
 
 
 def _write_unique(directory, name, writer):
@@ -470,6 +485,9 @@ def _tg(root, action, request, progress):
         return {"error": "无法初始化 Telegram 下载"}
     try:
         with closing(downloader.session):
+            if action == "tg_test_connection":
+                downloader.check_bot_connection()
+                return {}
             if action == "tg_parse":
                 value = request.get("value") or ""
                 if not downloader.parse_sticker_input(value):

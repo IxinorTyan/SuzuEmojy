@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -25,6 +24,73 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--hold-instance", var instanceName]) return WindowsInstanceTests.Hold(instanceName);
+        if (args is ["--package-smoke", var package, var smoke])
+        {
+            try
+            {
+                WindowsInstanceTests.Run();
+                var install = CheckInstallLayout(package);
+                Require(install.Launcher is not null, "The ZIP must have the layered portable layout.");
+                var launcherInfo = new ProcessStartInfo(install.Launcher!, PortableLayout.VerifyInstall)
+                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath() };
+                using (var launcher = Process.Start(launcherInfo)!)
+                {
+                    if (!launcher.WaitForExit(18000)) { launcher.Kill(); throw new TimeoutException("Launcher did not start the application."); }
+                    Require(launcher.ExitCode == 0 && !Directory.Exists(install.Data) && !Directory.Exists(Path.Combine(install.Root, "data")),
+                        "The launcher must work outside its directory without creating a gallery when probed.");
+                }
+                Require(NativeWebp.Available && NativeLottie.Available && LegacyAnimatedGif.Available,
+                    "The package must contain all of its native image decoders.");
+                var info = new ProcessStartInfo(StickerVideoConverter.Find(package)!, "-version")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+                using var ffmpeg = Process.Start(info)!;
+                var version = ffmpeg.StandardOutput.ReadToEndAsync();
+                if (!ffmpeg.WaitForExit(5000)) { ffmpeg.Kill(); throw new TimeoutException("FFmpeg did not start."); }
+                Require(ffmpeg.ExitCode == 0 && version.GetAwaiter().GetResult().StartsWith("ffmpeg version ", StringComparison.Ordinal),
+                    "The converter failed to start without external dependencies.");
+                NativeMigrationBoundaryTests.Run(smoke, install).GetAwaiter().GetResult();
+                NativeExchangeTests.Run(smoke).GetAwaiter().GetResult();
+                NativeApngTests.CheckTelegram().GetAwaiter().GetResult();
+                Console.WriteLine("Native package smoke passed.");
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--native-edits", var output])
+        {
+            try
+            {
+                NativeEditTests.Run(output).GetAwaiter().GetResult();
+                NativeApngTests.Run(output).GetAwaiter().GetResult();
+                NativeIdentityTests.CheckWarmup(output).GetAwaiter().GetResult();
+                NativeIdentityTests.Run(output);
+                NativeExchangeTests.Run(output).GetAwaiter().GetResult();
+                NativeMediaTests.Run(output).GetAwaiter().GetResult();
+                NativeImportTests.Run(output).GetAwaiter().GetResult();
+                NativeDeletionTests.Run(output).GetAwaiter().GetResult();
+                NativeSimilarityTests.Run(output).GetAwaiter().GetResult();
+                NativeQqTests.Run(output).GetAwaiter().GetResult();
+                NativeMigrationBoundaryTests.Run(output).GetAwaiter().GetResult();
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--qq-fixtures", var qqOutput, var qqReference])
+        {
+            try { NativeQqTests.Run(qqOutput, qqReference).GetAwaiter().GetResult(); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args.Length >= 5 && args[0] == "--webm-fixtures")
+        {
+            try { NativeMigrationBoundaryTests.Webm(args[1], args[2], args[3], args.Skip(4).ToArray()).GetAwaiter().GetResult(); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--identity-fixtures", var directory])
+        {
+            try { NativeIdentityTests.CheckAndroid(directory); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
         bool longGallery = args is [_, _, _, "--long-gallery"];
         if (args.Length != 3 && !longGallery)
         {
@@ -50,10 +116,35 @@ internal static class Program
     private static async Task Check(string[] args)
     {
         var started = Stopwatch.StartNew();
+        WindowsInstanceTests.Run();
         DesktopTests.Run();
+        DesktopTests.CheckLoginStartup();
         CheckMiddleScrollGesture();
+        var reference = Environment.GetEnvironmentVariable("SUZU_LEGACY_REFERENCE");
         CheckInstallLayout(args[0]);
-        var library = await LibrarySnapshot.ReadAsync(args[0], args[1]);
+#if NETFRAMEWORK
+        if (reference is not null) CheckFrameworkProcessArguments(reference);
+#endif
+        var bridgeData = Path.Combine(args[2], $"桥接验证-{Guid.NewGuid():N}");
+        await new LibraryCommands(args[0], bridgeData).SaveSettings(new Dictionary<string, object> { ["appearance_mode"] = "dark" });
+        Require((await LibrarySnapshot.ReadAsync(bridgeData)).Dark, "The native reader could not read saved settings.");
+        await CheckOriginalAnimation(args[0], bridgeData);
+        await CheckAboutPage();
+        await NativeServicesTests.Run(args[2]);
+        await NativeEditTests.Run(args[2]);
+        await NativeApngTests.Run(args[2]);
+        NativeIdentityTests.Run(args[2]);
+        await NativeIdentityTests.CheckWarmup(args[2], reference);
+        await NativeExchangeTests.Run(args[2], reference);
+        await NativeMediaTests.Run(args[2]);
+        await NativeImportTests.Run(args[2], reference);
+        await NativeDeletionTests.Run(args[2]);
+        await NativeSimilarityTests.Run(args[2], reference);
+        await NativeQqTests.Run(args[2], reference);
+        await NativeMigrationBoundaryTests.Run(args[2]);
+        var library = await LibrarySnapshot.ReadAsync(args[1]);
+        await NativeSimilarityTests.CheckFixtureGif(args[1], args[2]);
+        await NativeGalleryTests.Run(reference, args[1], args[2]);
         CheckPreferenceState(library);
         await CheckPageLifecycle();
         var window = new MainWindow(library, offscreen: true, commands: new LibraryCommands(args[0], args[1]));
@@ -74,6 +165,7 @@ internal static class Program
             await DesktopTests.CheckMainWindowPlacement(args[2]);
             SavePng(window.Root, 860, 640, Path.Combine(args[2], "wpf-gallery.png"));
             CheckStickerPreview(window, library, args[2]);
+            CheckCaptionWhileBusy(library);
 
             var initialFirst = window.Cards.Children[0];
             window.GalleryScroll.ScrollToVerticalOffset(1300);
@@ -179,7 +271,7 @@ internal static class Program
                 frontend = "WPF", fixtureImages = library.Images.Length, readyMillis,
                 samples = fresh, theme = library.Dark ? "dark" : "light",
                 clientAreaAnimation = SystemParameters.ClientAreaAnimation,
-                checks = new[] { "viewport", "scroll", "sidebar-scroll", "sidebar-icon-grid", "ctrl-wheel", "responsive-alignment",
+                checks = new[] { "single-instance", "viewport", "scroll", "sidebar-scroll", "sidebar-icon-grid", "ctrl-wheel", "responsive-alignment",
                     "zoom-continuity", "category-exit-animation", "sidebar-zoom-motion",
                     "layout-persistence", "quick-panel-zoom-persistence", "middle-scroll-gesture", "filter", "tray-menu", "menu-theme",
                     "category", "keyword", "filename",
@@ -197,24 +289,112 @@ internal static class Program
                     "browser-drop-formats", "import-queue-cancellation",
                     "exchange-page", "qq-bridge", "telegram-selection", "telegram-single-package", "external-source-navigation", "external-waterfall",
                     "external-preview", "qq-scan-progress", "qq-recycle-confirmation", "qq-export-only", "qq-create-category-with-icon",
-                    "telegram-batch-ui", "category-context-selection", "similarity-workspace" },
+                    "telegram-batch-ui", "category-context-selection", "similarity-workspace",
+                    "native-snapshot-json-sqlite-parity", "native-v1-hash-candidate" },
             }));
         }
         finally { window.Close(); }
     }
 
-    private static void CheckInstallLayout(string backend)
+    private static WindowsInstall CheckInstallLayout(string backend)
     {
         backend = Path.GetFullPath(backend);
         bool packaged = File.Exists(Path.Combine(backend, "windows-preview.json"));
-        var application = packaged ? Directory.GetParent(backend)!.FullName : Path.Combine(backend, "win_frontend");
+        var application = packaged ? backend : Path.Combine(backend, "win_frontend");
         var install = WindowsInstall.Locate(application);
-        Require(install.Backend == backend && install.Data == Path.Combine(packaged ? application : backend, "data"),
-            "Portable and source builds must locate their backend without mixing it with the default gallery.");
+        var portable = install.Launcher is null ? backend : Path.GetDirectoryName(install.Launcher)!;
+        Require(install.Root == backend && install.Data == Path.Combine(portable, "data"),
+            "Portable and source builds must locate the installation and its default gallery.");
         if (packaged)
-            Require(WindowsInstall.PythonExecutable(backend) == Path.Combine(backend, "python", "python.exe"),
-                "Packaged mode must use the private interpreter, not PATH or SUZU_PYTHON.");
+            Require(!Directory.Exists(Path.Combine(backend, "backend")) && !Directory.EnumerateFiles(backend, "*", SearchOption.AllDirectories)
+                .Any(path => Path.GetExtension(path) is ".py" or ".pyc" or ".pyd" || Path.GetFileName(path).StartsWith("python", StringComparison.OrdinalIgnoreCase)),
+                "Packaged mode must not ship Python artifacts.");
+        return install;
     }
+
+    private static async Task CheckOriginalAnimation(string backend, string data)
+    {
+        const string apng = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACGFjVEwAAAACAAAAAYSKo+YAAAAaZmNUTAAAAAAAAAAQAAAAEAAAAAAAAAAAAAMACgAAGYacRQAAACVJREFUeJxj/M/A0MBAAWCiRPOoARDAxEAhYBo1gGE0DBgoDwMAVlsBn2iE6a8AAAAaZmNUTAAAAAEAAAAQAAAAEAAAAAAAAAAAAAIABQAAtMkYHAAAAClmZEFUAAAAAnicY2Rg+B/DQAFgokTzqAEQwMRAIWAaNYBhNAwYKA8DAMKeAXuxLv8jAAAAAElFTkSuQmCC";
+        const string webp = "UklGRoQAAABXRUJQVlA4WAoAAAASAAAADwAADwAAQU5JTQYAAAAAAAAAAQBBTk1GKAAAAAAAAAAAAA8AAA8AACwBAAJWUDhMDwAAAC8PwAMQBxD9jwIGIqL/AQBBTk1GKAAAAAAAAAAAAA8AAA8AAJABAAJWUDhMDwAAAC8PwAMQBxDR/3IFIqL/AQA=";
+        var images = Directory.CreateDirectory(Path.Combine(data, "images")).FullName;
+        var commands = new LibraryCommands(backend, data);
+        foreach (var (name, raw) in new[] { ("合成 动图.png", apng), ("透明 动图.webp", webp) })
+        {
+            var path = Path.Combine(images, name);
+            File.WriteAllBytes(path, Convert.FromBase64String(raw));
+            Require(ResourceIdentityV1.TryRead(path, CancellationToken.None) is null,
+                "The native identity candidate must not mistake raw animated input for a static pixel key.");
+            Require(PreviewFrames.CanDecode(path, hasStill: true), "Compressed frame detection missed animated content.");
+            var response = await commands.Run(new("preview_animation", Paths: [path], Limit: 64), reload: false);
+            var payload = response.Result.Animation!;
+            var decoded = payload.Native ?? PreviewFrames.Decode(payload.Frames!, payload.Plays, CancellationToken.None);
+            var alpha = new byte[4];
+            new FormatConvertedBitmap((BitmapSource)decoded.Current, PixelFormats.Bgra32, null, 0)
+                .CopyPixels(new Int32Rect(0, 0, 1, 1), alpha, 4, 0);
+            Require(decoded.HasMotion && decoded.Delay.TotalMilliseconds == 300 && alpha[3] == 128 && decoded.Advance() &&
+                decoded.Delay.TotalMilliseconds == 400 && !decoded.Advance(), "Original preview changed the alpha, timing or loop count.");
+            var picture = new Image();
+            var playback = new GifPlayback(commands);
+            var ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Require(playback.Play(picture, path, 64, () => ready.TrySetResult(true)), "Preview did not start the bundled decoder.");
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            Require(picture.Source is BitmapSource, "Preview did not display the transported frame.");
+            playback.Stop();
+            Require(picture.Source is null, "Closing the preview must release its source.");
+
+            bool lateFrame = false;
+            Require(playback.Play(picture, path, 64, () => lateFrame = true), "Could not queue a second preview.");
+            playback.Stop(restoreStill: false);
+            await commands.Run(new("preview_animation", Paths: [path], Limit: 64), reload: false);
+            await picture.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            Require(!lateFrame && picture.Source is null, "A canceled hover decoder must not paint a stale preview.");
+        }
+        var still = Path.Combine(images, "静态 PNG.png");
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32,
+            null, new byte[] { 0, 0, 0, 255 }, 4)));
+        using (var output = File.Create(still)) encoder.Save(output);
+        Require(!PreviewFrames.CanDecode(still, hasStill: true), "Static PNG hover must not start an animation decoder.");
+    }
+
+    private static async Task CheckAboutPage()
+    {
+        int called = 0;
+        string? opened = null, copied = null;
+        using var completed = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var reply = new TaskCompletionSource<AvailableRelease?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var page = new AboutPage(_ => { called++; return reply.Task; }, url => opened = url, text => copied = text);
+        Require(called == 0 && opened is null && copied is null && page.VersionText.Text.Contains(AboutPage.InstalledVersion),
+            "About must show its version without network, shell or clipboard calls.");
+        page.OpenProject.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        page.CopyGroup.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Require(opened == DesktopLinks.Project && copied == "834586488" && page.Credits.Children.Count == 3,
+            "The legacy project, group or credits entry is missing.");
+        page.CheckUpdate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Require(called == 1 && !page.CheckUpdate.IsEnabled, "An update check must be explicit and not reentrant.");
+        reply.SetResult(new("2.1.2", "更新说明"));
+        while (!page.CheckUpdate.IsEnabled) await Task.Delay(10, completed.Token);
+        Require(page.Notes.Text == "更新说明", "The About page dropped the update notes.");
+        page.Cancel();
+    }
+
+#if NETFRAMEWORK
+    private static void CheckFrameworkProcessArguments(string backend)
+    {
+        string[] arguments = ["", "空 格", "C:\\path with spaces\\", "embedded\\\"quote"];
+        string[] command = ["-I", "-c", "import sys,json; print(json.dumps(sys.argv[1:]))", .. arguments];
+        var start = new ProcessStartInfo(PythonBridge.PythonExecutable(backend))
+        {
+            Arguments = string.Join(" ", command.Select(WindowsCommandLine.QuoteArgument)),
+            UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
+        };
+        using var process = Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEndAsync();
+        if (!process.WaitForExit(5000)) { process.Kill(); throw new TimeoutException("Argument probe timed out."); }
+        Require(process.ExitCode == 0 && JsonSerializer.Deserialize<string[]>(output.GetAwaiter().GetResult())!
+            .SequenceEqual(arguments), "The .NET Framework process adapter must preserve Windows arguments exactly.");
+    }
+#endif
 
     private static void CheckMiddleScrollGesture()
     {
@@ -243,7 +423,7 @@ internal static class Program
     private static async Task CheckLongGallery(string[] args)
     {
         var clock = Stopwatch.StartNew();
-        var library = await LibrarySnapshot.ReadAsync(args[0], args[1]);
+        var library = await LibrarySnapshot.ReadAsync(args[1]);
         var snapshotMs = clock.ElapsedMilliseconds;
         Require(library.Images.Length >= 10_000, "Use a fixture with at least 10,000 separate images.");
         var window = new MainWindow(library, offscreen: true);
@@ -271,7 +451,7 @@ internal static class Program
                 Layout(window);
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 Layout(window);
-                var elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                var elapsed = (Stopwatch.GetTimestamp() - start) * 1000.0 / Stopwatch.Frequency;
                 Require(Math.Abs(window.GalleryScroll.VerticalOffset - target) < 1 && window.Gallery.ActiveCards > 0,
                     $"Scroll did not settle at {target}, got {window.GalleryScroll.VerticalOffset}.");
                 maxCards = Math.Max(maxCards, window.Gallery.ActiveCards);
@@ -292,7 +472,7 @@ internal static class Program
                 window.Cards.Children.Cast<FrameworkElement>().Any(card =>
                     System.Windows.Automation.AutomationProperties.GetName(card) == library.Images[^1].Name),
                 "The gallery must realize the final image and release the initial controls without growing with the extent.");
-            double P95(double[] values) => Math.Round(values.Order().ElementAt((int)Math.Ceiling(values.Length * .95) - 1), 2);
+            double P95(double[] values) => Math.Round(values.OrderBy(value => value).ElementAt((int)Math.Ceiling(values.Length * .95) - 1), 2);
             double MiB(long bytes) => Math.Round(bytes / 1048576.0, 1);
             Console.WriteLine(JsonSerializer.Serialize(new
             {
@@ -316,7 +496,7 @@ internal static class Program
         for (int i = 0; i < 36; i++) File.Copy(still, Path.Combine(images, $"still-{i:D2}.png"));
         for (int i = 0; i < 2; i++) File.Copy(animation, Path.Combine(images, $"motion-{i}.gif"));
         var commands = new LibraryCommands(repo, data);
-        var library = await LibrarySnapshot.ReadAsync(repo, data);
+        var library = await LibrarySnapshot.ReadAsync(data);
         var window = new MainWindow(library, offscreen: true, commands: commands);
         void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         async Task Until(Func<bool> ready)
@@ -421,9 +601,14 @@ internal static class Program
             !PreviewPopup.CanOpen(true, WindowState.Normal, false, false) &&
             !PreviewPopup.CanOpen(true, WindowState.Normal, true, true),
             "Hover should depend on visibility, the pointer and mouse buttons, not foreground activation.");
-        Require(hover.Surface is { Focusable: false, IsHitTestVisible: false, StaysOpen: true, AllowsTransparency: true }
+        Require(hover.Surface is { Focusable: false, IsHitTestVisible: false, StaysOpen: true, AllowsTransparency: true,
+            PopupAnimation: PopupAnimation.None }
             && ReferenceEquals(hover.Surface.PlacementTarget, window),
-            "The hover window must be passive with no hit testing or focus.");
+            "The hover window must be passive with no hit testing, focus or native animation.");
+        var thumbnail = (Button)window.Cards.Children[0];
+        var hoverSurface = (Border)thumbnail.Template.FindName("CardHover", thumbnail);
+        Require(!hoverSurface.IsHitTestVisible && hoverSurface.Visibility == Visibility.Hidden,
+            "The thumbnail's static hover layer must not take input or appear when unhovered.");
         var preview = new StickerPreview { FontFamily = window.FontFamily };
         preview.Configure(library, window.Resources);
         var sticker = library.Images.First(item => item.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
@@ -449,6 +634,46 @@ internal static class Program
             "The preview must preserve image transparency and still render the image and metadata.");
     }
 
+    private static void CheckCaptionWhileBusy(LibrarySnapshot library)
+    {
+        var window = new MainWindow(library, offscreen: true);
+        try
+        {
+            var button = window.Caption.Children.OfType<Button>().Single(item => Equals(item.ToolTip, "关闭"));
+            window.PageArea.IsEnabled = false;
+            window.BusyProgress.Visibility = Visibility.Visible;
+            Layout(window);
+            var corner = button.TranslatePoint(new Point(button.ActualWidth / 2, 1), window.Root);
+            // InputHitTest ignores the whole tree of an unshown Window. Walk the
+            // arranged visuals and apply the input filter without showing it.
+            DependencyObject? hit = null;
+            VisualTreeHelper.HitTest(window.Root,
+                visual => visual is UIElement { IsHitTestVisible: false } or UIElement { IsEnabled: false }
+                    ? HitTestFilterBehavior.ContinueSkipSelfAndChildren : HitTestFilterBehavior.Continue,
+                result => { hit = result.VisualHit; return HitTestResultBehavior.Stop; },
+                new PointHitTestParameters(corner));
+            bool hitsClose = false;
+            while (hit is System.Windows.Media.Visual)
+            {
+                if (hit == button) { hitsClose = true; break; }
+                hit = VisualTreeHelper.GetParent(hit);
+            }
+            Require(hitsClose && button.IsEnabled && !window.GalleryPage.IsEnabled &&
+                System.Windows.Shell.WindowChrome.GetIsHitTestVisibleInChrome(button),
+                "The window's busy indicator and disabled content must never block the close button.");
+            Require(DesktopSession.DefersWindowClose(false, true, 0) &&
+                DesktopSession.DefersWindowClose(false, false, 1) &&
+                !DesktopSession.DefersWindowClose(false, false, 0) &&
+                !DesktopSession.DefersWindowClose(true, true, 1),
+                "Window close must wait only for pending writes, never veto an explicit shutdown.");
+            bool closed = false;
+            window.Closed += (_, _) => closed = true;
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(closed, "The caption × did not route to Window.Close.");
+        }
+        finally { window.Close(); }
+    }
+
     private static void CheckSettingsAppearance(MainWindow window, string output)
     {
         var tools = window.Toolbar.Children.OfType<Button>();
@@ -459,6 +684,10 @@ internal static class Program
             window.Pages.Page is SettingsPage && window.Caption.Visibility == Visibility.Visible,
             "Settings must replace the gallery body while retaining the main window chrome.");
         var page = (SettingsPage)window.Pages.Page!;
+        var animations = page.Groups.Children.OfType<StackPanel>().SelectMany(group => group.Children.OfType<SettingCard>())
+            .SelectMany(card => ((Grid)card.Child).Children.OfType<CheckBox>())
+            .Single(input => System.Windows.Automation.AutomationProperties.GetName(input) == "关闭动画");
+        Require(animations.IsChecked != true, "Motion must be enabled by default.");
         var top = window.Pages.Back.TranslatePoint(new Point(), window.Root);
         SavePng(window.Root, 860, 640, Path.Combine(output, "wpf-settings.png"));
         Require(Math.Abs(top.X - 36) < 1 && Math.Abs(top.Y - 42) < 1 && page.Scroll.ViewportHeight > 500,
@@ -478,8 +707,9 @@ internal static class Program
         var description = paletteGrid.Children.OfType<StackPanel>().Single();
         Require(Grid.GetRow(palettes) == 1 && description.ActualWidth > 200 && palettes.ActualWidth <= paletteGrid.ActualWidth,
             "The theme controls must wrap below the description at the minimum window width.");
-        var thumbnailCard = personalization.Children.OfType<SettingCard>().ElementAt(2);
-        var spin = (Grid)((StackPanel)((Grid)thumbnailCard.Child).Children[^1]).Children[0];
+        var thumbnailInput = personalization.Children.OfType<SettingCard>().SelectMany(card => ((Grid)card.Child).Children.OfType<StackPanel>())
+            .Single(panel => System.Windows.Automation.AutomationProperties.GetName(panel) == "缩略图大小");
+        var spin = (Grid)thumbnailInput.Children[0];
         var number = spin.Children.OfType<TextBox>().Single();
         var editor = (ScrollViewer)number.Template.FindName("PART_ContentHost", number);
         Require(editor.ScrollableWidth <= 1, "The numeric value must fit before the step buttons in a narrow window.");
@@ -653,7 +883,7 @@ internal static class Program
                     options[0].IsChecked = true;
                     options[1].IsChecked = true;
                     Require(ok.IsEnabled && selected().SequenceEqual(
-                        (multiple ? categories[..2] : categories[1..2]).Select(category => category.Name)),
+                        categories.Skip(multiple ? 0 : 1).Take(multiple ? 2 : 1).Select(category => category.Name)),
                         "Rendering icons must not affect the dialog's single/multiple selection or returned names.");
                     if (multiple)
                     {
@@ -693,7 +923,7 @@ internal static class Program
             [source] = names, [keep] = [], [target] = [],
         }));
         var commands = new LibraryCommands(repo, data);
-        var library = await LibrarySnapshot.ReadAsync(repo, data);
+        var library = await LibrarySnapshot.ReadAsync(data);
         var window = new MainWindow(library, offscreen: true, commands: commands);
         try
         {
@@ -762,8 +992,8 @@ internal static class Program
             }
         SaveBitmap(BitmapSource.Create(sourceWidth, sourceHeight, 96, 96, PixelFormats.Bgra32, null, pixels, sourceWidth * 4), source);
         var commands = new LibraryCommands(repo, data);
-        var seeded = await commands.Run(new("settings", Settings: new() { ["appearance_mode"] = fixture.Dark ? "dark" : "light" }), true);
-        var window = new MainWindow(seeded.Snapshot!, offscreen: true, commands: commands);
+        await commands.SaveSettings(new Dictionary<string, object> { ["appearance_mode"] = fixture.Dark ? "dark" : "light" });
+        var window = new MainWindow(await LibrarySnapshot.ReadAsync(data), offscreen: true, commands: commands);
         try
         {
             window.ShowSettings();
@@ -830,7 +1060,7 @@ internal static class Program
             window.Pages.Back.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             window.FlushSettings();
             await saved.Task.WaitAsync(TimeSpan.FromSeconds(8));
-            var persisted = await LibrarySnapshot.ReadAsync(repo, data);
+            var persisted = await LibrarySnapshot.ReadAsync(data);
             Require(persisted.Wallpaper is not null && persisted.Number("wallpaper_brightness", 0, -100, 100) == 50 &&
                 persisted.Number("wallpaper_overlay_opacity", 0, 0, 100) == 35,
                 "Wallpaper and its adjustment values should survive reopening the app.");
@@ -870,7 +1100,7 @@ internal static class Program
                 var replacementPixels = Enumerable.Repeat(new byte[] { 150, 10, 225, 255 }, 96).SelectMany(px => px).ToArray();
                 SaveBitmap(BitmapSource.Create(12, 8, 96, 96, PixelFormats.Bgra32, null, replacementPixels, 48), replacement);
                 Require(await reopened.ChangeWallpaper(replacement), "Replacing a wallpaper must succeed after the old one is loaded.");
-                var latest = await LibrarySnapshot.ReadAsync(repo, data);
+                var latest = await LibrarySnapshot.ReadAsync(data);
                 quick.RefreshAppearance(latest);
                 for (int pass = 0; pass < 100 && ReferenceEquals(((ImageBrush)quick.Wallpaper.Texture.Background).ImageSource, oldImage); pass++)
                     await Task.Delay(25);
@@ -882,7 +1112,7 @@ internal static class Program
                     "Both panels must refresh to the new revision at the same managed path without retaining the old copy.");
                 Require(await reopened.ChangeWallpaper(null), "The user must be able to remove the application copy.");
                 await WaitForWallpaper(reopened, false);
-                quick.RefreshAppearance(await LibrarySnapshot.ReadAsync(repo, data));
+                quick.RefreshAppearance(await LibrarySnapshot.ReadAsync(data));
                 Require(!File.Exists(persisted.Wallpaper!.Path) && File.Exists(Path.Combine(data, "moved.png")) && File.Exists(replacement) &&
                     reopenedPage.WallpaperOptions.Visibility == Visibility.Collapsed &&
                     quick.Wallpaper.Visibility == Visibility.Collapsed && !quick.Wallpaper.HasImage,
@@ -941,7 +1171,7 @@ internal static class Program
             var category = window.Categories.Children.OfType<Button>().Single(item => Equals(item.ToolTip, "网页图片"));
             category.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
-            using var server = new TcpListener(IPAddress.Loopback, 0);
+            using var server = new LoopbackListener();
             server.Start();
             var port = ((IPEndPoint)server.LocalEndpoint).Port;
             var link = new DataObject();
@@ -1003,18 +1233,18 @@ internal static class Program
                     window.GalleryNotice.Heading.Text == "收件箱自动导入完成" && window.Gallery.Items.Count == 2,
                     "The running monitor must import from the hidden window without changing the current category.");
             }
-            var persisted = await LibrarySnapshot.ReadAsync(repo, data);
+            var persisted = await LibrarySnapshot.ReadAsync(data);
             Require(persisted.Images.Count(item => item.Categories.Length == 0) == 2, "Automatic inbox intake should be unclassified.");
 
             async Task ServeImage()
             {
                 using var client = await server.AcceptTcpClientAsync(timeout.Token);
-                await using var stream = client.GetStream();
-                using var request = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+                using var stream = client.GetStream();
+                using var request = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
                 var first = await request.ReadLineAsync(timeout.Token);
                 Require(first?.StartsWith("GET /animated ") == true, "The link import made the wrong HTTP request.");
                 while (await request.ReadLineAsync(timeout.Token) is { Length: > 0 }) { }
-                var bytes = await File.ReadAllBytesAsync(gif, timeout.Token);
+                var bytes = File.ReadAllBytes(gif);
                 await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n"), timeout.Token);
                 await stream.WriteAsync(bytes, timeout.Token);
             }
@@ -1043,15 +1273,15 @@ internal static class Program
         var window = new MainWindow(setup.Snapshot!, offscreen: true, commands: commands);
         try
         {
-            using var server = new TcpListener(IPAddress.Loopback, 0);
+            using var server = new LoopbackListener();
             server.Start();
             using var timer = new CancellationTokenSource(TimeSpan.FromSeconds(12));
             var endpoint = (IPEndPoint)server.LocalEndpoint;
             var web = new DataObject("UniformResourceLocatorW", $"http://127.0.0.1:{endpoint.Port}/cancel.gif");
             var download = window.ImportDrop([], ClipboardImageSource.FindDropLinks(web), "第一批");
             using var client = await server.AcceptTcpClientAsync(timer.Token);
-            await using var stream = client.GetStream();
-            using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
             var request = await reader.ReadLineAsync(timer.Token);
             Require(request?.StartsWith("GET /cancel.gif ") == true, "Dropped image must reach the shared downloader.");
             while (await reader.ReadLineAsync(timer.Token) is { Length: > 0 }) { }
@@ -1067,11 +1297,15 @@ internal static class Program
             Require(!window.ActivityProgress.CancelButton.IsEnabled && window.ActivityProgress.Detail.Text == "正在取消…" && window.HasPendingWrite,
                 "Cancelling must keep waiting for the worker and protect pending writes.");
 
-            var gif = await File.ReadAllBytesAsync(fixture.Images.First(item => item.Animated).Path, timer.Token);
-            await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nContent-Length: {gif.Length}\r\nConnection: close\r\n\r\n"), timer.Token);
-            await stream.WriteAsync(gif, timer.Token);
+            var gif = File.ReadAllBytes(fixture.Images.First(item => item.Animated).Path);
+            try
+            {
+                await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nContent-Length: {gif.Length}\r\nConnection: close\r\n\r\n"), timer.Token);
+                await stream.WriteAsync(gif, timer.Token);
+            }
+            catch (IOException) { /* Native cancellation may close the connection before the reply. */ }
             await Task.WhenAll(download, second, clipboardQueued).WaitAsync(TimeSpan.FromSeconds(12));
-            var snapshot = await LibrarySnapshot.ReadAsync(repo, data);
+            var snapshot = await LibrarySnapshot.ReadAsync(data);
             Require(snapshot.Images is [{ Animated: false, Categories: ["第二批"] }] && !window.HasPendingWrite &&
                 window.ActivityProgress.Visibility == Visibility.Collapsed && window.ActivityProgress.Waiting.Text == "" && File.Exists(source),
                 "The cancelled transfer must not import; the queued tasks still finish in order in their own categories.");
@@ -1083,8 +1317,8 @@ internal static class Program
     {
         var data = Path.Combine(output, $"command-fixture-{Guid.NewGuid():N}");
         var commands = new LibraryCommands(repo, data);
-        var setup = await commands.Run(new("settings", Settings: new() { ["appearance_mode"] = fixture.Dark ? "dark" : "light" }), reload: true);
-        var library = setup.Snapshot!;
+        await commands.SaveSettings(new Dictionary<string, object> { ["appearance_mode"] = fixture.Dark ? "dark" : "light" });
+        var library = await LibrarySnapshot.ReadAsync(data);
         var window = new MainWindow(library, offscreen: true, commands: commands);
         try
         {
@@ -1100,8 +1334,10 @@ internal static class Program
             Require(window.Gallery.Items is [{ } added] && added.Categories.SequenceEqual(new[] { "中文分类" }) &&
                 window.GalleryNotice.Visibility == Visibility.Visible && window.GalleryNotice.Heading.Text == "导入完成" &&
                 window.GalleryNotice.Detail.Text == "成功添加了 1 个表情包" && window.GalleryNotice.Symbol.Text == "✓" &&
+                window.GalleryNotice.Parent is Grid { ClipToBounds: true, IsHitTestVisible: false } &&
+                window.GalleryNotice.NoticeCard.RenderTransform is TranslateTransform &&
                 !window.GalleryNotice.Focusable && !window.GalleryNotice.IsHitTestVisible && !window.LibraryBusy && window.Root.IsEnabled,
-                "A single file should be saved with success feedback that does not interrupt the gallery.");
+                "A single file should show a sliding success notice clipped to the window and pass through input.");
             await WaitForCards(window, 1);
             SavePng(window.Root, 860, 640, Path.Combine(output, "wpf-import-success.png"));
             await Task.Delay(3300);
@@ -1115,7 +1351,8 @@ internal static class Program
             File.WriteAllText(bad, "not an image");
             await window.ImportFiles([bad], "中文分类");
             Require(window.Gallery.Items.Count == 1 && window.GalleryNotice.Visibility == Visibility.Visible &&
-                window.GalleryNotice.Heading.Text == "部分文件处理失败" && File.Exists(bad),
+                window.GalleryNotice.Heading.Text == "部分文件处理失败" && File.Exists(bad) &&
+                window.GalleryNotice.NoticeCard.RenderTransform == Transform.Identity,
                 "A failed single-file import must give an inline warning and leave the source intact.");
             var batch = window.ImportFiles([original, original], "中文分类");
             Require(window.ActivityProgress.Visibility == Visibility.Visible && window.ActivityProgress.Bar.IsIndeterminate &&
@@ -1139,7 +1376,7 @@ internal static class Program
             window.AcceptSnapshot(renamed.Snapshot!, "收藏", updateSettings: false);
             Require(window.Gallery.Items.Single().Categories.SequenceEqual(new[] { "收藏" }),
                 "A mutation should refresh the current category from the persisted snapshot.");
-            await commands.Run(new("recent", [path]), reload: false);
+            await window.RecordRecent(savedImage, 30);
             await CheckLayoutPersistence(window, repo, data);
             window.ShowSettings();
             Layout(window);
@@ -1157,7 +1394,7 @@ internal static class Program
                 .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             window.Pages.Back.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var saved = await settingsSaved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Require(!window.OnSettingsPage && !window.Topmost && saved.Dark && saved.Recent.Single() == savedImage.Name &&
+            Require(!window.OnSettingsPage && !window.Topmost && saved.Dark && saved.Recent is [var recent] && recent == savedImage.Name &&
                 window.Toolbar.Children.OfType<Button>().Single(button => Equals(button.ToolTip, "设置")).Visibility == Visibility.Collapsed,
                 "Settings must save on return, update the window immediately and keep recent history.");
             var deleted = await commands.Run(new("delete", [path]), reload: true);
@@ -1208,6 +1445,26 @@ internal static class Program
         int suspended = 0, resumed = 0, left = 0, closed = 0, received = 0, cancelCallbacks = 0;
         bool backConsumed = false;
         host.RootClosed += () => closed++;
+        var inherited = new Grid { Children = { host } };
+        inherited.SetValue(FluentMotion.DisabledProperty, true);
+        Require(!FluentMotion.Enabled(host), "Reduced motion must propagate into detached and nested pages.");
+        var revealer = new Border();
+        var reveal = new MotionReveal(host, revealer);
+        bool visible = false;
+        reveal.Show(() => visible = true);
+        Require(visible && revealer.Opacity == 1, "Reduced motion must show the detail immediately.");
+        reveal.Hide(() => visible = false);
+        Require(!visible && revealer.Opacity == 0, "Reduced motion must close the detail immediately.");
+        var notice = new InlineNotice { MaxWidth = 420, Margin = new Thickness(16, 56, 16, 0) };
+        inherited.Children.Add(notice);
+        notice.Show("导入完成", "成功添加了 1 个表情包", persistent: true, slideFromRight: true);
+        Require(notice.Visibility == Visibility.Visible && notice.NoticeCard.Opacity == 1 &&
+            notice.NoticeCard.RenderTransform is TranslateTransform { X: 0, Y: 0 },
+            "With motion disabled the right-edge notice must appear immediately at its final position.");
+        notice.Dismiss();
+        Require(notice.Visibility == Visibility.Collapsed && notice.NoticeCard.RenderTransform is TranslateTransform offset &&
+            offset.X >= notice.NoticeCard.DesiredSize.Width + notice.Margin.Right && offset.Y == 0,
+            "The offscreen position must clear the right edge without vertical movement.");
         Require(host.Push(new("root", root, Suspend: () => suspended++, Resume: () => resumed++,
             Leave: () => left++, Work: rootWork)), "Could not open the root page.");
         Require(host.Push(new("middle", middle, Leave: () => left++,
@@ -1261,6 +1518,7 @@ internal static class Program
         Layout(window);
         Require(window.Pages.Page is ExchangePage && window.Pages.Heading.Text == "导入导出" &&
             window.GalleryPage.Visibility == Visibility.Collapsed, "Exchange must open inside the same shared page host as Settings.");
+        Require(window.Pages.PageTools.Content is Button { ToolTip: "前往资源站" }, "The exchange page lost its resource site action.");
         var page = (ExchangePage)window.Pages.Page!;
         var cards = new[] { page.Packages, page.LocalFiles, page.ExternalSources }
             .SelectMany(group => group.Children.OfType<SettingCard>()).ToArray();
@@ -1324,7 +1582,7 @@ internal static class Program
         var exportSelected = qq.Actions.Children.OfType<Button>().Single(button => Equals(button.Content, "导出所选"));
         Require(!exportSelected.IsEnabled, "QQ export selected must require a selection.");
         ((StickerResultTile)qq.Tiles.Children[0]).Open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        await Render(qq, () => qq.DetailImage.Source is WriteableBitmap);
+        await Render(qq, () => qq.DetailImage.Source is BitmapSource { IsFrozen: true } && !qq.PreviewInfo.Text.Contains("加载"));
         Require(qq.PreviewInfo.Text.Contains("snap.dat"), "QQ detail should show the animated source and its filename.");
         exportSelected.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         await Render(qq, () => !qq.IsWriting && qq.Status.Text.Contains("导出 1 张"));
@@ -1451,12 +1709,17 @@ internal static class Program
         bool canOverwrite = false;
         bool? packageSuccess = null;
         string? packageSummary = null;
-        int packageFolderPicks = 0, overwritePrompts = 0, packageRequests = 0;
+        int packageFolderPicks = 0, downloadFolderPicks = 0, overwritePrompts = 0, packageRequests = 0;
+        string? savedFolder = null, log = null;
         LibraryCommand? sent = null;
         var tg = new ExternalStickerPage(true, new FluentMenuPalette(fixture), (command, reload, cancellation, progress) =>
         {
             switch (command.Action)
             {
+                case "tg_test_connection":
+                    Require(command.NetworkProxy == "socks5h://127.0.0.1:1080" && command.BotToken == "1234:synthetic",
+                        "Connectivity must use the same explicit proxy and Token as downloads.");
+                    return Task.FromResult<(LibraryResult, LibrarySnapshot?)>((ok, null));
                 case "tg_parse":
                     Require(command.BotToken == "1234:synthetic" && !reload, "Telegram parse must use the supplied token.");
                     return Task.FromResult<(LibraryResult, LibrarySnapshot?)>((ok with {
@@ -1488,6 +1751,7 @@ internal static class Program
         }, (_, category) => packageCategory = category, title =>
         {
             if (title == "选择资源包保存目录") packageFolderPicks++;
+            if (title == "选择下载文件夹") downloadFolderPicks++;
             return sandbox;
         }, [], null, packagePrompts: new(title =>
         {
@@ -1502,14 +1766,31 @@ internal static class Program
         {
             packageSuccess = ok;
             packageSummary = summary;
-        }));
+        }), folders: new("", sandbox, _ => { }, path => savedFolder = path), details: new(_ => { }, (text, _) => log = text));
         ApplyPageTheme(tg);
         Require(host.Push(new("TG", tg, Leave: tg.Leave, Work: tg.PageWork)),
             "Telegram download test must attach to the shared host.");
-        var inputs = tg.Options.Children.OfType<StackPanel>().SelectMany(panel => panel.Children.OfType<Control>()).ToArray();
+        Require(tg.ConnectionOptions.Visibility == Visibility.Collapsed, "Telegram connection overrides must start collapsed.");
+        tg.Options.Children.OfType<Button>().Single(button => Equals(button.Content, "高级配置"))
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var inputs = tg.Options.Children.OfType<StackPanel>().Concat(tg.ConnectionOptions.Children.OfType<StackPanel>())
+            .SelectMany(panel => panel.Children.OfType<Control>()).ToArray();
         var password = inputs.OfType<PasswordBox>().Single();
+        Require(password.Password.Length == 0 && inputs.OfType<TextBox>().Single(input =>
+            System.Windows.Automation.AutomationProperties.GetName(input).StartsWith("API 反代", StringComparison.Ordinal)).Text.Length == 0,
+            "Saved defaults must never populate override fields.");
         password.Password = "1234:synthetic";
         inputs.OfType<TextBox>().First().Text = "https://t.me/addstickers/test_pack";
+        inputs.OfType<TextBox>().Single(input => System.Windows.Automation.AutomationProperties.GetName(input) == "本地代理")
+            .Text = "socks5h://127.0.0.1:1080";
+        await tg.TestConnection();
+        tg.Options.Children.OfType<Button>().Single(button => Equals(button.Content, "操作日志"))
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Require(log is not null && log.Contains("连接成功") && !log.Contains(password.Password) && !log.Contains("socks5h"),
+            "Operation log must report the outcome without exposing Telegram credentials or proxies.");
+        tg.Options.Children.OfType<Button>().Single(button => Equals(button.Content, "浏览…"))
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Require(downloadFolderPicks == 1 && savedFolder == sandbox, "Choosing a download folder must persist it.");
         await tg.ExportTelegramPackage();
         Require(packageFolderPicks == 0 && packageRequests == 0, "Export must require a parsed pack.");
         await tg.Parse();
@@ -1525,6 +1806,9 @@ internal static class Program
         await Render(tg, () => tg.DetailImage.Source is not null && !tg.PreviewInfo.Text.Contains("加载"));
         Require(tg.PreviewInfo.Text.Contains("图 0") && tg.PreviewInfo.Text.Contains("128 × 64") &&
             tg.Summary.Text.Contains("已选 1 张"), "A stale response must not replace the active detail or selection.");
+        tg.InvertSelection();
+        Require(tg.Summary.Text.Contains("已选 1199 张"), "Invert must include all unselected rows, also outside the viewport.");
+        tg.InvertSelection();
         SavePng(tg, 860, 590, Path.Combine(output, "wpf-telegram-waterfall.png"));
         tg.Scroller.ScrollToEnd();
         await Render(tg, () => tg.Tiles.Children.OfType<StickerResultTile>().Any(tile => tile.Item.Index > 1180 && tile.Picture.Source is not null));
@@ -1566,8 +1850,8 @@ internal static class Program
             "Successful exports must show the ZIP and any source failures.");
 
         var save = tg.Save(all: false, import: false);
-        Require(tg.IsWriting && !host.TryClose() && sent is { Items: [{ Id: "id_0" }], ZipOutput: true },
-            "Download must use the selected row IDs and prevent leaving during writes.");
+        Require(tg.IsWriting && !host.TryClose() && sent is { Items: [{ Id: "id_0" }], ZipOutput: true, Destination: var downloadTo } &&
+            downloadTo == sandbox && downloadFolderPicks == 1, "Download must use the selected IDs and saved path and block leaving.");
         download.SetResult((ok with { Count = 1, Destination = sandbox }, null));
         await save;
         Require(tg.Status.Text.Contains("下载 1 张") && host.TryClose() && password.Password == "",
@@ -1779,7 +2063,7 @@ internal static class Program
         var cache = Path.Combine(output, "send-cache");
         var png = library.Images.First(item => item.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
         var sourceBytes = File.ReadAllBytes(png.Path);
-        var converter = new StickerSendMedia(repository, cache, true);
+        var converter = new StickerSendMedia(cache, true);
         var prepared = await converter.Prepare(png.Path, CancellationToken.None);
         Require(prepared.Path.EndsWith(".gif") && File.Exists(prepared.Path) && prepared.DibV5 is { Length: > 124 },
             "Static send should prepare a cached GIF and a bitmap.");
@@ -1791,7 +2075,7 @@ internal static class Program
         }
         var original = await converter.Prepare(gif.Path, CancellationToken.None);
         Require(original.Path == gif.Path && original.DibV5 is not null, "Animated GIF should be offered as its original file.");
-        var disabled = await new StickerSendMedia(repository, cache, false).Prepare(png.Path, CancellationToken.None);
+        var disabled = await new StickerSendMedia(cache, false).Prepare(png.Path, CancellationToken.None);
         Require(disabled.Path == png.Path && disabled.DibV5 is not null, "Disabled conversion should keep PNG and bitmap.");
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
@@ -2065,13 +2349,16 @@ internal static class Program
                 var all = CategoryButton("全部表情");
                 button.ApplyTemplate();
                 all.ApplyTemplate();
-                var outline = (Border)button.Template.FindName("SelectionOutline", button);
                 var surface = (Border)button.Template.FindName("Surface", button);
+                var hoverSurface = (Border)button.Template.FindName("HoverSurface", button);
+                var fill = ((SolidColorBrush)surface.Background).Color;
                 Require(Selector.GetIsSelected(button) && !Selector.GetIsSelected(all) &&
-                    Equals(outline.BorderBrush, window.FindResource("CategoryOutline")) && outline.BorderThickness == new Thickness(1) &&
-                    Equals(surface.Background, Brushes.Transparent) && Equals(button.Foreground, window.FindResource("Ink")) &&
-                    ((Border)all.Template.FindName("SelectionOutline", all)).BorderBrush is null,
-                    "Only the active category should have a neutral outline, with no blue fill or text.");
+                    Equals(surface.Background, window.FindResource("CategorySelectedSurface")) &&
+                    fill.R == fill.G && fill.G == fill.B && fill.A is > 0 and < 48 &&
+                    surface.BorderThickness == new Thickness(0) && Equals(button.Foreground, window.FindResource("Ink")) &&
+                    !hoverSurface.IsHitTestVisible && hoverSurface.Visibility == Visibility.Hidden &&
+                    Equals(((Border)all.Template.FindName("Surface", all)).Background, Brushes.Transparent),
+                    "Only the active category should have a subtle neutral fill, with no blue or dark outline.");
             }
         }
         finally { window.Close(); }
@@ -2089,7 +2376,7 @@ internal static class Program
         }, offscreen: true);
         try
         {
-            static Image Thumbnail(Button card) => (Image)((Grid)((Border)card.Content).Child).Children[0];
+            static Image Thumbnail(Button card) => ((Grid)((Border)card.Content).Child).Children.OfType<Image>().Single();
             Button[] Cards() => window.Cards.Children.OfType<Button>().ToArray();
             string Name(Button card) => System.Windows.Automation.AutomationProperties.GetName(card);
             void Switch(string category) => window.Categories.Children.OfType<Button>()
@@ -2106,7 +2393,7 @@ internal static class Program
             await Frame();
             await WaitForCards(window, fixtures.Length);
             double offset = window.GalleryScroll.VerticalOffset;
-            var anchor = Cards().Where(card => Canvas.GetTop(card) >= offset + 10).MinBy(Canvas.GetTop)!;
+            var anchor = Cards().Where(card => Canvas.GetTop(card) >= offset + 10).OrderBy(Canvas.GetTop).First();
             var original = Thumbnail(anchor).Source;
             var pointer = new Point(Canvas.GetLeft(anchor) + anchor.Width / 2, Canvas.GetTop(anchor) + anchor.Height / 2 - offset);
             Require(window.Gallery.ApplyWheel(120, ModifierKeys.Control, pointer) &&
@@ -2240,7 +2527,7 @@ internal static class Program
 
     private static async Task CheckLayoutPersistence(MainWindow window, string repo, string data)
     {
-        var initial = await LibrarySnapshot.ReadAsync(repo, data);
+        var initial = await LibrarySnapshot.ReadAsync(data);
         var quick = new QuickPanel(initial, new QuickPanelResults(initial), offscreen: true);
         quick.ThumbnailSizeChanged += window.SetQuickThumbnailSize;
         quick.Search.Text = "stay";
@@ -2280,7 +2567,7 @@ internal static class Program
             quick.Gallery.ApplyWheel(120, ModifierKeys.Control);
             window.FlushSettings(); // Queue the newer step before the first reply.
             await saved.Task.WaitAsync(TimeSpan.FromSeconds(8));
-            var persisted = await LibrarySnapshot.ReadAsync(repo, data);
+            var persisted = await LibrarySnapshot.ReadAsync(data);
             Require(seen.Count >= 2 && seen.All(size => size == 140) && committed.SequenceEqual(new[] { 130, 140 }) &&
                 quickSteps.SequenceEqual(new[] { (84, 78), (84, 84) }) && quick.Search.Text == "stay" &&
                 persisted.Flag("sidebar_is_grid_mode", false) &&

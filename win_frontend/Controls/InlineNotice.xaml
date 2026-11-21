@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Focusable="False" IsHitTestVisible="False" Visibility="Collapsed"
              AutomationProperties.LiveSetting="Polite">
-  <Border Background="{DynamicResource NoticeSurface}" BorderBrush="{DynamicResource Divider}"
+  <Border x:Name="NoticeCard" Background="{DynamicResource NoticeSurface}" BorderBrush="{DynamicResource Divider}"
           BorderThickness="1" CornerRadius="8" Padding="12,10">
     <DockPanel>
       <TextBlock x:Name="Symbol" DockPanel.Dock="Left" VerticalAlignment="Top" Margin="0,0,10,0"

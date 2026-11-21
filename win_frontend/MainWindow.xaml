@@ -28,8 +28,9 @@
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
     <controls:WallpaperSurface x:Name="Wallpaper" Grid.RowSpan="2"/>
-    <StackPanel x:Name="Caption" Orientation="Horizontal" HorizontalAlignment="Right"/>
-    <Grid x:Name="GalleryPage" Grid.Row="1" Background="Transparent">
+    <StackPanel x:Name="Caption" Orientation="Horizontal" HorizontalAlignment="Right" Panel.ZIndex="1"/>
+    <Grid x:Name="PageArea" Grid.Row="1" ClipToBounds="True">
+    <Grid x:Name="GalleryPage" Background="Transparent">
       <Grid.ColumnDefinitions>
         <ColumnDefinition x:Name="SidebarWidth" Width="128" MinWidth="60" MaxWidth="400"/>
         <ColumnDefinition Width="4"/>
@@ -88,12 +89,16 @@
         </Border>
       </Grid>
     </Grid>
-    <controls:FluentPageHost x:Name="Pages" Grid.Row="1"/>
-    <controls:InlineNotice x:Name="GalleryNotice" Grid.Row="1" HorizontalAlignment="Right"
-                           VerticalAlignment="Top" MaxWidth="420" Margin="16,56,16,0"/>
-    <controls:OperationProgress x:Name="ActivityProgress" Grid.Row="1" HorizontalAlignment="Right"
+    <controls:FluentPageHost x:Name="Pages"/>
+    <Image x:Name="PreviousPage" Stretch="Fill" IsHitTestVisible="False" Visibility="Collapsed"/>
+    <Grid ClipToBounds="True" IsHitTestVisible="False">
+      <controls:InlineNotice x:Name="GalleryNotice" HorizontalAlignment="Right"
+                             VerticalAlignment="Top" MaxWidth="420" Margin="16,56,16,0"/>
+    </Grid>
+    <controls:OperationProgress x:Name="ActivityProgress" HorizontalAlignment="Right"
                                 VerticalAlignment="Top" Margin="16,56,16,0" MaxWidth="420"/>
+    </Grid>
     <ProgressBar x:Name="BusyProgress" Grid.RowSpan="2" Height="3" VerticalAlignment="Top"
-                 IsIndeterminate="True" Visibility="Collapsed" Foreground="{DynamicResource Accent}"/>
+                 IsIndeterminate="True" IsHitTestVisible="False" Visibility="Collapsed" Foreground="{DynamicResource Accent}"/>
   </Grid>
 </Window>

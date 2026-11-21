@@ -22,7 +22,7 @@ internal sealed class ResponsiveTilePanel(double preferredSize, ScrollViewer scr
         {
             var top = TranslatePoint(new Point(), scroll).Y + scroll.VerticalOffset;
             var padding = Math.Max(0, scroll.ExtentHeight - RenderSize.Height);
-            var now = Environment.TickCount64;
+            var now = RuntimePrimitives.MonotonicMilliseconds;
             var anchor = pointer is not { } point ? null :
                 gesture is { } previous && now - previous.Time < 300 &&
                 (point - previous.Point).LengthSquared <= 64 &&
@@ -51,7 +51,7 @@ internal sealed class ResponsiveTilePanel(double preferredSize, ScrollViewer scr
         var grid = (tile, columns);
         var zoom = pendingZoom;
         pendingZoom = null;
-        bool animate = zoom is not null && SystemParameters.ClientAreaAnimation;
+        bool animate = zoom is not null && FluentMotion.Enabled(this);
         var before = animate ? new Rect[InternalChildren.Count] : null;
         if (before is not null)
             for (int i = 0; i < before.Length; i++)
@@ -71,7 +71,7 @@ internal sealed class ResponsiveTilePanel(double preferredSize, ScrollViewer scr
                     target = request.Top + bounds.Y + anchor.Fraction * bounds.Height - anchor.ViewY;
             }
             // The ScrollViewer receives its new extent from this arrange pass.
-            target = Math.Clamp(target, 0, Math.Max(0, request.Padding + finalSize.Height - scroll.ViewportHeight));
+            target = RuntimePrimitives.Clamp(target, 0, Math.Max(0, request.Padding + finalSize.Height - scroll.ViewportHeight));
             if (Math.Abs(target - offset) > .01) scroll.ScrollToVerticalOffset(target);
             if (gesture is { } current) gesture = current with { Offset = target };
 
@@ -108,14 +108,14 @@ internal sealed class ResponsiveTilePanel(double preferredSize, ScrollViewer scr
             var child = InternalChildren[i];
             var visual = TileMotion.VisualBounds(child, Bounds(child));
             if (visual.IsEmpty) continue;
-            var x = local.X - Math.Clamp(local.X, visual.Left, visual.Right);
-            var y = local.Y - Math.Clamp(local.Y, visual.Top, visual.Bottom);
+            var x = local.X - RuntimePrimitives.Clamp(local.X, visual.Left, visual.Right);
+            var y = local.Y - RuntimePrimitives.Clamp(local.Y, visual.Top, visual.Bottom);
             var squared = x * x + y * y;
             // Later tiles in the visual tree are drawn on top if animated tiles overlap.
             if (squared > distance) continue;
             (nearest, distance, bounds) = (i, squared, visual);
         }
-        return nearest < 0 ? null : new(nearest, Math.Clamp((local.Y - bounds.Top) / bounds.Height, 0, 1), pointer.Y);
+        return nearest < 0 ? null : new(nearest, RuntimePrimitives.Clamp((local.Y - bounds.Top) / bounds.Height, 0, 1), pointer.Y);
     }
 
     private static Rect Bounds(UIElement child)
@@ -125,6 +125,6 @@ internal sealed class ResponsiveTilePanel(double preferredSize, ScrollViewer scr
         return new Rect(new Point(position.X, position.Y), child.RenderSize);
     }
 
-    private double WidthOrDefault(double width) => double.IsFinite(width) ? width : preferredSize;
-    private double TileSize(double width) => Math.Clamp(WidthOrDefault(width), 1, preferredSize);
+    private double WidthOrDefault(double width) => RuntimePrimitives.IsFinite(width) ? width : preferredSize;
+    private double TileSize(double width) => RuntimePrimitives.Clamp(WidthOrDefault(width), 1, preferredSize);
 }

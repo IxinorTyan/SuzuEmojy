@@ -21,7 +21,6 @@ internal sealed partial class FluentDialog : Window
         Title = title;
         Width = width;
         MaxHeight = maxHeight;
-        FontFamily = owner.FontFamily;
         FluentTheme.Apply(this, library);
         Dismiss.Click += (_, _) => Close();
         Loaded += (_, _) =>
@@ -159,15 +158,25 @@ internal sealed partial class FluentDialog : Window
         return dialog.ShowModal() == true;
     }
 
-    internal static void ShowDetails(Window owner, LibrarySnapshot library, string title, string details)
+    internal static void ShowDetails(Window owner, LibrarySnapshot library, string title, string details, Action? clear = null)
     {
         var dialog = new FluentDialog(owner, library, title, width: 540);
-        dialog.Add(new TextBox
+        var text = new TextBox
         {
             Text = details, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, Height = 220,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalContentAlignment = VerticalAlignment.Stretch,
             Style = (Style)dialog.FindResource("FluentField")
-        });
+        };
+        dialog.Add(text);
+        if (clear is not null)
+        {
+            dialog.Button("复制日志", () =>
+            {
+                try { if (text.Text.Length > 0) Clipboard.SetText(text.Text); }
+                catch (System.Runtime.InteropServices.ExternalException) { text.SelectAll(); }
+            });
+            dialog.Button("清空日志", () => { clear(); text.Clear(); });
+        }
         dialog.Button("关闭", dialog.Close, primary: true);
         dialog.ShowModal();
     }

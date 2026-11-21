@@ -43,7 +43,7 @@ internal sealed class MiddleScrollGesture(double dragWidth, double dragHeight)
         double distance = position.Y - origin.Y;
         double speed = Math.Sign(distance) * Math.Min(2400, Math.Max(0, Math.Abs(distance) - 10) * 12);
         if (speed == 0 || speed * remainder < 0) remainder = 0;
-        double movement = speed * Math.Clamp(elapsedSeconds, 0, .05) + remainder;
+        double movement = speed * RuntimePrimitives.Clamp(elapsedSeconds, 0, .05) + remainder;
         double whole = Math.Truncate(movement);
         remainder = movement - whole;
         return whole;

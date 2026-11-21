@@ -61,7 +61,7 @@ public partial class WallpaperSurface : UserControl
         lock (loadGate)
         {
             if (sharedLoad is { } cached && cached.Asset == asset && cached.Load.TryGetTarget(out var existing) &&
-                !(existing.IsCompletedSuccessfully && existing.Result is null)) return existing;
+                !(existing.Status == TaskStatus.RanToCompletion && existing.Result is null)) return existing;
             var task = Task.Run(() => MediaThumbnail.Load(asset.Path, 2560));
             sharedLoad = (asset, new(task));
             return task;
@@ -93,9 +93,9 @@ public partial class WallpaperSurface : UserControl
 
     internal void ApplyTone(int blur, int brightness, int opacity)
     {
-        blur = Math.Clamp(blur, 0, MaxBlur);
-        brightness = Math.Clamp(brightness, -MaxBrightness, MaxBrightness);
-        opacity = Math.Clamp(opacity, 0, MaxOpacity);
+        blur = RuntimePrimitives.Clamp(blur, 0, MaxBlur);
+        brightness = RuntimePrimitives.Clamp(brightness, -MaxBrightness, MaxBrightness);
+        opacity = RuntimePrimitives.Clamp(opacity, 0, MaxOpacity);
         if (displayedBlur != blur)
         {
             displayedBlur = blur;
