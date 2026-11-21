@@ -1,0 +1,99 @@
+<Window x:Class="SuzuEmojy.Windows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:SuzuEmojy.Windows.Controls"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="SuzuEmojy" Icon="ico.ico" Width="860" Height="640" MinWidth="400" MinHeight="300"
+        WindowStyle="None" WindowStartupLocation="CenterScreen" UseLayoutRounding="True"
+        FontFamily="Segoe UI, Microsoft YaHei" FontSize="13">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="32" ResizeBorderThickness="5"
+                        GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+        <ResourceDictionary Source="Controls/Buttons.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+      <Style x:Key="CaptionButton" TargetType="Button" BasedOn="{StaticResource ToolButton}">
+        <Setter Property="Width" Value="46"/>
+        <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+      </Style>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Grid x:Name="Root" Background="{DynamicResource CanvasColor}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="32"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+    <controls:WallpaperSurface x:Name="Wallpaper" Grid.RowSpan="2"/>
+    <StackPanel x:Name="Caption" Orientation="Horizontal" HorizontalAlignment="Right"/>
+    <Grid x:Name="GalleryPage" Grid.Row="1" Background="Transparent">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition x:Name="SidebarWidth" Width="128" MinWidth="60" MaxWidth="400"/>
+        <ColumnDefinition Width="4"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <Border x:Name="SidebarChrome" BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
+        <ScrollViewer x:Name="SidebarScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Template="{StaticResource FluentScrollTemplate}" controls:FluentScroll.OverlayVerticalBar="True">
+          <StackPanel x:Name="Categories" Margin="8,10,8,10"/>
+        </ScrollViewer>
+      </Border>
+      <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                    ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" Background="Transparent"/>
+      <Grid Grid.Column="2">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="48"/>
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <StackPanel x:Name="Toolbar" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="16,8,16,8">
+          <Border x:Name="SearchFrame" Width="240" Height="32" Background="{DynamicResource SearchSurface}"
+                  BorderBrush="{DynamicResource Divider}" BorderThickness="1,1,1,0" CornerRadius="5">
+            <Grid ClipToBounds="True">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="32"/></Grid.ColumnDefinitions>
+              <Border Grid.ColumnSpan="2" VerticalAlignment="Bottom" Height="1" IsHitTestVisible="False"
+                      Background="{DynamicResource SearchUnderline}"/>
+              <TextBlock x:Name="SearchHint" Text="搜索表情关键词..." IsHitTestVisible="False" FontSize="14"
+                         Foreground="{DynamicResource Hint}" Margin="11,0,0,0" VerticalAlignment="Center"/>
+              <TextBox x:Name="Search" AutomationProperties.Name="搜索表情关键词..." FontSize="14"
+                       Foreground="{DynamicResource Ink}" CaretBrush="{DynamicResource Ink}"
+                       Background="Transparent" BorderThickness="0" Padding="10,0,0,0"
+                       VerticalContentAlignment="Center"/>
+              <Button x:Name="SearchAction" Grid.Column="1" Width="30" Height="30"
+                      Style="{StaticResource ToolButton}"/>
+            </Grid>
+          </Border>
+        </StackPanel>
+        <ScrollViewer x:Name="GalleryScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                      Template="{StaticResource FluentScrollTemplate}" controls:FluentScroll.OverlayVerticalBar="True"
+                      HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly">
+          <Canvas x:Name="Cards" ClipToBounds="True" VerticalAlignment="Top" AutomationProperties.Name="全部表情"/>
+        </ScrollViewer>
+        <Canvas x:Name="GalleryMotion" Grid.Row="1" IsHitTestVisible="False" ClipToBounds="True"/>
+        <Border x:Name="SelectionBar" Grid.Row="2" Height="56" Visibility="Collapsed"
+                Background="{DynamicResource CategorySurface}" BorderBrush="{DynamicResource Divider}"
+                BorderThickness="0,1,0,0">
+          <DockPanel Margin="24,0" VerticalAlignment="Center">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button x:Name="SelectAll" Content="全选" Style="{StaticResource ToolButton}" Width="58"/>
+              <Button x:Name="SelectionActions" Content="批量操作" Style="{StaticResource ToolButton}" Width="72" Visibility="Collapsed"/>
+              <Button x:Name="LeaveSelection" Content="退出多选" Style="{StaticResource ToolButton}" Width="76"/>
+            </StackPanel>
+            <TextBlock x:Name="SelectionCount" VerticalAlignment="Center"/>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Grid>
+    <controls:FluentPageHost x:Name="Pages" Grid.Row="1"/>
+    <controls:InlineNotice x:Name="GalleryNotice" Grid.Row="1" HorizontalAlignment="Right"
+                           VerticalAlignment="Top" MaxWidth="420" Margin="16,56,16,0"/>
+    <controls:OperationProgress x:Name="ActivityProgress" Grid.Row="1" HorizontalAlignment="Right"
+                                VerticalAlignment="Top" Margin="16,56,16,0" MaxWidth="420"/>
+    <ProgressBar x:Name="BusyProgress" Grid.RowSpan="2" Height="3" VerticalAlignment="Top"
+                 IsIndeterminate="True" Visibility="Collapsed" Foreground="{DynamicResource Accent}"/>
+  </Grid>
+</Window>

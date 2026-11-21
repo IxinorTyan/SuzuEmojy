@@ -1,0 +1,47 @@
+<Window x:Class="SuzuEmojy.Windows.Controls.FluentDialog" x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Name="Host" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" SizeToContent="Height"
+        ShowInTaskbar="False" UseLayoutRounding="True" FontSize="14">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="FluentFields.xaml"/>
+        <ResourceDictionary Source="FluentScroll.xaml"/>
+        <ResourceDictionary Source="Buttons.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Grid x:Name="LayoutRoot">
+    <Border Margin="14" CornerRadius="10" Background="{DynamicResource PromptSurface}" IsHitTestVisible="False">
+      <Border.Effect>
+        <DropShadowEffect BlurRadius="20" ShadowDepth="2" Direction="270" Opacity="0.24"/>
+      </Border.Effect>
+    </Border>
+    <Border x:Name="Frame" Margin="14" CornerRadius="10" BorderBrush="{DynamicResource QuickPanelEdge}" BorderThickness="1"
+            Background="{DynamicResource PromptSurface}" Padding="20,13,20,14">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <DockPanel Margin="0,0,0,10">
+          <Button x:Name="Dismiss" DockPanel.Dock="Right" Style="{StaticResource ToolButton}" Width="26" Height="26"
+                  Focusable="False" AutomationProperties.Name="关闭">
+            <Path Width="10" Height="10" Stretch="Uniform" Data="M1,1 L9,9 M1,9 L9,1"
+                  Stroke="{DynamicResource Ink}" StrokeThickness="1.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+          </Button>
+          <TextBlock Text="{Binding Title, ElementName=Host}" FontWeight="SemiBold" FontSize="18"
+                     VerticalAlignment="Center" TextWrapping="Wrap"/>
+        </DockPanel>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Template="{StaticResource FluentScrollTemplate}" Focusable="False">
+          <StackPanel x:Name="Body"/>
+        </ScrollViewer>
+        <StackPanel x:Name="Actions" Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,11,0,0"/>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

@@ -7,13 +7,56 @@ import hashlib
 import tempfile
 import configparser
 from pathlib import Path
-from PIL import Image
+from stat import FILE_ATTRIBUTE_REPARSE_POINT
 
+from services.apng import is_apng, to_gif
 from services.marketface_handler import (
     get_recovered_gif_path,
     is_marketface_candidate,
     recover_marketface_data,
 )
+
+
+def _ignored_path(entry):
+    return entry.is_symlink() or bool(
+        getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _collect_files(root, accept, progress):
+    progress("walk", 0, 0)
+    files = []
+    directory_count = 0
+    pending = [Path(root)] if root else []
+    while pending:
+        directory = pending.pop()
+        directory_count += 1
+        children = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if not _ignored_path(entry):
+                                children.append(Path(entry.path))
+                        elif accept(directory, entry.path) and entry.is_file(follow_symlinks=False) and not _ignored_path(entry):
+                            files.append(entry.path)
+                            if len(files) % 64 == 0:
+                                progress("walk", directory_count, len(files))
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        pending.extend(reversed(children))
+        progress("walk", directory_count, len(files))
+    return files
+
+
+def _checking(files, progress):
+    total = len(files)
+    progress("check", 0, total)
+    for current, path in enumerate(files, 1):
+        yield path
+        progress("check", current, total)
 
 
 class QQExtractor:
@@ -40,24 +83,9 @@ class QQExtractor:
             return False
         try:
             with open(file_path, 'rb') as f:
-                header = f.read(8)
-                if header != b'\x89PNG\r\n\x1a\n':
-                    return False
-                while True:
-                    length_bytes = f.read(4)
-                    if len(length_bytes) < 4:
-                        break
-                    length = int.from_bytes(length_bytes, 'big')
-                    chunk_type = f.read(4)
-                    if chunk_type == b'acTL':
-                        return True
-                    if chunk_type in (b'IDAT', b'IEND'):
-                        break
-                    # 跳过数据块以及 4 字节 CRC
-                    f.seek(length + 4, 1)
-        except Exception:
-            pass
-        return False
+                return is_apng(f)
+        except OSError:
+            return False
 
     @staticmethod
     def get_temp_gif_cache_dir():
@@ -67,83 +95,34 @@ class QQExtractor:
         return temp_dir
 
     @staticmethod
-    def _quantize_gif_frame(frame):
-        """GIF 只有一位透明度：裁掉低覆盖率边缘，避免半透明像素变成实色毛边。"""
-        rgba = frame.convert('RGBA')
-        transparent = rgba.getchannel('A').point(lambda alpha: 255 if alpha < 128 else 0)
-        rgb = rgba.convert('RGB')
-        # 透明像素的 RGB 可能是任意颜色，不应挤占主体的调色板。
-        rgb.paste((0, 0, 0), mask=transparent)
-        indexed = rgb.quantize(
-            colors=255, method=Image.Quantize.MEDIANCUT,
-            dither=Image.Dither.NONE,
-        )
-        # 固定保留最后一个索引，防止量化把不透明颜色与透明色混用。
-        palette = indexed.getpalette()[:765]
-        indexed.putpalette(palette + [0] * (768 - len(palette)))
-        indexed.paste(255, mask=transparent)
-        # 不让 PNG 的 loop 等元数据被 GIF 保存器按另一套语义继承。
-        indexed.info.clear()
-        indexed.info['transparency'] = 255
-        return indexed
-
-    @staticmethod
     def convert_apng_to_gif(apng_path, output_gif_path=None):
         """
         将 APNG 转换为带透明度的标准 GIF 动图。
         如果未指定 output_gif_path，则在系统临时目录生成一个以文件哈希命名的缓存文件。
         返回生成的 gif 路径，若转换失败则返回 None。
         """
-        if not os.path.exists(apng_path):
-            return None
-
-        use_cache = output_gif_path is None
-        if use_cache:
-            try:
-                with open(apng_path, 'rb') as f:
-                    content = f.read()
-                file_hash = hashlib.md5(content).hexdigest()
-            except Exception:
-                file_hash = hashlib.md5(os.fsencode(apng_path)).hexdigest()
-            output_gif_path = os.path.join(QQExtractor.get_temp_gif_cache_dir(), f"{file_hash}_v2.gif")
-
-        # 如果临时缓存已存在且非空，直接返回
-        if use_cache and os.path.exists(output_gif_path) and os.path.getsize(output_gif_path) > 0:
-            return output_gif_path
-
         try:
-            frames = []
-            durations = []
-            with Image.open(apng_path) as im:
-                plays = im.info.get('loop', 0)
-                # APNG 可有不参与动画的默认封面；Pillow seek 已处理 blend/disposal。
-                start = 1 if im.info.get('default_image', False) else 0
-                for index in range(start, getattr(im, 'n_frames', 1)):
-                    im.seek(index)
-                    frames.append(QQExtractor._quantize_gif_frame(im))
-                    dur = im.info.get('duration', 40)
-                    durations.append(dur if dur > 0 else 40)
+            content = Path(apng_path).read_bytes()
+            if output_gif_path is None:
+                file_hash = hashlib.md5(content).hexdigest()
+                output_gif_path = os.path.join(QQExtractor.get_temp_gif_cache_dir(), f"{file_hash}_v3.gif")
+                cached = Path(output_gif_path)
+                if cached.is_file() and cached.stat().st_size:
+                    return output_gif_path
 
-            if not frames:
-                return None
-
-            # 确保目标目录存在
-            os.makedirs(os.path.dirname(os.path.abspath(output_gif_path)), exist_ok=True)
-
-            # APNG loop 是总播放次数，GIF loop 是首次播放之后的重复次数。
-            loop_options = {'loop': 0 if plays == 0 else plays - 1} if plays != 1 else {}
-            # 固定透明背景与索引，禁止保存器重排透明色；disposal=2 清除上一帧。
-            frames[0].save(
-                output_gif_path,
-                save_all=True,
-                append_images=frames[1:],
-                duration=durations,
-                disposal=2,
-                transparency=255,
-                background=255,
-                optimize=False,
-                **loop_options,
-            )
+            result = to_gif(content)
+            target = Path(output_gif_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Parallel readers must never see partially written GIF data.
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                    temporary = Path(output.name)
+                    output.write(result)
+                temporary.replace(target)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
             return output_gif_path
         except Exception as e:
             print(f"APNG 转 GIF 失败 ({apng_path}): {e}")
@@ -445,25 +424,14 @@ class QQExtractor:
         return get_recovered_gif_path(file_path)
 
     @staticmethod
-    def scan_marketface(emoji_root_path):
+    def scan_marketface(emoji_root_path, *, progress=lambda *_: None):
         """扫描 marketface 原图，只返回成功恢复并通过 GIF 校验的文件。"""
         emoji_path = Path(emoji_root_path) if emoji_root_path else None
         if not emoji_path or not emoji_path.exists():
             return []
 
-        recovered_files = []
-        try:
-            for root, _, files in os.walk(str(emoji_path)):
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    if not is_marketface_candidate(file_path):
-                        continue
-                    if recover_marketface_data(file_path) is not None:
-                        recovered_files.append(file_path)
-        except Exception:
-            return []
-
-        return sorted(recovered_files)
+        files = _collect_files(emoji_path, lambda _, path: is_marketface_candidate(path), progress)
+        return sorted(path for path in _checking(files, progress) if recover_marketface_data(path) is not None)
 
     @staticmethod
     def get_emoji_root(userdata_save_path, qq_number):
@@ -483,7 +451,7 @@ class QQExtractor:
         return QQExtractor.get_emoji_root(userdata_save_path, qq_number) / folder_key
 
     @staticmethod
-    def scan_pic_folder(pic_root_path):
+    def scan_pic_folder(pic_root_path, *, progress=lambda *_: None):
         """
         扫描 QQ 收藏图片目录（Pic/日期命名文件夹/Ori 下的原图）。
 
@@ -494,25 +462,11 @@ class QQExtractor:
         if not pic_root or not pic_root.exists():
             return []
 
-        candidates = []
-        try:
-            for root, _, files in os.walk(str(pic_root)):
-                if os.path.basename(root).lower() != 'ori':
-                    continue
-                for filename in files:
-                    candidates.append(os.path.join(root, filename))
-        except Exception:
-            return []
-
-        images = []
-        for file_path in candidates:
-            if QQExtractor.get_actual_extension(file_path):
-                images.append(file_path)
-
-        return sorted(images)
+        files = _collect_files(pic_root, lambda directory, _: directory.name.lower() == 'ori', progress)
+        return sorted(path for path in _checking(files, progress) if QQExtractor.get_actual_extension(path))
 
     @staticmethod
-    def scan_emojis(emoji_root_path, selected_folder=None):
+    def scan_emojis(emoji_root_path, selected_folder=None, *, progress=lambda *_: None):
         """
         针对不同 QQNT 表情分类扫描并筛选图片。
 
@@ -520,9 +474,9 @@ class QQExtractor:
         PNG 派生图和 JPG 原图同时纳入结果。其他分类保持递归扫描行为。
         """
         if selected_folder and selected_folder.lower() == "marketface":
-            return QQExtractor.scan_marketface(emoji_root_path)
+            return QQExtractor.scan_marketface(emoji_root_path, progress=progress)
         if selected_folder and selected_folder.lower() == "pic":
-            return QQExtractor.scan_pic_folder(emoji_root_path)
+            return QQExtractor.scan_pic_folder(emoji_root_path, progress=progress)
 
         emoji_path = Path(emoji_root_path) if emoji_root_path else None
         if not emoji_path or not emoji_path.exists():
@@ -536,19 +490,13 @@ class QQExtractor:
                 return []
 
         # 1. 安全遍历目标目录，确保只扫描允许的文件范围
-        raw_files = []
-        try:
-            for root, _, files in os.walk(str(emoji_path)):
-                for f in files:
-                    raw_files.append(os.path.join(root, f))
-        except Exception:
-            return []
+        raw_files = _collect_files(emoji_path, lambda *_: True, progress)
 
         # 2. 真实图片校验与分组智能竞争
         # groups: { group_key: (best_file_path, best_score) }
         groups = {}
 
-        for file_path_str in raw_files:
+        for file_path_str in _checking(raw_files, progress):
             actual_ext = QQExtractor.get_actual_extension(file_path_str)
             if not actual_ext:
                 continue

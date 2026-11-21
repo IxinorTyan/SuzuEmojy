@@ -51,7 +51,7 @@ except Exception:
 TG_DIRECT_API = "https://api.telegram.org"
 DEF_CF_PROXY = "http://suzu-tg-proxy.1491503128lgz.workers.dev/"
 DEF_PROXY = DEF_CF_PROXY
-DEF_TOKEN = "8544903524:AAGvPab0m0Q6L8qLf023wyPwnKfelpi3gsI"
+DEF_TOKEN = os.environ.get("SUZU_TG_BOT_TOKEN", "")
 
 
 class StickerUnavailableError(RuntimeError):
@@ -116,11 +116,13 @@ class TGStickerDownloader:
         timeout: int = 15,
         retries: int = 2,
         prefer_direct: bool = True,
+        allow_proxy_fallback: bool = True,
+        allow_redirects: bool = True,
     ):
         """
         初始化下载器
 
-        :param bot_token: Telegram Bot Token，留空则使用默认内置 Token
+        :param bot_token: Telegram Bot Token，留空则读取 SUZU_TG_BOT_TOKEN
         :param cf_proxy: Cloudflare Worker 或反向代理基础 URL，留空使用内置备用代理
         :param network_proxy: 标准网络代理（如 "http://127.0.0.1:7890" 或 "socks5://127.0.0.1:1080"）
         :param timeout: 单次 HTTP 请求超时时间（秒）
@@ -128,7 +130,8 @@ class TGStickerDownloader:
         :param prefer_direct: 是否优先尝试官方直连 (默认 True，直连失败自动回退到反代)
         """
         self.bot_token = (bot_token or DEF_TOKEN).strip()
-        self.cf_proxy = (cf_proxy or DEF_CF_PROXY).strip().rstrip("/")
+        self.cf_proxy = (cf_proxy or (DEF_CF_PROXY if allow_proxy_fallback else "")).strip().rstrip("/")
+        self.allow_redirects = allow_redirects
         self.timeout = timeout
         self.retries = retries
         self.prefer_direct = prefer_direct
@@ -150,6 +153,8 @@ class TGStickerDownloader:
     @property
     def candidate_bases(self) -> List[str]:
         """获取候选 API 基础 URL 列表 (直连优先或反代优先)"""
+        if not self.cf_proxy or self.cf_proxy == TG_DIRECT_API:
+            return [TG_DIRECT_API]
         if self._active_base_url:
             # 若已确定有效 base_url，优先使用，备选为另一方
             alt = self.cf_proxy if self._active_base_url == TG_DIRECT_API else TG_DIRECT_API
@@ -189,7 +194,8 @@ class TGStickerDownloader:
             try:
                 parsed = urlparse(s)
                 query = parse_qs(parsed.query)
-                domain = (query.get("domain", [""])[0]).lower()
+                host = parsed.netloc.lower()
+                domain = (query.get("domain", [""])[0]).lower() if host == "resolve" else host
                 name = query.get("set", [""])[0] or query.get("start", [""])[0]
                 if domain in ("addstickers", "addemoji") and re.match(r"^[A-Za-z0-9_]+$", name):
                     return {"name": name, "route": domain, "source": "deeplink"}
@@ -220,10 +226,13 @@ class TGStickerDownloader:
             url = self._api_url_for_base(base, method)
             for attempt in range(self.retries):
                 try:
-                    resp = self.session.get(url, params=params, timeout=self.timeout)
+                    options = {} if self.allow_redirects else {"allow_redirects": False}
+                    resp = self.session.get(url, params=params, timeout=self.timeout, **options)
+                    if not self.allow_redirects and 300 <= resp.status_code < 400:
+                        raise RuntimeError("Telegram API returned a redirect")
                     if resp.status_code == 429:
                         retry_after = int(resp.headers.get("Retry-After", 2))
-                        time.sleep(max(retry_after, 2))
+                        time.sleep(max(retry_after, 2) if self.allow_redirects else min(max(retry_after, 2), 5))
                         continue
                     data = resp.json()
                     if not data.get("ok"):
@@ -376,10 +385,13 @@ class TGStickerDownloader:
             url = self._file_url_for_base(base, file_path)
             for attempt in range(self.retries):
                 try:
-                    resp = self.session.get(url, timeout=self.timeout)
+                    options = {} if self.allow_redirects else {"allow_redirects": False}
+                    resp = self.session.get(url, timeout=self.timeout, **options)
+                    if not self.allow_redirects and 300 <= resp.status_code < 400:
+                        raise RuntimeError("Telegram file endpoint returned a redirect")
                     if resp.status_code == 429:
                         retry_after = int(resp.headers.get("Retry-After", 2))
-                        time.sleep(max(retry_after, 2))
+                        time.sleep(max(retry_after, 2) if self.allow_redirects else min(max(retry_after, 2), 5))
                         continue
                     # 反代自身的 404 可能只是路由故障，不能据此认定贴纸丢失。
                     if base == TG_DIRECT_API and resp.status_code in (404, 410):

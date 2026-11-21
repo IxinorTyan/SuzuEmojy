@@ -1,0 +1,168 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceDictionary Source="FluentScroll.xaml"/>
+  </ResourceDictionary.MergedDictionaries>
+  <Style x:Key="FluentMenuShadow" TargetType="Border">
+    <Setter Property="CornerRadius" Value="9"/>
+    <Setter Property="Background" Value="{DynamicResource FluentMenuSurface}"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
+    <Setter Property="Effect">
+      <Setter.Value><DropShadowEffect BlurRadius="24" ShadowDepth="5" Direction="270" Opacity="0.18"/></Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="FluentMenuCard" TargetType="Border">
+    <Setter Property="CornerRadius" Value="9"/>
+    <Setter Property="Padding" Value="0,6"/>
+    <Setter Property="MinWidth" Value="132"/>
+    <Setter Property="Background" Value="{DynamicResource FluentMenuSurface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource FluentMenuEdge}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style x:Key="FluentMenuRow" TargetType="Border">
+    <Setter Property="Margin" Value="6,0"/>
+    <Setter Property="Padding" Value="12,0,10,0"/>
+    <Setter Property="CornerRadius" Value="5"/>
+    <Setter Property="Height" Value="28"/>
+    <Setter Property="Background" Value="Transparent"/>
+  </Style>
+  <Style x:Key="FluentMenu" TargetType="ContextMenu">
+    <Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei"/>
+    <Setter Property="FontSize" Value="14"/>
+    <Setter Property="Foreground" Value="{DynamicResource FluentMenuInk}"/>
+    <Setter Property="UseLayoutRounding" Value="True"/>
+    <Setter Property="SnapsToDevicePixels" Value="True"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ContextMenu">
+          <Grid>
+            <Border Margin="12,8,12,20" Style="{StaticResource FluentMenuShadow}"/>
+            <Border x:Name="MenuCard" Margin="12,8,12,20" Style="{StaticResource FluentMenuCard}">
+              <DockPanel>
+                <ContentPresenter x:Name="Heading" DockPanel.Dock="Top" Focusable="False" IsHitTestVisible="False"
+                                  Content="{Binding Heading, RelativeSource={RelativeSource TemplatedParent}}"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              Template="{StaticResource FluentScrollTemplate}">
+                  <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"
+                                  KeyboardNavigation.TabNavigation="Cycle"/>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <DataTemplate x:Key="FluentMenuLiteralLabel">
+    <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+  </DataTemplate>
+  <Style x:Key="FluentMenuItem" TargetType="MenuItem">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Foreground" Value="{DynamicResource FluentMenuInk}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="MenuItem">
+          <Border x:Name="Row" Style="{StaticResource FluentMenuRow}">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="{DynamicResource FluentMenuMarkColumn}"/>
+                <ColumnDefinition Width="{DynamicResource FluentMenuIconColumn}"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Path x:Name="Mark" Width="14" Height="10" Stretch="Fill" VerticalAlignment="Center"
+                    HorizontalAlignment="Left" Visibility="Hidden" StrokeThickness="1.4"
+                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                    Stroke="{TemplateBinding Foreground}" Data="M1,5 L4.5,8.5 11,1"/>
+              <ContentPresenter x:Name="Icon" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                ContentSource="Icon" IsHitTestVisible="False"/>
+              <ContentPresenter x:Name="Label" Grid.Column="2" VerticalAlignment="Center"
+                                ContentSource="Header" RecognizesAccessKey="True"/>
+            </Grid>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="Icon" Value="{x:Null}">
+              <Setter TargetName="Icon" Property="Visibility" Value="Collapsed"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+            </Trigger>
+            <Trigger Property="IsHighlighted" Value="True">
+              <Setter TargetName="Row" Property="Background" Value="{DynamicResource FluentMenuHover}"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Row" Property="Background" Value="{DynamicResource FluentMenuHover}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter TargetName="Row" Property="Opacity" Value="0.45"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="FluentSubmenuHeader" TargetType="MenuItem" BasedOn="{StaticResource FluentMenuItem}">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="MenuItem">
+          <Grid>
+            <Border x:Name="Row" Style="{StaticResource FluentMenuRow}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="{DynamicResource FluentMenuMarkColumn}"/>
+                  <ColumnDefinition Width="{DynamicResource FluentMenuIconColumn}"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <ContentPresenter x:Name="Label" Grid.Column="2" VerticalAlignment="Center"
+                                  ContentSource="Header" RecognizesAccessKey="True"/>
+                <Path x:Name="SubmenuArrow" Grid.Column="3" Margin="14,0,2,0" VerticalAlignment="Center"
+                      Data="M1,1 L5,5 1,9" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.2"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+              </Grid>
+            </Border>
+            <Popup x:Name="PART_Popup" AllowsTransparency="True" Focusable="False" Placement="Right"
+                   VerticalOffset="-7" PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
+                   IsOpen="{Binding IsSubmenuOpen, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}">
+              <Grid Background="Transparent">
+                <Border Margin="0,0,0,12" Style="{StaticResource FluentMenuShadow}"/>
+                <Border x:Name="SubmenuCard" Margin="0,0,0,12" Style="{StaticResource FluentMenuCard}">
+                  <ScrollViewer x:Name="SubMenuScrollViewer" VerticalScrollBarVisibility="Auto"
+                                HorizontalScrollBarVisibility="Disabled" Focusable="False"
+                                Template="{StaticResource FluentScrollTemplate}">
+                    <ItemsPresenter x:Name="ItemsPresenter" KeyboardNavigation.DirectionalNavigation="Cycle"
+                                    KeyboardNavigation.TabNavigation="Cycle"/>
+                  </ScrollViewer>
+                </Border>
+              </Grid>
+            </Popup>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsSubmenuOpen" Value="True">
+              <Setter TargetName="Row" Property="Background" Value="{DynamicResource FluentMenuHover}"/>
+            </Trigger>
+            <Trigger Property="IsHighlighted" Value="True">
+              <Setter TargetName="Row" Property="Background" Value="{DynamicResource FluentMenuHover}"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Row" Property="Background" Value="{DynamicResource FluentMenuHover}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter TargetName="Row" Property="Opacity" Value="0.45"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="FluentMenuSeparator" TargetType="Separator">
+    <Setter Property="Height" Value="9"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Separator">
+          <Border Height="1" VerticalAlignment="Center" Background="{DynamicResource FluentMenuEdge}"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+</ResourceDictionary>

@@ -9,10 +9,10 @@ from dataclasses import dataclass, field
 from threading import Semaphore
 
 from PIL import Image
-from PySide6.QtCore import QThread, Signal
 
 
 RESERVED = {"全部表情", "未分类", "新建分类", "全部", "最近", "all"}
+IMPORT_FORMATS = ('.png', '.apng', '.jpg', '.jpeg', '.gif', '.webp', '.webm', '.tgs')
 
 
 def category_name(name, fallback=None):
@@ -117,14 +117,11 @@ def estimate_memory(path, budget):
         return budget  # Unknown formats/converters run alone.
 
 
-class ImportThread(QThread):
-    progress = Signal(int, int)
-    status = Signal(str)
-    completed = Signal(int, int, int)
-
+class ImportJob:
     def __init__(self, filepaths, storage, target_category, delete_after=False,
-                 parent=None, file_categories=None, folders=None):
-        super().__init__(parent)
+                 file_categories=None, folders=None, *, cancel=lambda: False,
+                 progress=lambda *_: None, status=lambda *_: None, scan_progress=lambda *_: None,
+                 ready=lambda *_: None):
         self.filepaths = list(filepaths)
         self.storage = storage
         self.target_category = target_category
@@ -137,11 +134,16 @@ class ImportThread(QThread):
         self.was_cancelled = False
         self._conversion_slots = Semaphore(2)
         self._last_update = 0
+        self.cancel = cancel
+        self.progress = progress
+        self.status = status
+        self.scan_progress = scan_progress
+        self.ready = ready
 
     def report(self, message):
         now = time.monotonic()
         if now - self._last_update >= .1:
-            self.status.emit(message)
+            self.status(message)
             self._last_update = now
 
     def prepare(self, path):
@@ -181,15 +183,20 @@ class ImportThread(QThread):
         committed = []
         try:
             if self.folders:
-                self.status.emit('正在扫描文件夹…')
+                self.status('正在扫描文件夹…')
+                def scanned(directories, images):
+                    self.report(f'已扫描 {directories} 个目录，发现 {images} 张图片')
+                    self.scan_progress(directories, images)
+
                 scan = scan_folders(self.folders, self.filepaths, self.target_category,
-                                    self.storage.SUPPORTED_FORMATS, self.isInterruptionRequested,
-                                    lambda d, n: self.report(f'已扫描 {d} 个目录，发现 {n} 张图片'))
+                                    IMPORT_FORMATS, self.cancel, scanned)
                 self.folder_stats = scan.stats
                 items = scan.items
             else:
                 items = [(p, self.file_categories.get(p, self.target_category)) for p in self.filepaths]
             total = len(items)
+            if total:
+                self.ready(total)
             budget = memory_budget()
             limit = min(8, max(1, (os.cpu_count() or 2) - 1), max(1, budget // (32 * 1024**2)))
             width = 1
@@ -201,7 +208,7 @@ class ImportThread(QThread):
             previous_rate = None
             tuning = total >= 32
             with ThreadPoolExecutor(max_workers=limit, thread_name_prefix='image-import') as pool:
-                while (next_item < total or pending) and not self.isInterruptionRequested():
+                while (next_item < total or pending) and not self.cancel():
                     while next_item < total and len(pending) < width:
                         path, category = items[next_item]
                         estimate = estimate_memory(path, budget)
@@ -213,7 +220,7 @@ class ImportThread(QThread):
                     future, path, category, estimate = pending.popleft()
                     try:
                         prepared = future.result()
-                        if self.isInterruptionRequested():
+                        if self.cancel():
                             break
                         destination, duplicate = self.storage.commit_prepared(prepared, strict=True, promote_duplicate=False)
                         del prepared
@@ -237,7 +244,7 @@ class ImportThread(QThread):
                     stage_count += 1
                     self.parallelism = width
                     self.report(f'正在导入 {processed} / {total}（{width} 路并行）')
-                    self.progress.emit(processed, total)
+                    self.progress(processed, total)
                     if tuning and stage_count >= max(8, width * 4):
                         rate = stage_count / max(.001, time.monotonic() - stage_started)
                         if previous_rate is not None and rate < previous_rate * 1.15:
@@ -253,7 +260,7 @@ class ImportThread(QThread):
                         budget = min(budget, memory_budget())
                 for future, *_ in pending:
                     future.cancel()
-            self.was_cancelled = self.isInterruptionRequested()
+            self.was_cancelled = self.cancel()
         except Exception as exc:
             self.issues.append(str(exc))
             failed += 1
@@ -262,4 +269,11 @@ class ImportThread(QThread):
                 self.storage.order_imported_images(committed)
             except Exception as exc:
                 self.issues.append(f'保存导入顺序失败: {exc}')
-            self.completed.emit(saved, skipped, failed)
+        return saved, skipped, failed
+
+
+def __getattr__(name):
+    if name != "ImportThread":
+        raise AttributeError(name)
+    from services.qt_import_thread import ImportThread
+    return ImportThread

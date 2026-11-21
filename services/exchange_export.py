@@ -52,11 +52,11 @@ class ExchangeExportService:
     - 不调用 storage.py 内任何 save_* / _save_hashes / move_image_to_front
     """
 
-    def __init__(self, base_dir: Optional[str] = None):
+    def __init__(self, base_dir: Optional[str] = None, *, data_dir=None):
         if base_dir is None:
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         self.base_dir = base_dir
-        self.data_dir = os.path.join(self.base_dir, "data")
+        self.data_dir = os.fspath(data_dir) if data_dir is not None else os.path.join(self.base_dir, "data")
         self.images_dir = os.path.join(self.data_dir, "images")
         self.features_db_path = os.path.join(self.data_dir, "features.db")
         self.metadata_db_path = os.path.join(self.data_dir, "metadata.db")
@@ -102,7 +102,8 @@ class ExchangeExportService:
         if os.path.exists(self.images_dir):
             source_files = sorted(
                 name for name in os.listdir(self.images_dir)
-                if os.path.isfile(os.path.join(self.images_dir, name))
+                if (selected_categories is None or name in filename_to_category_refs)
+                and os.path.isfile(os.path.join(self.images_dir, name))
             )
 
         total_files = max(len(source_files), 1)

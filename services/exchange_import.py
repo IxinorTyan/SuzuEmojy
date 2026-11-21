@@ -45,10 +45,10 @@ class ExchangeImportService:
 
     FORMAT_VERSION = 1
 
-    def __init__(self, base_dir: str | os.PathLike[str] | None = None) -> None:
+    def __init__(self, base_dir: str | os.PathLike[str] | None = None, *, data_dir=None) -> None:
         root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parent.parent
         self.base_dir = root
-        self.data_dir = root / "data"
+        self.data_dir = Path(data_dir) if data_dir is not None else root / "data"
         self.images_dir = self.data_dir / "images"
         self.warnings: list[str] = []
 

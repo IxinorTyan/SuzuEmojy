@@ -1,0 +1,24 @@
+<UserControl x:Class="SuzuEmojy.Windows.Controls.OperationProgress"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False" IsHitTestVisible="False" Visibility="Collapsed">
+  <UserControl.Resources>
+    <ResourceDictionary Source="FluentFields.xaml"/>
+  </UserControl.Resources>
+  <Border Background="{DynamicResource NoticeSurface}" BorderBrush="{DynamicResource Divider}"
+          BorderThickness="1" CornerRadius="8" Padding="12,10" MinWidth="220">
+    <StackPanel>
+      <TextBlock x:Name="Heading" FontWeight="SemiBold" Foreground="{DynamicResource Ink}"
+                 AutomationProperties.LiveSetting="Polite"/>
+      <TextBlock x:Name="Detail" MaxWidth="376" TextTrimming="CharacterEllipsis"
+                 Foreground="{DynamicResource Hint}" Margin="0,2,0,9"/>
+      <ProgressBar x:Name="Bar" Height="4" Background="{DynamicResource Divider}"
+                   Foreground="{DynamicResource Accent}" AutomationProperties.LabeledBy="{Binding ElementName=Heading}"/>
+      <DockPanel x:Name="Actions" Margin="0,8,0,0" Visibility="Collapsed">
+        <Button x:Name="CancelButton" DockPanel.Dock="Right" Content="取消" Visibility="Collapsed"
+                Margin="9,0,0,0" Style="{StaticResource FluentPushButton}"/>
+        <TextBlock x:Name="Waiting" VerticalAlignment="Center" Foreground="{DynamicResource Hint}"/>
+      </DockPanel>
+    </StackPanel>
+  </Border>
+</UserControl>

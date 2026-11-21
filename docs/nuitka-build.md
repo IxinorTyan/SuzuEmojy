@@ -2,6 +2,8 @@
 
 照常运行 `python build_nuitka.py` 或 `build_nuitka.bat`。
 
+离线发布首次打包前，先按 [精简 FFmpeg 构建说明](ffmpeg-minimal.md) 生成转码器。这一步只在构建机上运行，发布包仍自带 FFmpeg。
+
 - 默认按 CPU 和物理内存限制 C 编译并发：给系统预留 4 GiB，每个编译进程预算 2 GiB。这是避免高并发导致换页的保守估算，不是内存硬限制，也不保证所有机器都更快。这台约 16 GB、16 线程的机器默认使用 5 个进程。
 - 可以用 `python build_nuitka.py --jobs 8` 手动调整。比较日志中的 `Nuitka compilation` 耗时，选择适合自己机器的并发数。
 - 更新器使用稳定的 `dist/updater-dist` 输出和 `dist/updater-build` 工作目录。每次仍运行 PyInstaller 的依赖检查；发布目录重建不会再强制重建相同的更新器。

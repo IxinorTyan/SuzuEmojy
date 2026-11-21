@@ -1,5 +1,6 @@
 import argparse
 import ctypes
+import hashlib
 import os
 import subprocess
 import sys
@@ -9,6 +10,25 @@ from time import perf_counter
 
 
 ROOT = Path(__file__).resolve().parent
+FFMPEG_SOURCE_ARCHIVE = "SuzuEmojy-FFmpeg-sources.tar"
+
+
+def minimal_ffmpeg_path(*, dry_run=False, output_dir=None):
+    output = Path(output_dir) if output_dir is not None else ROOT / "dist" / "ffmpeg-minimal"
+    executable = output / "ffmpeg.exe"
+    if dry_run:
+        return executable
+
+    recipe = ROOT / "scripts" / "build_ffmpeg_minimal.sh"
+    marker = output / "recipe.sha256"
+    required = (executable, output / "THIRD_PARTY.txt", output / FFMPEG_SOURCE_ARCHIVE, marker)
+    if all(path.is_file() and path.stat().st_size > 0 for path in required):
+        if marker.read_text(encoding="ascii").strip() == hashlib.sha256(recipe.read_bytes()).hexdigest():
+            return executable
+    raise RuntimeError(
+        "缺少精简 FFmpeg 构建产物，或构建配方已更新。"
+        "请先在 Git Bash 中运行 bash scripts/build_ffmpeg_minimal.sh，详见 docs/ffmpeg-minimal.md。"
+    )
 
 
 def memory_capacity():
@@ -121,6 +141,7 @@ def build_launcher_stub(release_dir):
 
 
 def nuitka_command(jobs, ffmpeg_exe):
+    ffmpeg_exe = Path(ffmpeg_exe)
     return [
         sys.executable, "-m", "nuitka",
         "--standalone",
@@ -145,8 +166,9 @@ def nuitka_command(jobs, ffmpeg_exe):
         "--nofollow-import-to=PySide6.QtPdf",
         "--nofollow-import-to=PySide6.QtPdfWidgets",
 
-        # imageio-ffmpeg 只用于定位 FFmpeg；发布包仅携带实际需要的单个可执行文件。
-        "--include-data-file=" + ffmpeg_exe + "=ffmpeg/ffmpeg.exe",
+        # 保留原运行时路径，离线版不依赖系统 FFmpeg 或 imageio-ffmpeg。
+        f"--include-data-file={ffmpeg_exe}=ffmpeg/ffmpeg.exe",
+        f"--include-data-file={ffmpeg_exe.with_name('THIRD_PARTY.txt')}=ffmpeg/THIRD_PARTY.txt",
 
         # ---- 体积优化：禁止无用的 OpenCV/NumPy 整套依赖进入发布包 ----
         "--nofollow-import-to=cv2",
@@ -197,9 +219,7 @@ def build_environment():
 def main(argv=None):
     args = parse_args(argv)
     os.chdir(ROOT)
-    import imageio_ffmpeg
-
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_exe = minimal_ffmpeg_path(dry_run=args.dry_run)
     cmd = nuitka_command(args.jobs, ffmpeg_exe)
     print(f"Compiler processes: {args.jobs} (override with --jobs N)")
     print("Compiler cache settings: preserved; updater: incremental; ZIP: DEFLATE level 6")
@@ -300,6 +320,9 @@ def main(argv=None):
         print("\n====================================")
         from scripts.package_release import package_release
         package_release(release_dir, "standalone", clean=args.clean)
+        sources = Path(release_dir).parent / FFMPEG_SOURCE_ARCHIVE
+        shutil.copy2(ffmpeg_exe.with_name(FFMPEG_SOURCE_ARCHIVE), sources)
+        print(f"FFmpeg corresponding source (publish alongside ZIP): {sources.resolve()}")
         print(f"Total build and packaging: {perf_counter() - started:.1f}s")
         print("All Done!")
         print(f"Clean release package is ready at: {os.path.abspath(release_dir)}")

@@ -1,0 +1,68 @@
+<Window x:Class="SuzuEmojy.Windows.QuickPanel"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:SuzuEmojy.Windows.Controls"
+        Title="SuzuEmojy" Icon="ico.ico" Width="360" Height="480"
+        Background="Transparent" AllowsTransparency="True" WindowStyle="None"
+        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        FontFamily="Segoe UI, Microsoft YaHei" FontSize="14" UseLayoutRounding="True">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+        <ResourceDictionary Source="Controls/Buttons.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Border x:Name="Root" Background="{DynamicResource QuickPanelSurface}" CornerRadius="8"
+          BorderBrush="{DynamicResource QuickPanelEdge}" BorderThickness="1">
+    <Grid>
+      <controls:WallpaperSurface x:Name="Wallpaper" ClipRadius="7"/>
+      <Grid Margin="19">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="32"/>
+        <RowDefinition Height="10"/>
+        <RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+      <Border CornerRadius="5" Background="{DynamicResource SearchSurface}" BorderThickness="1">
+        <Border.Style>
+          <Style TargetType="Border">
+            <Setter Property="BorderBrush" Value="{DynamicResource Divider}"/>
+            <Style.Triggers>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+              </Trigger>
+            </Style.Triggers>
+          </Style>
+        </Border.Style>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="32"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock x:Name="SearchHint" Text="搜索关键词..." IsHitTestVisible="False"
+                     Foreground="{DynamicResource Hint}" Margin="10,0,0,0" VerticalAlignment="Center"/>
+          <TextBox x:Name="Search" AutomationProperties.Name="搜索关键词..." Padding="10,0,0,0"
+                   VerticalContentAlignment="Center" Background="Transparent" BorderThickness="0"
+                   CaretBrush="{DynamicResource Ink}" Foreground="{DynamicResource Ink}"/>
+          <Button x:Name="ClearSearch" Grid.Column="1" Width="28" Height="28" Visibility="Collapsed"
+                  AutomationProperties.Name="清除" Style="{StaticResource ToolButton}">
+            <Path Width="9" Height="9" Stretch="Uniform" Stroke="{DynamicResource Ink}"
+                  StrokeThickness="1" StrokeEndLineCap="Round" Data="M3,3 L13,13 M13,3 L3,13"/>
+          </Button>
+          <Button x:Name="SearchAction" Grid.Column="2" Width="28" Height="28" AutomationProperties.Name="搜索关键词..."
+                  Style="{StaticResource ToolButton}">
+            <Path Width="11" Height="11" Stretch="Uniform" Stroke="{DynamicResource Ink}"
+                  StrokeThickness="1" StrokeEndLineCap="Round" Data="M7,1 A5,5 0 1 0 7,11 A5,5 0 1 0 7,1 M11,10 L15,15"/>
+          </Button>
+        </Grid>
+      </Border>
+      <ScrollViewer x:Name="GalleryScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled" Template="{StaticResource FluentScrollTemplate}">
+        <Canvas x:Name="Cards" ClipToBounds="True" VerticalAlignment="Top"/>
+      </ScrollViewer>
+      <TextBlock x:Name="Empty" Grid.Row="2" VerticalAlignment="Top" HorizontalAlignment="Center"
+                 Foreground="{DynamicResource Hint}" IsHitTestVisible="False"/>
+      </Grid>
+    </Grid>
+  </Border>
+</Window>

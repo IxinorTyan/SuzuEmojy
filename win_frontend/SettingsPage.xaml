@@ -1,0 +1,18 @@
+<UserControl x:Class="SuzuEmojy.Windows.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False" FontSize="13" UseLayoutRounding="True">
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Controls/Buttons.xaml"/>
+        <ResourceDictionary Source="Controls/FluentFields.xaml"/>
+        <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto"
+                HorizontalScrollBarVisibility="Disabled" Template="{StaticResource FluentScrollTemplate}">
+    <StackPanel x:Name="Groups" Margin="36,0,30,20"/>
+  </ScrollViewer>
+</UserControl>

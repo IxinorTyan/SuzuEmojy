@@ -127,7 +127,7 @@ def split_package(zip_path, output_dir, progress_callback=None, *, max_bytes=MAX
         try:
             for index, items in enumerate(groups, 1):
                 progress(index - 1, len(groups), f"正在写入分卷 {index}/{len(groups)}")
-                path = destination / f"{source.stem[:60]}.part{index:03d}.zip"
+                path = destination / f"{source.stem[:60]}-part{index}.zip"
                 with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED, allowZip64=False) as archive:
                     for name, data in metadata(items).items():
                         archive.writestr(name, data)

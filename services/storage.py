@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import shutil
 import json
 import hashlib
@@ -9,6 +9,8 @@ import sqlite3
 import time
 from functools import wraps
 from PIL import Image
+from services.apng import PNG_SIGNATURE, is_apng, to_gif
+from services.atomic_json import write_json
 from services.exchange_icons import IMAGE_SUFFIXES, resolve_icon_path, portable_icon_path
 
 
@@ -23,7 +25,7 @@ def _storage_locked(method):
 class StorageService:
     SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.webm', '.tgs')
 
-    def __init__(self):
+    def __init__(self, *, data_dir=None):
         import sys
         import threading
         self.lock = threading.RLock()
@@ -34,7 +36,7 @@ class StorageService:
         else:
             self.base_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
         
-        self.data_dir = os.path.join(self.base_dir, "data")
+        self.data_dir = os.path.abspath(data_dir) if data_dir is not None else os.path.join(self.base_dir, "data")
         self.images_dir = os.path.join(self.data_dir, "images")
         self.inbox_dir = os.path.join(self.data_dir, "inbox")
         self.inbox_failed_dir = os.path.join(self.inbox_dir, "failed")
@@ -218,26 +220,7 @@ class StorageService:
     @_storage_locked
     def _atomic_save_json(self, target_file, data, indent=4):
         """原子写入 JSON，防止文件写入损坏"""
-        temp_file = f"{target_file}.{uuid.uuid4()}.tmp"
-        try:
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=indent, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            for attempt in range(5):
-                try:
-                    os.replace(temp_file, target_file)
-                    break
-                except OSError as exc:
-                    if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 4:
-                        raise
-                    time.sleep(0.05 * (2 ** attempt))
-        finally:
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass
+        write_json(target_file, data, indent)
 
     # 别名兼容
     _atomic_write_json = _atomic_save_json
@@ -547,7 +530,7 @@ class StorageService:
         if changed:
             self.save_categories(categories)
 
-    def save_order(self, filepaths):
+    def save_order(self, filepaths, strict=False):
         """保存用户自定义的表情包排序顺序（只保存文件名）- DB 与 JSON 双写"""
         filenames = [self._to_filename(p) for p in filepaths]
         
@@ -557,6 +540,8 @@ class StorageService:
             self._images_dirty = True
         except Exception as e:
             print(f"[ERROR] 保存 order.json 失败: {e}")
+            if strict:
+                raise
 
         # 2. 写 order.db
         try:
@@ -572,6 +557,8 @@ class StorageService:
             self._images_dirty = True
         except Exception as e:
             print(f"[ERROR] 保存 order.db 失败: {e}")
+            if strict:
+                raise
 
     # ==========================
     # 分类 (Categories) - DB 与 JSON 双写双读
@@ -946,15 +933,21 @@ class StorageService:
         try:
             with sqlite3.connect(self.recent_db_path) as conn:
                 cursor = conn.cursor()
+                if cursor.execute("SELECT 1 FROM recent_history LIMIT 1").fetchone() is None:
+                    # First write on a JSON-only library: keep earlier entries in order.
+                    cursor.executemany("INSERT OR IGNORE INTO recent_history (image_path, updated_at) VALUES (?, ?)",
+                                       [(self._to_filename(p), "1970-01-01 00:00:00")
+                                        for p in reversed(recent_paths) if p != abs_path])
                 cursor.execute("""
                     INSERT INTO recent_history (image_path, updated_at)
-                    VALUES (?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(image_path) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-                """, (rel_filename,))
+                    VALUES (?, ?)
+                    ON CONFLICT(image_path) DO UPDATE SET updated_at = excluded.updated_at
+                """, (rel_filename, datetime.now(timezone.utc)
+                      .replace(tzinfo=None).isoformat(sep=" ", timespec="microseconds")))
                 cursor.execute("""
                     DELETE FROM recent_history
                     WHERE image_path NOT IN (
-                        SELECT image_path FROM recent_history ORDER BY updated_at DESC LIMIT ?
+                        SELECT image_path FROM recent_history ORDER BY updated_at DESC, id DESC LIMIT ?
                     )
                 """, (limit,))
                 conn.commit()
@@ -1121,7 +1114,7 @@ class StorageService:
         self._metadata_dirty = False
         return self._metadata_cache
 
-    def save_metadata(self, metadata):
+    def save_metadata(self, metadata, strict=False):
         """保存关键词元数据 - DB 与 JSON 双写"""
         portable_data = {self._to_filename(k): str(v) for k, v in metadata.items()}
 
@@ -1131,6 +1124,8 @@ class StorageService:
             self._metadata_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_metadata JSON 失败: {e}")
+            if strict:
+                raise
 
         # 2. 写 metadata.db
         try:
@@ -1146,6 +1141,8 @@ class StorageService:
             self._metadata_dirty = True
         except Exception as e:
             print(f"[ERROR] StorageService.save_metadata DB 失败: {e}")
+            if strict:
+                raise
 
     def get_image_keywords(self, filepath):
         metadata = self.get_all_metadata()
@@ -1205,11 +1202,8 @@ class StorageService:
             return "gif"
 
         # PNG 魔数: 89 50 4E 47 0D 0A 1A 0A
-        if data_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-            # 检查是否为 APNG
-            if b"acTL" in data_bytes[:1024]:
-                return "apng"
-            return "png"
+        if data_bytes.startswith(PNG_SIGNATURE):
+            return "apng" if is_apng(io.BytesIO(data_bytes)) else "png"
 
         # JPEG 魔数: FF D8 FF
         if data_bytes.startswith(b"\xff\xd8\xff"):
@@ -1321,33 +1315,9 @@ class StorageService:
         # 3. APNG 格式 -> 转换为 GIF
         if fmt == "apng":
             try:
-                from services.qq_extractor import QQExtractor
-                import tempfile
-                fd_in, temp_in = tempfile.mkstemp(suffix=".png")
-                with os.fdopen(fd_in, "wb") as f:
-                    f.write(data_bytes)
-                temp_gif = None
-                try:
-                    temp_gif = QQExtractor.convert_apng_to_gif(temp_in)
-                    if temp_gif and os.path.exists(temp_gif):
-                        with open(temp_gif, "rb") as f:
-                            gif_bytes = f.read()
-                        return gif_bytes, "gif", True
-                    else:
-                        raise RuntimeError("APNG 转换 GIF 失败")
-                finally:
-                    if os.path.exists(temp_in):
-                        try:
-                            os.remove(temp_in)
-                        except Exception:
-                            pass
-                    if temp_gif and os.path.exists(temp_gif):
-                        try:
-                            os.remove(temp_gif)
-                        except Exception:
-                            pass
+                return to_gif(data_bytes), "gif", True
             except Exception as e:
-                raise RuntimeError(f"APNG 转 GIF 异常: {e}")
+                raise RuntimeError(f"APNG 转 GIF 异常: {e}") from e
 
         # 4. 普通 GIF / PNG / JPEG / BMP / TIFF
         # GIF 不能仅依据文件格式判定为动图：剪贴板发送静态图片时，

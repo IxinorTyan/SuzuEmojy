@@ -1,0 +1,60 @@
+<UserControl x:Class="SuzuEmojy.Windows.ExternalStickerPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fluent="clr-namespace:SuzuEmojy.Windows.Controls"
+             UseLayoutRounding="True">
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Controls/FluentFields.xaml"/>
+        <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <DockPanel Margin="36,0,30,12">
+    <StackPanel DockPanel.Dock="Top">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                    Template="{StaticResource FluentScrollTemplate}" MaxHeight="164">
+        <Border Background="{DynamicResource FieldSurface}" BorderBrush="{DynamicResource SettingCardEdge}"
+                BorderThickness="1" CornerRadius="8" Padding="12,12,6,4">
+          <WrapPanel x:Name="Options"/>
+        </Border>
+      </ScrollViewer>
+      <fluent:OperationProgress x:Name="Work" Visibility="Collapsed" Margin="0,10,0,0"/>
+      <TextBlock x:Name="Status" Foreground="{DynamicResource Ink}" TextWrapping="Wrap"
+                 TextTrimming="CharacterEllipsis" MaxHeight="52" Margin="0,8,0,0" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+    </StackPanel>
+    <DockPanel x:Name="Results" Visibility="Collapsed" Margin="0,6,0,0">
+      <StackPanel DockPanel.Dock="Top">
+        <TextBlock x:Name="Summary" Foreground="{DynamicResource Ink}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <WrapPanel x:Name="Actions"/>
+        <Border x:Name="CleanupConfirmation" Background="{DynamicResource NoticeSurface}" BorderBrush="{DynamicResource Divider}"
+                BorderThickness="1" CornerRadius="8" Visibility="Collapsed" Padding="12,8" Margin="0,0,0,8">
+          <StackPanel>
+            <TextBlock x:Name="CleanupWarning" Foreground="{DynamicResource Ink}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <WrapPanel>
+              <Button x:Name="CancelCleanup" Content="取消" Style="{StaticResource FluentPushButton}" Margin="0,0,8,0"/>
+              <Button x:Name="ConfirmCleanup" Content="移到回收站" Style="{StaticResource FluentPushButton}"/>
+            </WrapPanel>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+      <Border x:Name="Inspector" DockPanel.Dock="Right" Width="246" Margin="12,0,0,0"
+              BorderThickness="1" BorderBrush="{DynamicResource PreviewEdge}" Background="{DynamicResource PreviewSurface}"
+              CornerRadius="8" Padding="9">
+        <DockPanel>
+          <StackPanel x:Name="InspectorText" DockPanel.Dock="Top">
+            <TextBlock x:Name="PreviewTitle" FontSize="15" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Ink}"/>
+            <TextBlock x:Name="PreviewInfo" Foreground="{DynamicResource Ink}" TextWrapping="Wrap"
+                       TextTrimming="CharacterEllipsis" MaxHeight="42" Margin="0,5,0,0"/>
+          </StackPanel>
+          <Image x:Name="DetailImage" Stretch="Uniform" VerticalAlignment="Top" MaxHeight="280" Margin="0,8,0,0"/>
+        </DockPanel>
+      </Border>
+      <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                    Template="{StaticResource FluentScrollTemplate}">
+        <Canvas x:Name="Tiles"/>
+      </ScrollViewer>
+    </DockPanel>
+  </DockPanel>
+</UserControl>

@@ -1,5 +1,6 @@
 """Build-cache isolation, invalidation, and unchanged release compression."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -68,6 +69,30 @@ class BuildPackagingTests(unittest.TestCase):
         self.assertEqual(env["CFLAGS"], "-march=x86_64_v3")
         self.assertEqual(env["ZIG_GLOBAL_CACHE_DIR"], "persist")
         self.assertEqual(env["NUITKA_CACHE_DIR"], "persist-nuitka")
+
+    def test_standalone_uses_the_minimal_binary_and_keeps_runtime_path(self):
+        executable = build.minimal_ffmpeg_path(dry_run=True)
+        recipe = self.root / "scripts" / "build_ffmpeg_minimal.sh"
+        recipe.write_bytes(b"initial recipe")
+        with self.assertRaisesRegex(RuntimeError, "build_ffmpeg_minimal.sh"):
+            build.minimal_ffmpeg_path()
+
+        executable.parent.mkdir()
+        for name in ("ffmpeg.exe", "THIRD_PARTY.txt", build.FFMPEG_SOURCE_ARCHIVE):
+            executable.with_name(name).write_bytes(b"test release input")
+        executable.with_name("recipe.sha256").write_text(
+            hashlib.sha256(recipe.read_bytes()).hexdigest(), encoding="ascii")
+        self.assertEqual(build.minimal_ffmpeg_path(), executable)
+        command = build.nuitka_command(4, executable)
+        self.assertIn(f"--include-data-file={executable}=ffmpeg/ffmpeg.exe", command)
+        self.assertIn(
+            f"--include-data-file={executable.with_name('THIRD_PARTY.txt')}=ffmpeg/THIRD_PARTY.txt",
+            command,
+        )
+        self.assertIn("--nofollow-import-to=imageio_ffmpeg", command)
+        recipe.write_bytes(b"updated recipe")
+        with self.assertRaisesRegex(RuntimeError, "build_ffmpeg_minimal.sh"):
+            build.minimal_ffmpeg_path()
 
     def test_updater_cache_survives_release_recreation(self):
         with patch.object(packaging.subprocess, "run", side_effect=self.fake_compile) as run:

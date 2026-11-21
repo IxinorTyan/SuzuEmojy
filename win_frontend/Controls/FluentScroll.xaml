@@ -1,0 +1,62 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:SuzuEmojy.Windows.Controls"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+  <Style x:Key="ThinScrollbar" TargetType="ScrollBar">
+    <Setter Property="Width" Value="6"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ScrollBar">
+          <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"
+                 Minimum="{TemplateBinding Minimum}"
+                 Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}"
+                 ViewportSize="{TemplateBinding ViewportSize}">
+            <Track.Resources>
+              <sys:Double x:Key="{x:Static SystemParameters.VerticalScrollBarButtonHeightKey}">60</sys:Double>
+            </Track.Resources>
+            <Track.Thumb>
+              <Thumb MinHeight="30">
+                <Thumb.Template>
+                  <ControlTemplate TargetType="Thumb">
+                    <Grid Background="Transparent">
+                      <Border x:Name="ThumbFill" Margin="1,0,2,0" CornerRadius="2"
+                              Opacity="0.65" Background="{DynamicResource ScrollThumb}"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="ThumbFill" Property="Opacity" Value="1"/>
+                      </Trigger>
+                      <Trigger Property="IsDragging" Value="True">
+                        <Setter TargetName="ThumbFill" Property="Opacity" Value="1"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Track.Thumb>
+          </Track>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <ControlTemplate x:Key="FluentScrollTemplate" TargetType="ScrollViewer">
+    <Grid Background="Transparent">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" CanContentScroll="{TemplateBinding CanContentScroll}"
+                              Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"/>
+      <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Column="1" Orientation="Vertical" Margin="0,15,0,15"
+                 Width="6" MinWidth="0"
+                 Style="{StaticResource ThinScrollbar}" Maximum="{TemplateBinding ScrollableHeight}"
+                 ViewportSize="{TemplateBinding ViewportHeight}" Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"
+                 Value="{Binding VerticalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
+    </Grid>
+    <ControlTemplate.Triggers>
+      <Trigger Property="controls:FluentScroll.OverlayVerticalBar" Value="True">
+        <Setter TargetName="PART_ScrollContentPresenter" Property="Grid.ColumnSpan" Value="2"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+</ResourceDictionary>

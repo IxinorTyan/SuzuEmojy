@@ -4,7 +4,6 @@ import time
 import shutil
 import tempfile
 import subprocess
-import zipfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,6 +38,8 @@ from services.tg_downloader import (
     TG_DIRECT_API
 )
 from services.i18n import t, i18n_engine
+from services.exchange_export import ExchangeExportService
+from services.tg_package_zip import EmptyTelegramPackage, stage_tg_package
 from fluent_ui.views.setting_view import disable_wheel_scroll_adjustment
 from fluent_ui.components.rotating_chevron_button import RotatingChevronButton
 from fluent_ui.components.state_tool_tip_manager import StateToolTipManager
@@ -99,10 +100,10 @@ class TGHelpDialog(QDialog):
                 "ja": """<div style="font-family: 'Segoe UI', 'Yu Gothic', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">☁️ Cloudflare Workers プロキシが必要な理由</h3><p>一部のネットワークでは <code>api.telegram.org</code> に直接アクセスできません。本ツールは直接接続を優先し、必要に応じて Worker プロキシへフォールバックするスマートルーティングを使用します。独自の安定した経路を使う場合は、Cloudflare に無料の転送 Worker をデプロイできます。</p><h3 style="color: #0078d4;">🚀 簡単なデプロイ手順</h3><ol><li><a href="https://dash.cloudflare.com/">Cloudflare ダッシュボード</a>にログインし、<b>Workers & Pages</b>を開いて<b>Create Application</b> → <b>Create Worker</b>をクリックします。</li><li><b>Deploy</b>で既定のテンプレートをデプロイし、<b>Quick Edit</b>をクリックします。</li><li>エディターのコードを消去し、下にある<b>Worker プロキシスクリプト</b>を貼り付けて<b>Save and Deploy</b>をクリックします。</li><li>デプロイ後、<code>https://your-worker.workers.dev</code>のような Worker ドメインをコピーし、本ツールの詳細設定にある<b>CF Proxy URL</b>へ入力して<b>接続テスト</b>をクリックします。</li></ol></div>"""
             },
             "token": {
-                "zh": """<div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 如何免费获取 Telegram Bot Token？</h3><p>本工具已<b>内置默认 Bot Token</b>，通常情况下您无需配置即可直接使用。<br/>如果您需要长期稳定下载、避免公用 Token 偶尔触发 Telegram 速率限制，建议向官方申请一个属于您自己的免费 Token。</p><h3 style="color: #0078d4;">📝 获取步骤（仅需 1 分钟）</h3><ol><li>在 Telegram 中搜索官方机器人 <b>@BotFather</b> 并开启对话，或访问 <a href="https://t.me/BotFather">https://t.me/BotFather</a>；</li><li>向 BotFather 发送命令 <code>/newbot</code>；</li><li>按照提示输入机器人的<b>昵称</b>（如 <code>MyStickerTool</code>）和<b>用户名</b>（需以 <code>bot</code> 结尾，如 <code>my_sticker_dl_bot</code>）；</li><li>创建成功后，BotFather 会发送一段 HTTP API Token（格式类似 <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>）；</li><li>将 Token 复制并粘贴到本软件高级配置的 <b>Bot Token</b> 栏中，点击<b>测试连通性</b>即可完成配置。</li></ol></div>""",
-                "zh_TW": """<div style="font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 如何免費取得 Telegram Bot Token？</h3><p>本工具已<b>內建預設 Bot Token</b>，通常不需設定即可直接使用。<br/>若您需要長期穩定下載，避免共用 Token 偶爾觸發 Telegram 速率限制，建議向官方申請一個屬於自己的免費 Token。</p><h3 style="color: #0078d4;">📝 取得步驟（只需 1 分鐘）</h3><ol><li>在 Telegram 搜尋官方機器人 <b>@BotFather</b> 並開始對話，或造訪 <a href="https://t.me/BotFather">https://t.me/BotFather</a>；</li><li>向 BotFather 傳送指令 <code>/newbot</code>；</li><li>依照提示輸入機器人的<b>暱稱</b>（如 <code>MyStickerTool</code>）與<b>使用者名稱</b>（需以 <code>bot</code> 結尾，如 <code>my_sticker_dl_bot</code>）；</li><li>建立成功後，BotFather 會傳送一段 HTTP API Token（格式類似 <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>）；</li><li>將 Token 複製並貼到本軟體進階設定的 <b>Bot Token</b> 欄位，點選<b>測試連線</b>即可完成設定。</li></ol></div>""",
-                "en": """<div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 How to get a Telegram Bot Token for free</h3><p>This tool includes a <b>built-in default Bot Token</b>, so no configuration is normally required. If you need stable long-term downloads and want to avoid rate limits that may occasionally affect a shared Token, apply for your own free Token.</p><h3 style="color: #0078d4;">📝 Steps（about 1 minute）</h3><ol><li>Search for the official bot <b>@BotFather</b> in Telegram and start a conversation, or open <a href="https://t.me/BotFather">https://t.me/BotFather</a>;</li><li>Send <code>/newbot</code> to BotFather;</li><li>Follow the instructions to enter a bot <b>display name</b> such as <code>MyStickerTool</code> and a <b>username</b> ending in <code>bot</code>, such as <code>my_sticker_dl_bot</code>;</li><li>After creation, BotFather sends an HTTP API Token similar to <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>;</li><li>Copy the Token into the <b>Bot Token</b> field in this tool's advanced settings and click <b>Test Connection</b>.</li></ol></div>""",
-                "ja": """<div style="font-family: 'Segoe UI', 'Yu Gothic', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 Telegram Bot Token を無料で取得する方法</h3><p>本ツールには<b>既定の Bot Token</b>が組み込まれているため、通常は設定せずに使用できます。長期的に安定してダウンロードしたい場合や、共有 Token による Telegram のレート制限を避けたい場合は、自分専用の無料 Token を申請してください。</p><h3 style="color: #0078d4;">📝 取得手順（約 1 分）</h3><ol><li>Telegram で公式ボット <b>@BotFather</b>を検索して会話を開始するか、<a href="https://t.me/BotFather">https://t.me/BotFather</a>を開きます。</li><li>BotFather に <code>/newbot</code> を送信します。</li><li>案内に従い、<code>MyStickerTool</code>のような<b>表示名</b>と、<code>my_sticker_dl_bot</code>のように末尾が <code>bot</code> の<b>ユーザー名</b>を入力します。</li><li>作成が完了すると、BotFather から <code>7203628923:AAF5D9vqy5o71egC9zIAb...</code>のような HTTP API Token が届きます。</li><li>Token を本ツールの詳細設定にある<b>Bot Token</b>欄へ貼り付け、<b>接続テスト</b>をクリックします。</li></ol></div>"""
+                "zh": """<div style="font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 如何免费获取 Telegram Bot Token？</h3><p>请填入自己的 Telegram Bot Token。也可以通过 SUZU_TG_BOT_TOKEN 环境变量提供默认值。</p><h3 style="color: #0078d4;">📝 获取步骤（仅需 1 分钟）</h3><ol><li>在 Telegram 中搜索官方机器人 <b>@BotFather</b> 并开启对话，或访问 <a href="https://t.me/BotFather">https://t.me/BotFather</a>；</li><li>向 BotFather 发送命令 <code>/newbot</code>；</li><li>按照提示输入机器人的<b>昵称</b>（如 <code>MyStickerTool</code>）和<b>用户名</b>（需以 <code>bot</code> 结尾，如 <code>my_sticker_dl_bot</code>）；</li><li>创建成功后，BotFather 会发送一段 HTTP API Token（格式类似 <code>1234:example_bot_token</code>）；</li><li>将 Token 复制并粘贴到本软件高级配置的 <b>Bot Token</b> 栏中，点击<b>测试连通性</b>即可完成配置。</li></ol></div>""",
+                "zh_TW": """<div style="font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 如何免費取得 Telegram Bot Token？</h3><p>請填入自己的 Telegram Bot Token。也可以透過 SUZU_TG_BOT_TOKEN 環境變數提供預設值。</p><h3 style="color: #0078d4;">📝 取得步驟（只需 1 分鐘）</h3><ol><li>在 Telegram 搜尋官方機器人 <b>@BotFather</b> 並開始對話，或造訪 <a href="https://t.me/BotFather">https://t.me/BotFather</a>；</li><li>向 BotFather 傳送指令 <code>/newbot</code>；</li><li>依照提示輸入機器人的<b>暱稱</b>（如 <code>MyStickerTool</code>）與<b>使用者名稱</b>（需以 <code>bot</code> 結尾，如 <code>my_sticker_dl_bot</code>）；</li><li>建立成功後，BotFather 會傳送一段 HTTP API Token（格式類似 <code>1234:example_bot_token</code>）；</li><li>將 Token 複製並貼到本軟體進階設定的 <b>Bot Token</b> 欄位，點選<b>測試連線</b>即可完成設定。</li></ol></div>""",
+                "en": """<div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 How to get a Telegram Bot Token for free</h3><p>Enter your own Telegram Bot Token. You can also set SUZU_TG_BOT_TOKEN to supply a default.</p><h3 style="color: #0078d4;">📝 Steps（about 1 minute）</h3><ol><li>Search for the official bot <b>@BotFather</b> in Telegram and start a conversation, or open <a href="https://t.me/BotFather">https://t.me/BotFather</a>;</li><li>Send <code>/newbot</code> to BotFather;</li><li>Follow the instructions to enter a bot <b>display name</b> such as <code>MyStickerTool</code> and a <b>username</b> ending in <code>bot</code>, such as <code>my_sticker_dl_bot</code>;</li><li>After creation, BotFather sends an HTTP API Token similar to <code>1234:example_bot_token</code>;</li><li>Copy the Token into the <b>Bot Token</b> field in this tool's advanced settings and click <b>Test Connection</b>.</li></ol></div>""",
+                "ja": """<div style="font-family: 'Segoe UI', 'Yu Gothic', sans-serif; font-size: 13px; line-height: 1.6;"><h3 style="color: #0078d4; margin-top:0;">🤖 Telegram Bot Token を無料で取得する方法</h3><p>ご自身の Telegram Bot Token を入力してください。環境変数 SUZU_TG_BOT_TOKEN で既定値を設定することもできます。</p><h3 style="color: #0078d4;">📝 取得手順（約 1 分）</h3><ol><li>Telegram で公式ボット <b>@BotFather</b>を検索して会話を開始するか、<a href="https://t.me/BotFather">https://t.me/BotFather</a>を開きます。</li><li>BotFather に <code>/newbot</code> を送信します。</li><li>案内に従い、<code>MyStickerTool</code>のような<b>表示名</b>と、<code>my_sticker_dl_bot</code>のように末尾が <code>bot</code> の<b>ユーザー名</b>を入力します。</li><li>作成が完了すると、BotFather から <code>1234:example_bot_token</code>のような HTTP API Token が届きます。</li><li>Token を本ツールの詳細設定にある<b>Bot Token</b>欄へ貼り付け、<b>接続テスト</b>をクリックします。</li></ol></div>"""
             }
         }
         return pages[section].get(i18n_engine.current_lang, pages[section]["zh"])
@@ -631,31 +632,19 @@ class ImportPackThread(QThread):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _export_resource_package(self):
-        from services.exchange_export import ExchangeExportService
-
         def progress(done, total, message):
             if self._cancelled():
                 raise InterruptedError()
             self.progress.emit(done, total, message)
 
-        # 在目标目录内暂存，成功后原子替换，避免失败或取消留下半个包。
         destination = os.path.abspath(self.export_path)
-        with tempfile.TemporaryDirectory(prefix="tg_package_", dir=os.path.dirname(destination)) as directory:
-            temporary = os.path.join(directory, "package.zip")
-            manifest = ExchangeExportService(self.storage.base_dir).export_zip(
-                temporary,
-                selected_categories=[self.category_name],
-                export_scope="categories",
-                package_id=self.category_name,
-                progress_callback=progress,
-            )
-            if not manifest["counts"]["resources"]:
-                raise ValueError(t("收藏夹中没有可导出的资源"))
-            if self.source_url:
-                with zipfile.ZipFile(temporary, "a", compression=zipfile.ZIP_DEFLATED) as archive:
-                    archive.writestr("TG.txt", self.source_url.strip() + "\n")
-            if not self._cancelled():
-                os.replace(temporary, destination)
+        try:
+            with stage_tg_package(ExchangeExportService(self.storage.base_dir), os.path.dirname(destination),
+                                  self.category_name, self.source_url, progress) as temporary:
+                if not self._cancelled():
+                    os.replace(temporary, destination)
+        except EmptyTelegramPackage:
+            raise ValueError(t("收藏夹中没有可导出的资源")) from None
 
 
 # ==================== TG 贴纸下载界面 ====================
@@ -857,7 +846,7 @@ class TGStickerInterface(QWidget):
 
         self.tokenEdit = LineEdit(self.advWidget)
         self.tokenEdit.setEchoMode(LineEdit.Password)
-        self.tokenEdit.setPlaceholderText(t("内置默认 Token，可填自定义 Token"))
+        self.tokenEdit.setPlaceholderText("Bot Token")
         self.toggleTokenBtn = PushButton(t("👁️ 显示"), self.advWidget)
         self.toggleTokenBtn.setFixedWidth(76)
         self.toggleTokenBtn.clicked.connect(self.toggleTokenVisibility)

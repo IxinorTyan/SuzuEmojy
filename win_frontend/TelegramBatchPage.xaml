@@ -1,0 +1,95 @@
+<UserControl x:Class="SuzuEmojy.Windows.TelegramBatchPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fluent="clr-namespace:SuzuEmojy.Windows.Controls"
+             Foreground="{DynamicResource Ink}" UseLayoutRounding="True">
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Controls/FluentFields.xaml"/>
+        <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <DockPanel Margin="36,0,30,12">
+    <StackPanel x:Name="Inputs" DockPanel.Dock="Top">
+      <TextBlock x:Name="LinkLabel" Text="每行输入一个 TG 链接，按顺序处理，每个贴纸包生成独立 ZIP。" TextWrapping="Wrap"/>
+      <TextBox x:Name="Links" AutomationProperties.LabeledBy="{Binding ElementName=LinkLabel}" Height="76"
+               AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Stretch"
+               Style="{StaticResource FluentField}" Margin="0,6,0,10"/>
+      <TextBlock x:Name="FolderLabel" Text="保存路径" Margin="0,0,0,4"/>
+      <DockPanel Margin="0,0,0,10">
+        <Button x:Name="Browse" DockPanel.Dock="Right" Content="浏览…" Style="{StaticResource FluentPushButton}" Margin="8,0,0,0"/>
+        <TextBox x:Name="Folder" AutomationProperties.LabeledBy="{Binding ElementName=FolderLabel}" Style="{StaticResource FluentField}"/>
+      </DockPanel>
+    </StackPanel>
+    <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+      <fluent:OperationProgress x:Name="Work" Visibility="Collapsed" Margin="0,0,0,7"/>
+      <TextBlock x:Name="Status" TextWrapping="Wrap" Margin="0,0,0,7"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="Start" Content="开始批量打包" Style="{StaticResource FluentPrimaryButton}"/>
+        <Button x:Name="Cancel" Content="取消" Style="{StaticResource FluentPushButton}" Margin="8,0,0,0" Visibility="Collapsed"/>
+      </StackPanel>
+    </StackPanel>
+    <Border Background="{DynamicResource FieldSurface}" BorderBrush="{DynamicResource SettingCardEdge}"
+            BorderThickness="1" CornerRadius="8" Padding="6">
+      <DockPanel>
+        <Grid DockPanel.Dock="Top" Margin="8,3,16,7">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*"/><ColumnDefinition Width="74"/><ColumnDefinition Width="58"/><ColumnDefinition Width="2*"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Text="贴纸包 / 链接" FontWeight="SemiBold"/>
+          <TextBlock Text="阶段" FontWeight="SemiBold" Grid.Column="1"/>
+          <TextBlock Text="进度" FontWeight="SemiBold" Grid.Column="2"/>
+          <TextBlock Text="结果 / 详情" FontWeight="SemiBold" Grid.Column="3"/>
+        </Grid>
+        <Border DockPanel.Dock="Top" Background="{DynamicResource Divider}" Height="1"/>
+        <ListBox x:Name="Packages" Background="Transparent" BorderThickness="0" Margin="0,3,0,0"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True"
+                 VirtualizingPanel.VirtualizationMode="Recycling">
+          <ListBox.Resources>
+            <Style TargetType="ScrollViewer">
+              <Setter Property="Template" Value="{StaticResource FluentScrollTemplate}"/>
+            </Style>
+          </ListBox.Resources>
+          <ListBox.ItemContainerStyle>
+            <Style TargetType="ListBoxItem">
+              <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
+              <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Row" Background="Transparent" CornerRadius="5" Padding="8,5,10,5">
+                      <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Row" Property="Background" Value="{DynamicResource Hover}"/>
+                      </Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="Row" Property="Background" Value="{DynamicResource Hover}"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+            </Style>
+          </ListBox.ItemContainerStyle>
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="2*"/><ColumnDefinition Width="74"/><ColumnDefinition Width="58"/><ColumnDefinition Width="2*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Title}" ToolTip="{Binding Link}" TextTrimming="CharacterEllipsis" Margin="0,0,5,0"/>
+                <TextBlock Text="{Binding Stage}" Grid.Column="1"/>
+                <TextBlock Text="{Binding Progress}" Grid.Column="2" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding Summary}" ToolTip="{Binding Detail}" Grid.Column="3" TextTrimming="CharacterEllipsis"/>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+  </DockPanel>
+</UserControl>

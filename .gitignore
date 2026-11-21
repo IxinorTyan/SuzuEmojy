@@ -35,6 +35,11 @@ venv.bak/
 
 # Build & Release
 SuzuEmojy_Release/
+/win_frontend/obj/
+/win_frontend/bin/
+/win_frontend_tests/obj/
+/win_frontend_tests/bin/
+*_wpftmp.csproj
 *.spec
 mini_launcher.py
 

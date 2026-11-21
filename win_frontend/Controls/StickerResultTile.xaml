@@ -1,0 +1,24 @@
+<UserControl x:Class="SuzuEmojy.Windows.Controls.StickerResultTile"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Focusable="False">
+  <UserControl.Resources>
+    <ResourceDictionary Source="FluentFields.xaml"/>
+  </UserControl.Resources>
+  <Border x:Name="Frame" Background="{DynamicResource PreviewSurface}" BorderBrush="{DynamicResource PreviewEdge}"
+          BorderThickness="1" CornerRadius="8" Padding="6">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="26"/></Grid.RowDefinitions>
+      <Button x:Name="Open" Background="Transparent" BorderThickness="0" Cursor="Hand">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border Background="Transparent"><ContentPresenter/></Border>
+          </ControlTemplate>
+        </Button.Template>
+        <Image x:Name="Picture" Stretch="Uniform" IsHitTestVisible="False" Margin="0,0,0,3"/>
+      </Button>
+      <CheckBox x:Name="Toggle" Grid.Row="1" Style="{StaticResource FluentCheckBox}">
+        <TextBlock x:Name="Caption" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Ink}"/>
+      </CheckBox>
+    </Grid>
+  </Border>
+</UserControl>

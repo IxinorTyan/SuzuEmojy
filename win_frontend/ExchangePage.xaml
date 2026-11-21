@@ -1,0 +1,23 @@
+<UserControl x:Class="SuzuEmojy.Windows.ExchangePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False" UseLayoutRounding="True">
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Controls/FluentFields.xaml"/>
+        <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                Template="{StaticResource FluentScrollTemplate}">
+    <StackPanel x:Name="Groups" Margin="36,0,30,20">
+      <TextBlock Text="表情资源包" FontSize="20" Margin="0,0,0,10" Foreground="{DynamicResource Ink}"/>
+      <StackPanel x:Name="Packages"/>
+      <StackPanel x:Name="LocalFiles" Margin="0,20,0,0"/>
+      <TextBlock Text="第三方导入" FontSize="20" Margin="0,20,0,10" Foreground="{DynamicResource Ink}"/>
+      <StackPanel x:Name="ExternalSources"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -160,6 +160,8 @@ class ExchangePackageTest(unittest.TestCase):
         original_bytes = original.read_bytes()
         directory, volumes = split_package(original, self.root, max_bytes=32_000)
         self.assertGreater(len(volumes), 1)
+        self.assertEqual([volume.name for volume in volumes],
+                         [f"package-part{index}.zip" for index in range(1, len(volumes) + 1)])
         expected, actual = {}, {}
         with zipfile.ZipFile(original) as archive:
             manifest = json.loads(archive.read("manifest.json"))
@@ -190,7 +192,7 @@ class ExchangePackageTest(unittest.TestCase):
         original = self.export()
         directory, paths = split_package(original, self.root)
         self.assertEqual(MAX_VOLUME_BYTES, 100_000_000)
-        self.assertEqual(len(paths), 1)
+        self.assertEqual([path.name for path in paths], ["package-part1.zip"])
         exact = paths[0].stat().st_size
         second, paths2 = split_package(original, self.root, max_bytes=exact)
         self.assertNotEqual(directory, second)
@@ -204,6 +206,11 @@ class ExchangePackageTest(unittest.TestCase):
         self.assertEqual(len(paths), 1)
         self.assertEqual(ExchangeImportService(self.target).import_zip(paths[0]), (0, 0))
         self.assertEqual(self.sql(self.target, "categories", "SELECT name, icon_path FROM categories"), [("空夹", "🌸")])
+
+    def test_import_legacy_volume_filename(self):
+        _, paths = split_package(self.export(), self.root)
+        legacy = paths[0].rename(paths[0].with_name("package.part001.zip"))
+        self.assertEqual(ExchangeImportService(self.target).import_zip(legacy), (2, 0))
 
     def test_split_rejects_too_small_limit_without_output(self):
         original = self.export()

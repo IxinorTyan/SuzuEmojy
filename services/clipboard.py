@@ -3,9 +3,8 @@ from PySide6.QtCore import QObject, QMimeData, QUrl
 import os
 import re
 import html
-import hashlib
-from PIL import Image
 from services.auto_paste import AutoPasteController, user32
+from services.send_media import static_gif
 
 class ClipboardService(QObject):
     def __init__(self, config_service=None):
@@ -49,60 +48,8 @@ class ClipboardService(QObject):
             return None
 
     def _convert_static_to_1frame_gif(self, image_path):
-        """
-        将静态图片（PNG/JPG/WEBP 等）转换为高质量的 1 帧 GIF 格式并缓存。
-        妥善处理 RGBA 透明通道：
-        - GIF 仅支持 1 位透明索引（全透/不透）
-        - 透明度 < 128 的像素设为完全透明，>= 128 保持不透明
-        - 使用自适应调色板量化保留图像色彩
-        :param image_path: 原始图片绝对路径
-        :return: 转换后的 GIF 文件路径；如果转换失败则返回 None
-        """
-        try:
-            if not os.path.exists(image_path):
-                return None
-
-            # 基于文件路径和修改时间生成缓存文件名，避免重复转换
-            mtime = os.path.getmtime(image_path)
-            file_key = f"{os.path.abspath(image_path)}_{mtime}"
-            cache_filename = hashlib.md5(file_key.encode('utf-8')).hexdigest() + ".gif"
-            cache_path = os.path.join(self.cache_dir, cache_filename)
-
-            # 命中有效缓存直接返回
-            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
-                return cache_path
-
-            # 读取原始图像并进行转换
-            with Image.open(image_path) as img:
-                # 如果本身是动态图（如 animated WebP 或 多帧 GIF），无需转为静态 1 帧
-                if getattr(img, "is_animated", False):
-                    return None
-
-                img_rgba = img.convert("RGBA")
-                alpha = img_rgba.getchannel('A')
-
-                # 对 RGB 部分做调色板量化（最多 255 色，留 1 个索引给透明色）
-                rgb_img = img_rgba.convert('RGB')
-                p_img = rgb_img.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
-
-                # 将二值化透明掩码（Alpha < 128 为透明）写入调色板图像的指定透明索引（255）
-                # 创建透明掩码: alpha < 128 设为 255 (标记透明)，其余为 0
-                mask = Image.eval(alpha, lambda a: 255 if a < 128 else 0)
-                p_img.paste(255, mask)
-
-                # 保存为 1 帧 GIF，指定 transparency 索引为 255
-                p_img.save(
-                    cache_path,
-                    format="GIF",
-                    transparency=255,
-                    disposal=2
-                )
-
-            return cache_path
-
-        except Exception as e:
-            print(f"[ERROR] 静态图片转 1 帧 GIF 失败 ({image_path}): {e}")
-            return None
+        converted = static_gif(image_path, self.cache_dir)
+        return os.fspath(converted) if converted else None
 
     def get_data_from_clipboard(self):
         """

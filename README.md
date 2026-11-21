@@ -21,6 +21,8 @@
 > **专为 Windows 打造的本地表情包管理利器**  
 > 快速搜索、智能整理、一键发送，让收藏多年的表情包真正用起来。
 
+Windows 2.0（WPF）正在开发，尚未发布。见 [开发预览](docs/windows-native-frontend.md) 和 [本地封包](docs/windows-packaging.md)；下方使用说明对应 1.x。
+
 💬 **QQ 交流群**：`834586488`（欢迎进群交流心得、反馈 Bug、催更以及分享好看好玩的表情包！）
 
 <p align="center">
@@ -170,6 +172,7 @@ python main.py
 - **方式一：轻量级启动器 (推荐)**  
   双击运行 `build.bat`。此脚本会使用 PyInstaller 将 `launcher.py` 打包为极小的单文件 EXE（约 10MB）。用户首次运行该 EXE 时会自动检测系统环境并按需准备 Python 运行环境与图形库（PySide6 等）。
 - **方式二：完全独立离线打包**  
+  首次构建请先按 [精简 FFmpeg 构建说明](docs/ffmpeg-minimal.md) 生成转码器。
   如果你希望打包出一个包含所有依赖的完整离线版（体积较大），请运行：
   ```bash
   python build_nuitka.py
@@ -388,6 +391,7 @@ This project provides two packaging methods:
 - **Method 1: Lightweight Launcher (Recommended)**  
   Double-click and run `build.bat`. This uses PyInstaller to package `launcher.py` into a compact single-file EXE (~10MB). When users run this EXE for the first time, it automatically detects system environments and downloads required Python runtimes and GUI dependencies (PySide6, etc.).
 - **Method 2: Fully Standalone Offline Bundle**  
+  Before the first build, follow the [minimal FFmpeg build instructions](docs/ffmpeg-minimal.md).
   If you prefer a completely offline standalone bundle with all dependencies included (larger file size), run:
   ```bash
   python build_nuitka.py

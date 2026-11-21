@@ -23,6 +23,36 @@ def package_filename_stem(title):
     return name
 
 
+def download_sources(downloader, stickers, directory, progress, cancel, workers=4):
+    """Fetch original files for the shared library importer, in a bounded pool."""
+    def download(sticker):
+        if cancel.is_set():
+            raise InterruptedError()
+        path = downloader.get_file_path(sticker.file_id)
+        data = downloader.download_file_bytes(path)
+        output = directory / f"{sticker.index}.download"
+        output.write_bytes(data)
+        return str(output)
+
+    sources = {}
+    progress(0, len(stickers))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(download, sticker): sticker.index for sticker in stickers}
+        for done, future in enumerate(as_completed(futures), 1):
+            if cancel.is_set():
+                for pending in futures:
+                    pending.cancel()
+                break
+            try:
+                source = future.result()
+            except Exception as exc:
+                # The Qt importer also uses these typed errors for missing sources.
+                source = exc
+            sources[futures[future]] = source
+            progress(done, len(stickers))
+    return sources
+
+
 @dataclass
 class PreparedPack:
     index: int
@@ -36,13 +66,14 @@ class PreparedPack:
 
 class TGPackageBatchRunner:
     def __init__(self, links, downloader_factory, process_pack, progress,
-                 cancel_event=None, download_workers=4):
+                 cancel_event=None, download_workers=4, format_error=str):
         self.links = links
         self.downloader_factory = downloader_factory
         self.process_pack = process_pack
         self.progress = progress
         self.cancel_event = cancel_event if cancel_event is not None else Event()
         self.download_workers = download_workers
+        self.format_error = format_error
         self._downloaders = []
 
     @contextmanager
@@ -96,31 +127,11 @@ class TGPackageBatchRunner:
                     item.directory = root / str(item.index)
                     item.directory.mkdir()
                     stickers = item.pack.stickers
-                    self.progress(item.index, "download", 0, len(stickers), "")
-
-                    def download(sticker):
-                        if self.cancel_event.is_set():
-                            raise InterruptedError()
-                        path = item.downloader.get_file_path(sticker.file_id)
-                        data = item.downloader.download_file_bytes(path)
-                        output = item.directory / f"{sticker.index}.download"
-                        output.write_bytes(data)
-                        return str(output)
-
-                    with ThreadPoolExecutor(max_workers=self.download_workers) as pool:
-                        futures = {pool.submit(download, s): s for s in stickers}
-                        for done, future in enumerate(as_completed(futures), 1):
-                            if self.cancel_event.is_set():
-                                for pending in futures:
-                                    pending.cancel()
-                                break
-                            sticker = futures[future]
-                            try:
-                                item.sources[sticker.index] = future.result()
-                            except Exception as exc:
-                                # Preserve the typed missing-source error for the existing importer.
-                                item.sources[sticker.index] = exc
-                            self.progress(item.index, "download", done, len(stickers), "")
+                    item.sources = download_sources(
+                        item.downloader, stickers, item.directory,
+                        lambda done, total: self.progress(item.index, "download", done, total, ""),
+                        self.cancel_event, self.download_workers,
+                    )
                     self.progress(item.index, "ready", len(stickers), len(stickers), "")
                 except Exception as exc:
                     item.error = exc
@@ -158,7 +169,7 @@ class TGPackageBatchRunner:
                             self.cancel_event.set()
                         except Exception as exc:
                             if not self.cancel_event.is_set():
-                                message = str(exc)
+                                message = self.format_error(exc)
                                 results.append(dict(index=item.index, status="failed", message=message))
                                 self.progress(item.index, "failed", 0, 0, message)
                         finally:
