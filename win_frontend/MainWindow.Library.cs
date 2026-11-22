@@ -56,13 +56,14 @@ public partial class MainWindow
         };
         gallery.ReorderRequested += (source, target) =>
         {
-            if (busy || selecting) return;
+            if (LibraryBusy || selecting) return;
             var ordered = gallery.Items.ToList();
             var index = ordered.IndexOf(target);
             ordered.Remove(source);
             ordered.Insert(index, source);
             Run(new("order", ordered.Select(item => item.Path).ToArray()), "表情排序");
         };
+        gallery.CanReorder = () => !LibraryBusy && !selecting;
         ConfigureDrop(GalleryPage, () => current?.Name);
         PreviewKeyDown += (_, e) =>
         {
@@ -81,16 +82,17 @@ public partial class MainWindow
     }
 
     private async void Run(LibraryCommand command, string title, bool reload = true, string? nextCategory = null,
-        Action<LibraryResult>? completed = null, (string Title, string Detail)? activity = null)
+        Action<LibraryResult>? completed = null, (string Title, string Detail)? activity = null, bool preserveGallery = false)
     {
-        if (await RunAction(command, title, reload, nextCategory, activity: activity) is not { } result) return;
+        if (await RunAction(command, title, reload, nextCategory, activity: activity,
+                preserveGallery: preserveGallery) is not { } result) return;
         ReportActionWarnings(result);
         completed?.Invoke(result);
     }
 
     private async Task<LibraryResult?> RunAction(LibraryCommand command, string title, bool reload = true,
         string? nextCategory = null, bool inlineErrors = false,
-        (string Title, string Detail)? activity = null, bool background = false)
+        (string Title, string Detail)? activity = null, bool background = false, bool preserveGallery = false)
     {
         if (LibraryBusy || commands is null || (background && inboxWork.IsBusy)) return null;
         using var operation = (background ? inboxWork : galleryWork).Begin(LeavePolicy.FinishBeforeLeaving);
@@ -112,7 +114,7 @@ public partial class MainWindow
             operation.StopReporting();
             if (response.Snapshot is { } snapshot)
                 AcceptSnapshot(snapshot, nextCategory, command.Action is "settings" or "set_wallpaper" or "clear_wallpaper",
-                    preserveSelection: background);
+                    preserveSelection: background || preserveGallery);
             return response.Result;
         }
         catch (Exception error)
@@ -210,30 +212,50 @@ public partial class MainWindow
     private void ConfigureDrop(UIElement target, Func<string?> category)
     {
         bool acceptsWebLinks = target == GalleryPage;
+        string? ClassificationTarget() => !acceptsWebLinks && OnGalleryPage && !LibraryBusy ? category() : null;
         target.AllowDrop = true;
-        target.DragOver += (_, e) =>
+        target.DragEnter += UpdateEffect;
+        target.DragOver += UpdateEffect;
+        void UpdateEffect(object sender, DragEventArgs e)
         {
-            bool internalDrag = e.Data.GetDataPresent(VirtualGallery.InternalDragFormat);
-            if (internalDrag ? LibraryBusy : !CanQueueImport) return;
-            if (!e.Data.GetDataPresent(DataFormats.FileDrop) &&
-                (!acceptsWebLinks || !ClipboardImageSource.MayContainDropLink(e.Data))) return;
-            e.Effects = DragDropEffects.Copy;
-            e.Handled = true;
-        };
-        target.Drop += (_, e) =>
-        {
-            if (e.Data.GetData(VirtualGallery.InternalDragFormat) is string own)
+            bool canCopy = (e.AllowedEffects & DragDropEffects.Copy) != 0;
+            if (e.Data.GetDataPresent(VirtualGallery.InternalDragFormat, autoConvert: false))
             {
+                e.Effects = canCopy && ClassificationTarget() is not null ? DragDropEffects.Copy : DragDropEffects.None;
                 e.Handled = true;
-                if (!LibraryBusy && !acceptsWebLinks && category() is { } destination)
-                    Run(new("add", [own], Value: destination), "添加到分类...");
                 return;
             }
-            if (!CanQueueImport) return;
+            if (!e.Data.GetDataPresent(DataFormats.FileDrop) &&
+                (!acceptsWebLinks || !ClipboardImageSource.MayContainDropLink(e.Data))) return;
+            e.Effects = canCopy && CanQueueImport ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        }
+        target.Drop += (_, e) =>
+        {
+            if (e.Data.GetDataPresent(VirtualGallery.InternalDragFormat, autoConvert: false))
+            {
+                e.Handled = true;
+                e.Effects = DragDropEffects.None;
+                if ((e.AllowedEffects & DragDropEffects.Copy) == 0 || ClassificationTarget() is not { } destination ||
+                    e.Data.GetData(VirtualGallery.InternalDragFormat, autoConvert: false) is not string path ||
+                    gallery.Items.Find(item => StringComparer.OrdinalIgnoreCase.Equals(item.Path, path)) is not { } source)
+                    return;
+                e.Effects = DragDropEffects.Copy;
+                if (!source.Categories.Contains(destination))
+                    Run(new("add", [source.Path], Value: destination), "添加到分类", preserveGallery: true,
+                        completed: result =>
+                        {
+                            if (result is { Error: null, Failed: 0 })
+                                GalleryNotice.Show("添加成功", $"已快速添加到分类 '{destination}'", slideFromRight: true);
+                        });
+                return;
+            }
+            if (!CanQueueImport || (e.AllowedEffects & DragDropEffects.Copy) == 0) return;
             var paths = e.Data.GetData(DataFormats.FileDrop) as string[];
             var links = acceptsWebLinks ? ClipboardImageSource.FindDropLinks(e.Data) : [];
             if (paths is not { Length: > 0 } && links.Length == 0) return;
             e.Handled = true;
+            e.Effects = DragDropEffects.Copy;
             _ = ImportDrop(paths ?? [], links, category());
         };
     }

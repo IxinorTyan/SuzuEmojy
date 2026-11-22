@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -35,6 +36,35 @@ internal static class Program
             }
             catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         }
+        if (args is ["--verify-update-zip", var zip])
+        {
+            try { WindowsUpdateTests.CheckZip(zip); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--update-tests", var updateOutput])
+        {
+            try
+            {
+                updateOutput = Path.GetFullPath(updateOutput);
+                NativeServicesTests.Run(updateOutput).GetAwaiter().GetResult();
+                WindowsUpdateTests.Run(updateOutput);
+                Console.WriteLine("Windows update tests passed.");
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--upgrade-fixtures", var from, var to, var upgradeOutput])
+        {
+            try { WindowsUpdateTests.Upgrade(from, to, upgradeOutput); Console.WriteLine("Package upgrade rehearsal passed."); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+#if NETFRAMEWORK
+        if (args is ["--upgrade-worker", var oldZip, var newZip, var workerOutput])
+        {
+            try { WindowsUpdateTests.CheckWorker(oldZip, newZip, workerOutput); Console.WriteLine("Standalone updater handoff passed."); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+#endif
         if (args is ["--hold-instance", var instanceName]) return WindowsInstanceTests.Hold(instanceName);
         if (args is ["--package-smoke", var package, var smoke])
         {
@@ -104,9 +134,10 @@ internal static class Program
             catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         }
         bool longGallery = args is [_, _, _, "--long-gallery"];
-        if (args.Length != 3 && !longGallery)
+        bool galleryInteractions = args is [_, _, _, "--gallery-interactions"];
+        if (args.Length != 3 && !longGallery && !galleryInteractions)
         {
-            Console.Error.WriteLine("Usage: SuzuEmojy.Windows.Tests <repo> <fixture-data> <output-directory> [--long-gallery]");
+            Console.Error.WriteLine("Usage: SuzuEmojy.Windows.Tests <repo> <fixture-data> <output-directory> [--long-gallery|--gallery-interactions]");
             return 2;
         }
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -116,6 +147,12 @@ internal static class Program
             try
             {
                 if (longGallery) await CheckLongGallery(args);
+                else if (galleryInteractions)
+                {
+                    await CheckPageLifecycle();
+                    await CheckCategoryDrops(await LibrarySnapshot.ReadAsync(args[1]), args[0], args[2]);
+                    Console.WriteLine("Gallery interactions passed.");
+                }
                 else await Check(args);
             }
             catch (Exception error) { Console.Error.WriteLine(error); code = 1; }
@@ -143,6 +180,7 @@ internal static class Program
         await CheckOriginalAnimation(args[0], bridgeData);
         await CheckAboutPage();
         await NativeServicesTests.Run(args[2]);
+        WindowsUpdateTests.Run(args[2]);
         await NativeEditTests.Run(args[2]);
         await NativeApngTests.Run(args[2]);
         NativeIdentityTests.Run(args[2]);
@@ -159,6 +197,7 @@ internal static class Program
         await NativeGalleryTests.Run(reference, args[1], args[2]);
         CheckPreferenceState(library);
         await CheckPageLifecycle();
+        await CheckCategoryDrops(library, args[0], args[2]);
         var window = new MainWindow(library, offscreen: true, commands: new LibraryCommands(args[0], args[1]));
         try
         {
@@ -918,6 +957,82 @@ internal static class Program
     private static MenuItem CategorySubmenu(ContextMenu menu, string name) =>
         menu.Items.OfType<MenuItem>().Single(row => Equals(row.Header, name));
 
+    private static async Task CheckCategoryDrops(LibrarySnapshot fixture, string repo, string output)
+    {
+        const string source = "来源", target = "目标";
+        var constructor = typeof(DragEventArgs).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic,
+            null, [typeof(IDataObject), typeof(DragDropKeyStates), typeof(DragDropEffects), typeof(DependencyObject), typeof(Point)], null)!;
+        foreach (bool grid in new[] { false, true })
+        {
+            var data = Path.Combine(output, $"category-drop-{Guid.NewGuid():N}");
+            var images = Directory.CreateDirectory(Path.Combine(data, "images")).FullName;
+            var file = fixture.Images.First(item => !item.Animated);
+            File.Copy(file.Path, Path.Combine(images, file.Name));
+            File.WriteAllText(Path.Combine(data, "categories.json"),
+                JsonSerializer.Serialize(new Dictionary<string, string[]> { [source] = [file.Name], [target] = [] }));
+            File.WriteAllText(Path.Combine(data, "config.json"),
+                JsonSerializer.Serialize(new Dictionary<string, bool> { ["sidebar_is_grid_mode"] = grid }));
+            var commands = new LibraryCommands(repo, data);
+            var window = new MainWindow(await LibrarySnapshot.ReadAsync(data), offscreen: true, commands: commands);
+            try
+            {
+                Layout(window);
+                var panel = grid ? window.Categories.Children.OfType<ResponsiveTilePanel>().Single() : (Panel)window.Categories;
+                Button Find(string category) => panel.Children.OfType<Button>().Single(button => Equals(button.ToolTip, category));
+                Find(source).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var sticker = window.Gallery.Items.Single();
+                var drag = new DataObject(DataFormats.FileDrop, new[] { sticker.Path });
+                drag.SetData(VirtualGallery.InternalDragFormat, sticker.Path);
+                var button = Find(target);
+                var center = new Point(button.ActualWidth / 2, button.ActualHeight / 2);
+                UIElement? hit = null;
+                VisualTreeHelper.HitTest(button,
+                    visual => visual is UIElement { IsHitTestVisible: false }
+                        ? HitTestFilterBehavior.ContinueSkipSelfAndChildren : HitTestFilterBehavior.Continue,
+                    result => { hit = result.VisualHit as UIElement; return HitTestResultBehavior.Stop; },
+                    new PointHitTestParameters(center));
+                Require(hit is { AllowDrop: true }, "The visible category button must have a droppable hit surface.");
+                var dropSurface = hit!;
+                Require(Raise(dropSurface, DragDrop.DragEnterEvent, drag) == DragDropEffects.Copy &&
+                    Raise(dropSurface, DragDrop.DragOverEvent, drag) == DragDropEffects.Copy,
+                    "A thumbnail drag must be accepted immediately over real list rows and icon tiles.");
+                Require(Raise(Find("全部表情"), DragDrop.DragOverEvent, drag) == DragDropEffects.None &&
+                    Raise(Find("新建分类"), DragDrop.DropEvent, drag) == DragDropEffects.None &&
+                    Raise(window.GalleryPage, DragDrop.DropEvent, drag) == DragDropEffects.None &&
+                    window.GalleryNotice.Visibility == Visibility.Collapsed,
+                    "Internal drops elsewhere must not fall through to the file importer or show success.");
+                Require(Raise(dropSurface, DragDrop.DragOverEvent, new DataObject(DataFormats.FileDrop, new[] { file.Path })) ==
+                    DragDropEffects.Copy, "Category rows and tiles must still accept ordinary external file drops.");
+
+                var changed = new TaskCompletionSource<LibrarySnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+                window.LibraryChanged += updated => changed.TrySetResult(updated);
+                Require(Raise(dropSurface, DragDrop.DropEvent, drag) == DragDropEffects.Copy,
+                    "Dropping should report an additive classification, not a move.");
+                Require((await changed.Task.WaitAsync(TimeSpan.FromSeconds(8))).Images.Single().Categories.ToHashSet().SetEquals([source, target]) &&
+                    (await LibrarySnapshot.ReadAsync(data)).Images.Single().Categories.ToHashSet().SetEquals([source, target]) &&
+                    window.Gallery.Items.Single().Path == sticker.Path,
+                    "The category change must persist without taking the thumbnail out of its original category.");
+                Require(window.GalleryNotice.Visibility == Visibility.Visible && window.GalleryNotice.Heading.Text == "添加成功" &&
+                    window.GalleryNotice.Detail.Text.Contains(target),
+                    "A successful drop must show the upper-right notice with the destination name.");
+                window.GalleryNotice.Dismiss();
+                Raise(dropSurface, DragDrop.DropEvent, drag);
+                Require(!window.LibraryBusy && window.GalleryNotice.Visibility == Visibility.Collapsed,
+                    "An already-classified thumbnail must not write again or show another success notice.");
+
+                DragDropEffects Raise(UIElement element, RoutedEvent routedEvent, IDataObject payload)
+                {
+                    var args = (DragEventArgs)constructor.Invoke([payload, DragDropKeyStates.LeftMouseButton, DragDropEffects.Copy, element, center]);
+                    args.RoutedEvent = routedEvent;
+                    element.RaiseEvent(args);
+                    Require(args.Handled, "The intended drop target must handle the routed event.");
+                    return args.Effects;
+                }
+            }
+            finally { window.Close(); }
+        }
+    }
+
     private static async Task CheckCategorySubmenuCommands(LibrarySnapshot fixture, string repo, string output)
     {
         var data = Path.Combine(output, $"category-submenu-{Guid.NewGuid():N}");
@@ -1479,6 +1594,7 @@ internal static class Program
             "The offscreen position must clear the right edge without vertical movement.");
         Require(host.Push(new("root", root, Suspend: () => suspended++, Resume: () => resumed++,
             Leave: () => left++, Work: rootWork)), "Could not open the root page.");
+        Require(host.RouteSurface.Opacity == 1, "With reduced motion enabled the incoming page must open fully opaque.");
         Require(host.Push(new("middle", middle, Leave: () => left++,
             HandleBack: () => backConsumed)) && !host.Push(new("duplicate", root)),
             "A live view must not appear twice in the page stack.");
@@ -1519,7 +1635,7 @@ internal static class Program
         host.RequestBack();
         Require(host.Page == root && suspended == 1 && resumed == 2 && left == 2 && closed == 0,
             "Returning to the root must resume its existing view exactly once.");
-        Require(host.TryClose() && host.Page is null && left == 3 && closed == 1,
+        Require(host.TryClose() && host.Page is null && host.RouteSurface.Opacity == 1 && left == 3 && closed == 1,
             "Closing the final route must notify the gallery exactly once.");
     }
 

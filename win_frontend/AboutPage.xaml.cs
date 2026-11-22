@@ -22,9 +22,29 @@ public partial class AboutPage : UserControl
     internal static readonly string InstalledVersion = (typeof(AboutPage).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "2.0.0-preview").Split('+')[0];
 
-    internal AboutPage(WindowsReleaseService updates) : this(cancellation => updates.Check(InstalledVersion, cancellation))
+    internal AboutPage(WindowsReleaseService updates, UpdateInstallation? installation = null,
+        Func<StagedUpdate, Task>? install = null) : this(cancellation => updates.Check(InstalledVersion, cancellation))
     {
-        DownloadUpdate.Click += async (_, _) => await Download(updates);
+        DownloadUpdate.Click += async (_, _) =>
+        {
+            if (install is not null && installation?.Staged is { } stage)
+            {
+                CheckUpdate.IsEnabled = DownloadUpdate.IsEnabled = false;
+                try { await install(stage); }
+                catch (Exception error)
+                {
+                    Status.Show("无法安装更新", error.Message, warning: true, persistent: true);
+                    Trace.TraceWarning("Could not start updater: {0}", error.Message);
+                }
+                finally { CheckUpdate.IsEnabled = DownloadUpdate.IsEnabled = true; }
+            }
+            else await Download(updates, installation);
+        };
+        CheckUpdate.Click += (_, _) =>
+        {
+            if (installation is not null) installation.Staged = null;
+        };
+        if (installation?.Staged is { } staged) ShowStaged(staged.Version);
     }
 
     internal AboutPage(Func<CancellationToken, Task<AvailableRelease?>> request, Action<string>? launchLink = null,
@@ -65,6 +85,7 @@ public partial class AboutPage : UserControl
         var operation = new CancellationTokenSource(TimeSpan.FromSeconds(38));
         checking = operation;
         CheckUpdate.IsEnabled = false;
+        DownloadUpdate.Content = "下载更新…";
         DownloadUpdate.Visibility = Visibility.Collapsed;
         available = null;
         Status.Show("检查更新", "正在检查…", persistent: true);
@@ -99,24 +120,43 @@ public partial class AboutPage : UserControl
         }
     }
 
-    private async Task Download(WindowsReleaseService updates)
+    private void ShowStaged(string version)
+    {
+        DownloadUpdate.Content = "重启并安装";
+        DownloadUpdate.Visibility = Visibility.Visible;
+        Status.Show("下载及校验完成", $"版本 {version} 已就绪。安装不会修改图库。", persistent: true);
+    }
+
+    private async Task Download(WindowsReleaseService updates, UpdateInstallation? installation)
     {
         if (checking is not null || work.IsBusy || available is not { Name: { } name } release) return;
-        var picker = new SaveFileDialog { FileName = name, Filter = "ZIP|*.zip", OverwritePrompt = true };
-        if (picker.ShowDialog(Window.GetWindow(this)) != true) return;
+        string? destination = null;
+        if (installation is null)
+        {
+            var picker = new SaveFileDialog { FileName = name, Filter = "ZIP|*.zip", OverwritePrompt = true };
+            if (picker.ShowDialog(Window.GetWindow(this)) != true) return;
+            destination = picker.FileName;
+        }
         using var operation = work.Begin(LeavePolicy.CancelAndWait, DownloadProgress.ShowCancelling);
         CheckUpdate.IsEnabled = DownloadUpdate.IsEnabled = false;
         Status.Dismiss();
         DownloadProgress.Begin("下载更新", "正在校验发布信息…", () => work.RequestCancel());
         try
         {
-            await updates.Save(InstalledVersion, release.Version, picker.FileName,
+            destination ??= installation!.PrepareDownload();
+            var digest = await updates.Save(InstalledVersion, release.Version, destination,
                 operation.Progress(update =>
                 {
                     if (!operation.Token.IsCancellationRequested)
                         DownloadProgress.Report(update with { Detail = update.Detail ?? $"正在下载：{update.Current}%" });
                 }), operation.Token);
-            Status.Show("下载及校验完成", "请解压到新目录；不会覆盖当前安装或图库。", persistent: true);
+            if (installation is null)
+                Status.Show("下载及校验完成", "请解压到新目录；不会覆盖当前安装或图库。", persistent: true);
+            else
+            {
+                installation.Staged = new(release.Version, digest);
+                ShowStaged(release.Version);
+            }
         }
         catch (Exception error)
         {

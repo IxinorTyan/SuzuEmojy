@@ -4,8 +4,7 @@
   <UserControl.Resources>
     <ResourceDictionary Source="Buttons.xaml"/>
   </UserControl.Resources>
-  <Grid>
-   <Grid x:Name="RouteSurface">
+  <Grid x:Name="RouteSurface">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <DockPanel Margin="36,10,36,12">
       <ContentControl x:Name="PageTools" DockPanel.Dock="Right" VerticalAlignment="Center"/>
@@ -18,7 +17,5 @@
                  Foreground="{DynamicResource Ink}"/>
     </DockPanel>
     <ContentControl x:Name="PageBody" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
-   </Grid>
-    <Image x:Name="PreviousBody" Stretch="Fill" IsHitTestVisible="False" Visibility="Collapsed"/>
   </Grid>
 </UserControl>

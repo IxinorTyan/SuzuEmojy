@@ -102,12 +102,21 @@ internal static class NativeServicesTests
         Require(File.ReadAllBytes(target).SequenceEqual(package), "Only the complete verified ZIP may be published.");
     }
 
-    private static byte[] CreatePackage()
+    internal static byte[] CreatePackage(string version = "2.0.0", IEnumerable<string>? extra = null)
     {
         using var stream = new MemoryStream();
         using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
-            foreach (var path in WindowsInstall.PackageFiles)
-                using (var entry = zip.CreateEntry(path).Open()) entry.WriteByte(1);
+            foreach (var path in PackageLayout.Required.Concat(extra ?? Array.Empty<string>()))
+            {
+                using var entry = zip.CreateEntry(path).Open();
+                if (path == "bin/" + PortableLayout.Marker)
+                {
+                    using var output = new StreamWriter(entry, new UTF8Encoding(true));
+                    output.Write(JsonSerializer.Serialize(new { version, layout = PortableLayout.LayoutId,
+                        runtime = PortableLayout.SystemRuntime, architecture = "win-x64", updateProtocol = 1 }));
+                }
+                else entry.WriteByte(1);
+            }
         return stream.ToArray();
     }
 

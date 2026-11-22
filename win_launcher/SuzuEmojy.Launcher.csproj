@@ -10,6 +10,11 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Compile Include="../win_updater/PackageLayout.cs" Link="PackageLayout.cs" />
+    <Compile Include="../win_updater/UpdateTransaction.cs" Link="UpdateTransaction.cs" />
+    <Compile Include="../win_updater/UpdateGate.cs" Link="UpdateGate.cs" />
     <Compile Include="../win_frontend/PortableLayout.cs" Link="PortableLayout.cs" />
     <Compile Include="../win_frontend/WindowsInstance.cs" Link="WindowsInstance.cs" />
     <Compile Include="../win_frontend/Runtime/WindowsCommandLine.cs" Link="WindowsCommandLine.cs" />

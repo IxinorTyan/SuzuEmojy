@@ -2,7 +2,6 @@ using System;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Imaging;
 
 namespace SuzuEmojy.Windows.Controls;
 
@@ -53,14 +52,13 @@ internal static class FluentMotion
     }
 
     // Paint only a themed overlay; hit boxes and layout never move under the pointer.
-    internal static void Focus(FrameworkElement hit, FrameworkElement overlay)
+    internal static void Hover(FrameworkElement hit, FrameworkElement overlay)
     {
         void Update(bool animate) => Fade(overlay,
-            hit.IsEnabled && (hit.IsMouseOver || hit.IsKeyboardFocusWithin) ? 1 : 0, 125,
+            hit.IsEnabled && hit.IsMouseOver ? 1 : 0, 125,
             animate && VisibleMotion(hit));
         hit.MouseEnter += (_, _) => Update(true);
         hit.MouseLeave += (_, _) => Update(true);
-        hit.IsKeyboardFocusWithinChanged += (_, _) => Update(true);
         hit.IsEnabledChanged += (_, _) => Update(false);
         hit.IsVisibleChanged += (_, _) => Update(false);
         Observe(hit, () => Update(false));
@@ -126,54 +124,25 @@ internal sealed class MotionReveal(FrameworkElement policy, FrameworkElement sur
     }
 }
 
-// Keep routing/lifetimes synchronous. Only a bounded outgoing image lasts past
-// navigation, so an old page cannot keep handling input or running its tasks.
-internal sealed class PageMotion(FrameworkElement policy, System.Windows.Controls.Image overlay)
+// Fade only the incoming surface. Capturing and blending an outgoing page
+// makes navigation wait for a full-window bitmap to render on the UI thread.
+internal sealed class PageMotion
 {
-    private FrameworkElement? incoming;
-    private int revision;
+    private readonly FrameworkElement surface;
 
-    internal ImageSource? Capture(FrameworkElement view)
+    internal PageMotion(FrameworkElement surface)
     {
-        var (w, h) = (view.ActualWidth, view.ActualHeight);
-        if (!FluentMotion.VisibleMotion(policy) || !view.IsVisible || w < 1 || h < 1) return null;
-        var display = VisualTreeHelper.GetDpi(view).DpiScaleX;
-        var scale = Math.Min(display, Math.Min(Math.Sqrt(1_000_000 / (w * h)), 1800 / Math.Max(w, h)));
-        try
-        {
-            var drawing = new DrawingVisual();
-            using (var dc = drawing.RenderOpen()) dc.DrawRectangle(new VisualBrush(view) { Stretch = Stretch.Fill }, null,
-                new Rect(0, 0, w * scale, h * scale));
-            var image = new RenderTargetBitmap(Math.Max(1, (int)Math.Ceiling(w * scale)),
-                Math.Max(1, (int)Math.Ceiling(h * scale)), 96, 96, PixelFormats.Pbgra32);
-            image.Render(drawing);
-            image.Freeze();
-            return image;
-        }
-        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { return null; }
+        this.surface = surface;
+        FluentMotion.Observe(surface, Reset);
+        surface.Unloaded += (_, _) => Reset();
     }
 
-    internal void Swap(ImageSource? outgoing, FrameworkElement next)
+    internal void Show(bool animate = true)
     {
         Reset();
-        if (outgoing is null || !FluentMotion.VisibleMotion(policy)) return;
-        incoming = next;
-        int current = revision;
-        overlay.Source = outgoing;
-        overlay.Visibility = Visibility.Visible;
-        overlay.Opacity = 1;
-        next.Opacity = .2;
-        FluentMotion.Fade(next, 1, 185, true);
-        FluentMotion.Fade(overlay, 0, 185, true, () => { if (current == revision) Reset(); });
+        if (animate && FluentMotion.VisibleMotion(surface))
+            surface.BeginAnimation(UIElement.OpacityProperty, FluentMotion.Ease(.86, 1, 130));
     }
 
-    internal void Reset()
-    {
-        revision++;
-        if (incoming is { } previous) FluentMotion.Fade(previous, 1, 0, false);
-        incoming = null;
-        FluentMotion.Fade(overlay, 0, 0, false);
-        overlay.Source = null;
-        overlay.Visibility = Visibility.Collapsed;
-    }
+    internal void Reset() => surface.BeginAnimation(UIElement.OpacityProperty, null);
 }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -20,7 +19,7 @@ internal sealed class WindowsReleaseService(string data, HttpClient? transport =
 {
     private const string Latest = "https://api.github.com/repos/IxinorTyan/SuzuEmojy/releases/latest";
     internal const string Releases = "https://github.com/IxinorTyan/SuzuEmojy/releases";
-    private const long MaxDownload = 2L * 1024 * 1024 * 1024;
+    private const long MaxDownload = 20_000_000;
     private static readonly HttpClient Client = new(new HttpClientHandler { AllowAutoRedirect = false });
     private readonly HttpClient http = transport ?? Client;
     private static readonly Regex StableTag = new(@"\Av?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z",
@@ -50,9 +49,7 @@ internal sealed class WindowsReleaseService(string data, HttpClient? transport =
             throw new InvalidDataException("无法读取发布信息。");
         if (Flag(root, "draft") || Flag(root, "prerelease") || !ParseVersion(tag!, out var remote) || remote.Major != 2)
             return null;
-        var localBase = installed.Split('-')[0];
-        if (!ParseVersion(localBase, out var local)) throw new InvalidDataException("无法读取当前版本。");
-        if (remote < local || remote == local && installed == localBase) return null;
+        if (!PackageLayout.NewerStable(remote.ToString(), installed)) return null;
 
         var name = $"SuzuEmojy-Windows-{remote}-win-x64-system-runtime.zip";
         var expected = $"{Releases}/download/{tag}/{name}";
@@ -75,7 +72,7 @@ internal sealed class WindowsReleaseService(string data, HttpClient? transport =
         return selected;
     }
 
-    internal async Task Save(string installed, string expectedVersion, string destination, IProgress<LibraryProgress> progress,
+    internal async Task<string> Save(string installed, string expectedVersion, string destination, IProgress<LibraryProgress> progress,
         CancellationToken cancellation)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -111,19 +108,12 @@ internal sealed class WindowsReleaseService(string data, HttpClient? transport =
                 output.Flush(flushToDisk: true);
                 output.Position = 0;
                 using var zip = new ZipArchive(output, ZipArchiveMode.Read, leaveOpen: true);
-                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var entry in zip.Entries)
-                {
-                    if (entry.FullName.StartsWith("/", StringComparison.Ordinal) ||
-                        entry.FullName.Contains("\\") || WindowsInstall.IsUnexpectedPackageEntry(entry.FullName) ||
-                        !names.Add(entry.FullName)) throw new InvalidDataException("更新包有意外或重复项。");
-                }
-                if (!WindowsInstall.PackageFiles.All(names.Contains))
-                    throw new InvalidDataException("这不是完整的 Windows 系统运行库包。");
+                PackageLayout.Validate(zip, expectedVersion);
             }
             if (!RuntimePrimitives.CommitFile(temporary, target, overwrite, cancellation))
                 throw new IOException("保存位置已有同名文件，未覆盖。");
             progress.Report(new("download", 100, 100, null));
+            return asset.Hash;
         }
         catch (OperationCanceledException) when (!deadline.IsCancellationRequested && !cancellation.IsCancellationRequested)
         {

@@ -1,18 +1,22 @@
 {
-    "always_on_top": true,
-    "hide_main_after_paste": true,
-    "preview_delay": 500,
-    "preview_size": 320,
-    "use_system_font": false,
-    "convert_static_to_gif": true,
-    "show_setting_button": true,
-    "show_multi_select_button": true,
-    "qq_save_path": "D:/14915/Videos",
-    "qq_data_path": "D:\\14915\\Videos\\Tencent Files",
-    "window_geometry": [
-        781,
-        109,
-        860,
-        640
-    ]
+  "always_on_top": true,
+  "hide_main_after_paste": true,
+  "preview_delay": 500,
+  "preview_size": 320,
+  "use_system_font": false,
+  "convert_static_to_gif": true,
+  "show_setting_button": true,
+  "show_multi_select_button": true,
+  "qq_save_path": "D:/14915/Videos",
+  "qq_data_path": "D:\\14915\\Videos\\Tencent Files",
+  "window_geometry": [
+    781,
+    109,
+    860,
+    640
+  ],
+  "sidebar_is_grid_mode": true,
+  "sidebar_width_grid": 193,
+  "category_grid_icon_size": 34,
+  "global_hotkey": "alt\u002B1"
 }

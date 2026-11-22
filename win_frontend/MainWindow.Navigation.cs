@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using SuzuEmojy.Windows.Controls;
 
 namespace SuzuEmojy.Windows;
@@ -12,26 +11,20 @@ public partial class MainWindow
 
     private void SetupPageTransitions()
     {
-        pageTransition = new(GalleryPage.Parent as FrameworkElement ?? this, PreviousPage);
-        ImageSource? outgoing = null;
-        FluentMotion.Observe(this, pageTransition.Reset);
-        Pages.RootClosing += () => outgoing = pageTransition.Capture(Pages);
+        pageTransition = new(GalleryPage);
         Pages.RootClosed += () =>
         {
             GalleryPage.Visibility = Visibility.Visible;
-            pageTransition.Swap(outgoing, GalleryPage);
-            outgoing = null;
+            pageTransition.Show();
         };
     }
 
     private void OpenPage(PageRoute route, Button? opener = null)
     {
         preview.Hide();
-        bool entering = OnGalleryPage;
-        var outgoing = entering ? pageTransition.Capture(GalleryPage) : null;
         if (!Pages.Push(route, opener)) return;
         GalleryPage.Visibility = Visibility.Collapsed;
-        if (entering) pageTransition.Swap(outgoing, Pages);
+        pageTransition.Reset();
     }
 
     internal bool ShowGalleryPage()

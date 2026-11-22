@@ -2,14 +2,15 @@
 param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'dist/windows-packages'),
     [string]$FfmpegDirectory = (Join-Path $PSScriptRoot 'dist/ffmpeg-minimal'),
+    [string]$Version,
     [ValidateSet('system-runtime', 'self-contained', 'desktop-runtime')]
     [string]$Mode = 'system-runtime',
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
 [xml]$suzuProject = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'win_frontend/SuzuEmojy.Windows.csproj')
-$suzuVersion = $suzuProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
-if ($suzuVersion -cnotmatch '^\d+\.\d+\.\d+-preview(?:\.\d+)?$') { throw 'Only preview ZIPs are built here.' }
+$suzuVersion = if ($Version) { $Version } else { $suzuProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText }
+if ($suzuVersion -cnotmatch '^2\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.\d+)?)?$') { throw 'Expected a Windows 2.x stable or preview version.' }
 $suzuName = "SuzuEmojy-Windows-$suzuVersion-win-x64-$Mode"
 $suzuDestination = Join-Path $OutputDirectory $suzuName
 $suzuDependencies = Join-Path $PSScriptRoot 'dist'
@@ -55,13 +56,19 @@ try {
     $suzuTarget = if ($Mode -eq 'system-runtime') { @('-p:UseSystemWindowsRuntime=true') }
         else { @('-r', 'win-x64', '--self-contained', ($Mode -eq 'self-contained').ToString().ToLowerInvariant()) }
     $suzuPublish = @('publish', (Join-Path $PSScriptRoot 'win_frontend/SuzuEmojy.Windows.csproj'), '-c', 'Release') + $suzuTarget +
-        @('-p:DebugType=None', '-p:DebugSymbols=false', '-o', $suzuApplication)
+        @("-p:Version=$suzuVersion", '-p:DebugType=None', '-p:DebugSymbols=false', '-o', $suzuApplication)
     & dotnet @suzuPublish
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed.' }
     $suzuLauncher = Join-Path $suzuStage 'launcher'
     & dotnet build (Join-Path $PSScriptRoot 'win_launcher/SuzuEmojy.Launcher.csproj') -c Release -o $suzuLauncher -p:DebugType=None -p:DebugSymbols=false
     if ($LASTEXITCODE -ne 0) { throw 'Portable launcher build failed.' }
     Copy-Item -LiteralPath (Join-Path $suzuLauncher 'SuzuEmojy.exe') -Destination $suzuPortable
+    if ($Mode -eq 'system-runtime') {
+        $suzuUpdater = Join-Path $suzuStage 'updater'
+        & dotnet build (Join-Path $PSScriptRoot 'win_updater/SuzuEmojy.Updater.csproj') -c Release -o $suzuUpdater -p:DebugType=None -p:DebugSymbols=false
+        if ($LASTEXITCODE -ne 0) { throw 'Windows updater build failed.' }
+        Copy-Item -LiteralPath (Join-Path $suzuUpdater 'SuzuEmojy.Updater.exe') -Destination $suzuApplication
+    }
     foreach ($suzuFile in @('suzu-webp.dll', 'libwebp-COPYING.txt', 'libwebp-PATENTS.txt')) {
         Copy-Item -LiteralPath (Join-Path $suzuWebp $suzuFile) -Destination $suzuApplication
     }
@@ -83,6 +90,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $suzuApplication
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/windows-packaging.md') -Destination (Join-Path $suzuApplication 'Windows-README.md')
     $suzuMarker = [ordered]@{ version = $suzuVersion; architecture = 'win-x64'; runtime = $Mode; layout = 'portable-v2' }
+    if ($Mode -eq 'system-runtime') { $suzuMarker['updateProtocol'] = 1 }
     $suzuMarker | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $suzuApplication 'windows-preview.json')
     $suzuSmokeBuild = Join-Path $suzuStage 'smoke-runner'
     $suzuSmokeApp = Join-Path $suzuStage 'smoke-app'
@@ -106,6 +114,10 @@ try {
     [IO.Compression.ZipFile]::CreateFromDirectory($suzuPortable, $suzuZip, [IO.Compression.CompressionLevel]::Optimal, $false)
     $suzuBytes = (Get-Item -LiteralPath $suzuZip).Length
     if ($Mode -eq 'system-runtime' -and $suzuBytes -gt 20000000) { throw "ZIP exceeds 20 MB: $suzuBytes bytes." }
+    if ($Mode -eq 'system-runtime') {
+        & (Join-Path $suzuSmokeBin 'SuzuEmojy.Windows.Tests.exe') --verify-update-zip $suzuZip
+        if ($LASTEXITCODE -ne 0) { throw 'ZIP is incompatible with the in-app updater.' }
+    }
     "$( (Get-FileHash -LiteralPath $suzuZip).Hash.ToLowerInvariant() )  $suzuName.zip" |
         Set-Content -Encoding ascii -LiteralPath "$suzuZip.sha256"
     Copy-Item -LiteralPath (Join-Path $FfmpegDirectory $suzuFfmpegSources) -Destination $suzuResult

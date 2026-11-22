@@ -19,8 +19,8 @@ public partial class App : Application
             try
             {
                 var package = WindowsInstall.Locate(AppContext.BaseDirectory);
-                Shutdown(package.Launcher is not null && NativeWebp.Available && LegacyAnimatedGif.Available &&
-                    NativeLottie.Available ? 0 : 1);
+                Shutdown(package.Launcher is not null && (!package.Updatable || package.Version == AboutPage.InstalledVersion) &&
+                    NativeWebp.Available && LegacyAnimatedGif.Available && NativeLottie.Available ? 0 : 1);
             }
             catch (Exception) { Shutdown(1); }
             return;
@@ -31,6 +31,13 @@ public partial class App : Application
             if (instance is null)
             {
                 Shutdown(0);
+                return;
+            }
+            var portable = new DirectoryInfo(AppContext.BaseDirectory).Parent;
+            if (portable is not null && File.Exists(Path.Combine(portable.FullName, PortableLayout.Launcher)) &&
+                (UpdateGate.IsRunning() || UpdateGate.HasJournal(portable.FullName)))
+            {
+                Shutdown(1);
                 return;
             }
             var install = WindowsInstall.Locate(AppContext.BaseDirectory);
@@ -57,7 +64,8 @@ public partial class App : Application
             var window = new MainWindow(library, commands: commands);
             window.StartupRegistration = LoginStartup.ForCurrentProcess(customData ? data : null, install.Launcher);
             MainWindow = window;
-            desktop = new DesktopSession(window, library, data, commands);
+            desktop = new DesktopSession(window, library, data, commands,
+                UpdateInstallation.For(install, data, customData));
             desktop.Start(autostart);
         }
         catch (Exception error)

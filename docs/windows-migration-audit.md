@@ -7,7 +7,7 @@
 | 用途 | 旧版能力与 Windows 2.0 的差异 | 核对入口 |
 | --- | --- | --- |
 | 设置与关于 | 已恢复开机自启动、系统字体和侧栏提示开关、关于页与资源站入口。简中、繁中、英语、日语切换仍未迁移。 | `fluent_ui/views/setting_view.py`、`about_view.py`、`exchange_view.py`；`win_frontend/SettingsPage.xaml.cs`、`AboutPage.xaml.cs` |
-| 就地安装更新 | 2.0 用 C# 手动检查和下载经校验的匹配稳定包；旧更新器只支持 1.x 的包布局和清单，2.0 就地替换、失败回滚尚未接入。 | `win_frontend/Runtime/WindowsReleaseService.cs`、`services/update_protocol.py`、`updater.py` |
+| 就地安装更新 | 2.x 系统运行库便携包可检查、校验并经用户确认后重启安装稳定版；更新只替换程序文件，支持失败回滚与启动时恢复。1.x 和早期预览需手动迁移。 | `win_frontend/Runtime/WindowsReleaseService.cs`、`win_updater/`、`win_launcher/` |
 
 ## 已具备能力，仍有交互差异
 

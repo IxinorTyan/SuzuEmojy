@@ -17,6 +17,8 @@ public partial class MainWindow
     private string? mainHotkeyError, quickHotkeyError;
     private SettingsPage? settingsPage;
     internal LoginStartup? StartupRegistration { get; set; }
+    internal UpdateInstallation? Updates { get; set; }
+    internal Func<StagedUpdate, Task>? InstallUpdate { get; set; }
     internal bool OnSettingsPage => Pages.Page is SettingsPage;
     internal bool RecordingHotkey => OnSettingsPage && settingsPage?.IsRecordingHotkey == true;
     internal event Action<bool>? HotkeyRecordingChanged;
@@ -99,7 +101,7 @@ public partial class MainWindow
         page.AboutRequested += () =>
         {
             if (commands is null) return;
-            var about = new AboutPage(commands.Updates);
+            var about = new AboutPage(commands.Updates, Updates, InstallUpdate);
             OpenPage(new("关于软件", about, Leave: about.Cancel, Work: about.PageWork));
         };
         return page;

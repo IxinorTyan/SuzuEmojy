@@ -22,14 +22,11 @@ public partial class FluentPageHost : UserControl
     internal FrameworkElement? Page => stack.Count == 0 ? null : stack[stack.Count - 1].Route.View;
     internal bool HasBlockingOperation => stack.Any(entry => entry.Route.Work?.BlocksLeave == true);
     internal event Action? RootClosed;
-    internal event Action? RootClosing;
 
     public FluentPageHost()
     {
         InitializeComponent();
-        transitions = new(this, PreviousBody);
-        FluentMotion.Observe(this, transitions.Reset);
-        Unloaded += (_, _) => transitions.Reset();
+        transitions = new(RouteSurface);
         Back.Click += (_, _) => RequestBack();
         PreviewKeyDown += (_, e) =>
         {
@@ -79,7 +76,6 @@ public partial class FluentPageHost : UserControl
     {
         if (stack.Count == 0) return true;
         if (HasBlockingOperation) return false;
-        RootClosing?.Invoke();
         while (stack.Count != 0) PopCurrent();
         PresentCurrent();
         return true;
@@ -105,7 +101,6 @@ public partial class FluentPageHost : UserControl
             if (route.Work.WaitsForCancellation) route.Work.RequestCancel();
             return;
         }
-        if (stack.Count == 1) RootClosing?.Invoke();
         PopCurrent();
         PresentCurrent();
         if (stack.Count == 0) return;
@@ -123,14 +118,13 @@ public partial class FluentPageHost : UserControl
 
     private void PresentCurrent(bool animate = true)
     {
-        var previous = animate && PageBody.Content is not null && Page is not null ? transitions.Capture(RouteSurface) : null;
         PageBody.Content = Page;
         PageTools.Content = stack.LastOrDefault()?.Route.Tool is { } tool ? CreateTool(tool) : null;
         Visibility = stack.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (stack.Count > 0)
         {
             ApplyCaption(stack[stack.Count - 1]);
-            transitions.Swap(previous, RouteSurface);
+            transitions.Show(animate);
         }
         else
         {

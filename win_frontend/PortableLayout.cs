@@ -9,4 +9,9 @@ internal static class PortableLayout
     internal const string Marker = "windows-preview.json";
     internal const string LayoutId = "portable-v2";
     internal const string VerifyInstall = "--verify-install";
+    internal const string Updater = "SuzuEmojy.Updater.exe";
+    internal const string Journal = ".suzu-update";
+    internal const string Payload = ".suzu-update-payload";
+    internal const string UpdateZip = "update.zip";
+    internal const string SystemRuntime = "system-runtime";
 }

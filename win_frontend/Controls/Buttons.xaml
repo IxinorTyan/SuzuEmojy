@@ -33,7 +33,6 @@
     </Setter>
   </Style>
   <Style x:Key="FluentCategoryButton" TargetType="Button" BasedOn="{StaticResource ToolButton}">
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -50,9 +49,6 @@
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="HoverSurface" Property="Visibility" Value="Visible"/>
             </Trigger>
-            <Trigger Property="IsKeyboardFocused" Value="True">
-              <Setter TargetName="HoverSurface" Property="Visibility" Value="Visible"/>
-            </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.5"/>
             </Trigger>
@@ -62,7 +58,6 @@
     </Setter>
   </Style>
   <Style x:Key="FluentGalleryCardButton" TargetType="Button">
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -75,9 +70,6 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="CardHover" Property="Visibility" Value="Visible"/>
-            </Trigger>
-            <Trigger Property="IsKeyboardFocused" Value="True">
               <Setter TargetName="CardHover" Property="Visibility" Value="Visible"/>
             </Trigger>
           </ControlTemplate.Triggers>

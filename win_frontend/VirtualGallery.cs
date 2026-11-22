@@ -137,6 +137,7 @@ internal sealed class VirtualGallery : IDisposable
 
     internal Func<Sticker, ContextMenu?>? ContextMenuFor { get; set; }
     internal const string InternalDragFormat = "SuzuEmojy.Windows.GalleryItem";
+    internal Func<bool>? CanReorder { get; set; }
     internal event Action<Sticker, Sticker>? ReorderRequested;
 
     internal void ApplySelection(HashSet<Sticker> selected)
@@ -325,11 +326,23 @@ internal sealed class VirtualGallery : IDisposable
             menu.IsOpen = true;
         };
         button.AllowDrop = true;
+        void ReorderEffect(object sender, DragEventArgs e)
+        {
+            if (ReorderRequested is null || CanReorder?.Invoke() != true ||
+                !e.Data.GetDataPresent(InternalDragFormat, autoConvert: false)) return;
+            e.Effects = e.AllowedEffects & DragDropEffects.Copy;
+            e.Handled = true;
+        }
+        button.DragEnter += ReorderEffect;
+        button.DragOver += ReorderEffect;
         button.Drop += (_, e) =>
         {
-            if (ReorderRequested is null || e.Data.GetData(InternalDragFormat) is not string path) return;
+            if (ReorderRequested is null || CanReorder?.Invoke() != true ||
+                (e.AllowedEffects & DragDropEffects.Copy) == 0 ||
+                e.Data.GetData(InternalDragFormat, autoConvert: false) is not string path) return;
             var source = Items.Find(sticker => sticker.Path == path);
             if (source is null || source == card.Item) return;
+            e.Effects = DragDropEffects.Copy;
             e.Handled = true;
             ReorderRequested?.Invoke(source, card.Item);
         };
@@ -345,6 +358,7 @@ internal sealed class VirtualGallery : IDisposable
             dragOrigin = null;
             unhover();
             e.Handled = true;
+            button.ReleaseMouseCapture();
             var data = new DataObject(DataFormats.FileDrop, new[] { card.Item.Path });
             if (ReorderRequested is not null) data.SetData(InternalDragFormat, card.Item.Path);
             DragDrop.DoDragDrop(button, data, DragDropEffects.Copy);

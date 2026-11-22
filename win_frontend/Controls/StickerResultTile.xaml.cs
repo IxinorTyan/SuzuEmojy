@@ -24,7 +24,7 @@ public partial class StickerResultTile : UserControl
         Open.Click += (_, _) => Opened?.Invoke(Keyboard.Modifiers);
         Toggle.Checked += (_, _) => Changed();
         Toggle.Unchecked += (_, _) => Changed();
-        FluentMotion.Focus(this, FocusSurface);
+        FluentMotion.Hover(this, FocusSurface);
     }
 
     internal void SetSelected(bool selected)

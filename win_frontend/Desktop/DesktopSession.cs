@@ -33,6 +33,7 @@ internal sealed class DesktopSession : IDisposable
     private readonly MainWindowPlacement placement;
     private readonly InboxMonitor inbox;
     private readonly CancellationTokenSource maintenance = new();
+    private Task warmup = Task.CompletedTask;
     private readonly HwndSource hotkeyMessages;
     private readonly TrayIcon? tray;
     private GlobalHotkey? hotkey, quickHotkey;
@@ -44,11 +45,14 @@ internal sealed class DesktopSession : IDisposable
     private bool recordingHotkey;
     private bool disposed, exiting, exitRequested;
 
-    internal DesktopSession(MainWindow window, LibrarySnapshot settings, string data, LibraryCommands commands)
+    internal DesktopSession(MainWindow window, LibrarySnapshot settings, string data, LibraryCommands commands,
+        UpdateInstallation? update = null)
     {
         this.window = window;
         this.settings = settings;
         this.commands = commands;
+        window.Updates = update;
+        window.InstallUpdate = update is null ? null : release => InstallUpdate(update, release);
         cache = Path.Combine(data, "cache", "gif_output");
         results = new QuickPanelResults(settings);
         sendMedia = new StickerSendMedia(cache, settings.Flag("convert_static_to_gif", true));
@@ -138,7 +142,7 @@ internal sealed class DesktopSession : IDisposable
 
     internal void Start(bool autostart)
     {
-        _ = WarmIndexes(maintenance.Token);
+        warmup = WarmIndexes(maintenance.Token);
         inbox.Start();
         if (!autostart || tray is null)
         {
@@ -418,6 +422,27 @@ internal sealed class DesktopSession : IDisposable
         if (pendingRecents != 0) { exitRequested = true; return; }
         exiting = true;
         Application.Current.Shutdown();
+    }
+
+    private async Task InstallUpdate(UpdateInstallation installation, StagedUpdate release)
+    {
+        placement.Flush();
+        window.FlushSettings();
+        bool CanExit() => !window.HasPendingWrite && pendingRecents == 0 && warmup.IsCompleted;
+        if (!CanExit()) throw new InvalidOperationException("图库仍在写入，请稍后重试。");
+        window.IsEnabled = false;
+        try
+        {
+            using var helper = await Task.Run(() => installation.Start(release));
+            if (disposed || !CanExit())
+            {
+                UpdateInstallation.Stop(helper);
+                throw new InvalidOperationException("图库仍在写入，请稍后重试。");
+            }
+            exiting = true;
+            Application.Current.Shutdown();
+        }
+        finally { if (!exiting && !disposed) window.IsEnabled = true; }
     }
 
     public void Dispose()

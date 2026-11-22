@@ -14,7 +14,16 @@ internal static class Program
         bool probe = args.Length == 1 && args[0] == PortableLayout.VerifyInstall;
         try
         {
-            if (!probe && WindowsInstance.IsRunning()) return 0;
+            if (!probe)
+            {
+                if (WindowsInstance.IsRunning() || UpdateGate.IsRunning()) return 0;
+                if (UpdateGate.HasJournal(AppContext.BaseDirectory))
+                {
+                    using var gate = UpdateGate.TryAcquire();
+                    if (gate is null || WindowsInstance.IsRunning()) return 0;
+                    new UpdateTransaction(AppContext.BaseDirectory).Recover();
+                }
+            }
             var target = Path.Combine(AppContext.BaseDirectory, PortableLayout.ProgramDirectory, PortableLayout.Application);
             if (!File.Exists(target)) throw new FileNotFoundException("请从完整 ZIP 解压后运行。", target);
             using var child = Process.Start(new ProcessStartInfo(target,
@@ -25,7 +34,7 @@ internal static class Program
             child.Kill();
             return 1;
         }
-        catch (Exception error) when (error is IOException or Win32Exception or InvalidOperationException)
+        catch (Exception error) when (error is IOException or Win32Exception or InvalidOperationException or UnauthorizedAccessException)
         {
             if (!probe) MessageBox.Show(error.Message, "SuzuEmojy", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;

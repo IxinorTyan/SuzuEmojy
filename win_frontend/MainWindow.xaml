@@ -90,7 +90,6 @@
       </Grid>
     </Grid>
     <controls:FluentPageHost x:Name="Pages"/>
-    <Image x:Name="PreviousPage" Stretch="Fill" IsHitTestVisible="False" Visibility="Collapsed"/>
     <Grid ClipToBounds="True" IsHitTestVisible="False">
       <controls:InlineNotice x:Name="GalleryNotice" HorizontalAlignment="Right"
                              VerticalAlignment="Top" MaxWidth="420" Margin="16,56,16,0"/>
