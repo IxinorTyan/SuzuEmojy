@@ -10,6 +10,7 @@ param(
     [switch]$NoOpen
 )
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $PSScriptRoot 'dist/windows-packages' }
 if (-not $FfmpegDirectory) { $FfmpegDirectory = Join-Path $PSScriptRoot 'dist/ffmpeg-minimal' }
 $suzuFfmpegSources = 'SuzuEmojy-FFmpeg-sources.tar'
@@ -46,6 +47,26 @@ function Find-InteractiveFfmpeg([string]$DefaultDirectory, [string]$RecipeHash) 
         if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $picker.SelectedPath }
     } finally { $picker.Dispose() }
     throw 'No FFmpeg folder selected. To build it first, see docs/ffmpeg-minimal.md.'
+}
+
+function New-PortableArchive([string]$SourceDirectory, [string]$ZipPath) {
+    $prefix = [IO.Path]::GetFullPath($SourceDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $files = foreach ($item in Get-ChildItem -LiteralPath $SourceDirectory -Recurse -Force) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $item.Extension -in @('.py', '.pyw', '.pyc', '.pyd', '.whl') -or
+            $item.Name -match '^(python|pyside|pyqt|qt6|backend$|data$)') { throw "Unexpected package entry: $($item.Name)" }
+        if (-not $item.PSIsContainer) { $item }
+    }
+    $archive = [IO.Compression.ZipFile]::Open($ZipPath, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($file in $files) {
+            # Windows PowerShell's ZipFile.CreateFromDirectory can use backslashes;
+            # the release layout requires portable, forward-slash entry names.
+            $entryName = $file.FullName.Substring($prefix.Length).Replace('\', '/')
+            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName,
+                [IO.Compression.CompressionLevel]::Optimal)
+        }
+    } finally { $archive.Dispose() }
 }
 
 [xml]$suzuProject = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'win_frontend/SuzuEmojy.Windows.csproj')
@@ -140,7 +161,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/windows-packaging.md') -Destination (Join-Path $suzuApplication 'Windows-README.md')
     $suzuMarker = [ordered]@{ version = $suzuVersion; architecture = 'win-x64'; runtime = $Mode; layout = 'portable-v2' }
     if ($Mode -eq 'system-runtime') { $suzuMarker['updateProtocol'] = 1 }
-    $suzuMarker | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $suzuApplication 'windows-preview.json')
+    [IO.File]::WriteAllText((Join-Path $suzuApplication 'windows-preview.json'), (ConvertTo-Json -InputObject $suzuMarker))
     $suzuSmokeBuild = Join-Path $suzuStage 'smoke-runner'
     $suzuSmokeApp = Join-Path $suzuStage 'smoke-app'
     $suzuTestProject = Join-Path $PSScriptRoot 'win_frontend_tests/SuzuEmojy.Windows.Tests.csproj'
@@ -154,13 +175,8 @@ try {
         Copy-Item -Destination $suzuSmokeBin
     & (Join-Path $suzuSmokeBin 'SuzuEmojy.Windows.Tests.exe') --package-smoke $suzuSmokeBin (Join-Path $suzuStage 'smoke-data')
     if ($LASTEXITCODE -ne 0) { throw 'Native package smoke failed.' }
-    foreach ($suzuItem in Get-ChildItem -LiteralPath $suzuPortable -Recurse -Force) {
-        if (($suzuItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
-            $suzuItem.Extension -in @('.py', '.pyw', '.pyc', '.pyd', '.whl') -or
-            $suzuItem.Name -match '^(python|pyside|pyqt|qt6|backend$|data$)') { throw "Unexpected package entry: $($suzuItem.Name)" }
-    }
     $suzuZip = Join-Path $suzuResult "$suzuName.zip"
-    [IO.Compression.ZipFile]::CreateFromDirectory($suzuPortable, $suzuZip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    New-PortableArchive $suzuPortable $suzuZip
     $suzuBytes = (Get-Item -LiteralPath $suzuZip).Length
     if ($Mode -eq 'system-runtime' -and $suzuBytes -gt 20000000) { throw "ZIP exceeds 20 MB: $suzuBytes bytes." }
     if ($Mode -eq 'system-runtime') {
