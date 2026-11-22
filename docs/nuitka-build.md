@@ -1,6 +1,6 @@
 # Nuitka 打包速度与缓存
 
-照常运行 `python build_nuitka.py` 或 `build_nuitka.bat`。
+本文是 1.x 构建历史。复现旧包请使用对应的 1.x Git 标签；Windows 2.x 请使用 [原生封包流程](windows-packaging.md)。
 
 离线发布首次打包前，先按 [精简 FFmpeg 构建说明](ffmpeg-minimal.md) 生成转码器。这一步只在构建机上运行，发布包仍自带 FFmpeg。
 

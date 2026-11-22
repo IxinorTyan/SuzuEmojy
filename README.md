@@ -166,18 +166,9 @@ pip install -r requirements.txt
 python main.py
 ```
 
-#### 4. 打包为 EXE
-本项目提供了两种打包方式：
+#### 4. 打包 Windows 2.x
 
-- **方式一：轻量级启动器 (推荐)**  
-  双击运行 `build.bat`。此脚本会使用 PyInstaller 将 `launcher.py` 打包为极小的单文件 EXE（约 10MB）。用户首次运行该 EXE 时会自动检测系统环境并按需准备 Python 运行环境与图形库（PySide6 等）。
-- **方式二：完全独立离线打包**  
-  首次构建请先按 [精简 FFmpeg 构建说明](docs/ffmpeg-minimal.md) 生成转码器。
-  如果你希望打包出一个包含所有依赖的完整离线版（体积较大），请运行：
-  ```bash
-  python build_nuitka.py
-  ```
-  此脚本会使用 Nuitka 将整个程序编译为完全独立的二进制文件，产物位于 `dist/main.dist` 目录下。
+在仓库根目录用 PowerShell 运行 `.\build_windows.ps1`。首次构建请先准备[精简 FFmpeg](docs/ffmpeg-minimal.md)；正式版命名和上传文件见 [Windows 封包说明](docs/windows-packaging.md)。上面的 Python 源码运行步骤仅用于旧版，旧版封包入口请查阅对应的 Git 标签。
 
 ---
 
@@ -187,8 +178,8 @@ python main.py
 SuzuEmojy/
 ├── launcher.py            # 轻量级环境初始化启动器
 ├── main.py                # 主程序入口点
-├── build.bat              # 启动器打包脚本 (PyInstaller)
-├── build_nuitka.py        # 完整离线版编译脚本 (Nuitka)
+├── build_windows.ps1      # Windows 2.x 封包入口
+├── win_frontend/          # Windows 2.x 原生界面
 ├── requirements.txt       # 依赖列表
 ├── ico.ico                # 程序图标
 ├── fluent_ui/             # Fluent Design 现代界面层
@@ -385,18 +376,9 @@ pip install -r requirements.txt
 python main.py
 ```
 
-#### 4. Build Executable
-This project provides two packaging methods:
+#### 4. Package Windows 2.x
 
-- **Method 1: Lightweight Launcher (Recommended)**  
-  Double-click and run `build.bat`. This uses PyInstaller to package `launcher.py` into a compact single-file EXE (~10MB). When users run this EXE for the first time, it automatically detects system environments and downloads required Python runtimes and GUI dependencies (PySide6, etc.).
-- **Method 2: Fully Standalone Offline Bundle**  
-  Before the first build, follow the [minimal FFmpeg build instructions](docs/ffmpeg-minimal.md).
-  If you prefer a completely offline standalone bundle with all dependencies included (larger file size), run:
-  ```bash
-  python build_nuitka.py
-  ```
-  This uses Nuitka to compile the application into native standalone binaries in the `dist/main.dist` directory.
+Run `.\build_windows.ps1` from the repository root in PowerShell. Prepare the [minimal FFmpeg build](docs/ffmpeg-minimal.md) first, then see the [Windows packaging guide](docs/windows-packaging.md) for release names and upload assets. The Python source instructions above are for the legacy version; its packaging entry points are in the corresponding Git tags.
 
 ---
 
@@ -406,8 +388,8 @@ This project provides two packaging methods:
 SuzuEmojy/
 ├── launcher.py            # Lightweight environment initialization launcher
 ├── main.py                # Main application entry point
-├── build.bat              # Launcher build script (PyInstaller)
-├── build_nuitka.py        # Standalone build script (Nuitka)
+├── build_windows.ps1      # Windows 2.x packaging entry point
+├── win_frontend/          # Windows 2.x native frontend
 ├── requirements.txt       # Dependencies list
 ├── ico.ico                # Application icon
 ├── fluent_ui/             # Modern Fluent Design UI layer
