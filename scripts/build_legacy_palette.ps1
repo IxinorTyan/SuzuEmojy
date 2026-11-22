@@ -25,7 +25,7 @@ foreach ($suzuFile in $suzuFiles.Keys) {
     $suzuDownload = Join-Path $suzuSource $suzuFile
     $suzuRelative = if ($suzuFile -eq 'Pillow-LICENSE.txt') { 'LICENSE' } else { "src/libImaging/$suzuFile" }
     if (!(Test-Path -LiteralPath $suzuDownload)) {
-        Invoke-WebRequest -Uri "$suzuPillow/$suzuRelative" -OutFile $suzuDownload -TimeoutSec 30
+        Invoke-WebRequest -UseBasicParsing -Uri "$suzuPillow/$suzuRelative" -OutFile $suzuDownload -TimeoutSec 30
     }
     if ((Get-FileHash -LiteralPath $suzuDownload -Algorithm SHA256).Hash -ne $suzuFiles[$suzuFile]) {
         throw "Unexpected SHA-256 for $suzuFile"
@@ -36,8 +36,12 @@ $suzuOperands = @('-m64', '-std=c11', '-O2', '-ffunction-sections', '-fdata-sect
     '-Wl,--gc-sections,--exclude-all-symbols', '-s', "-I$suzuShim", "-I$suzuSource",
     (Join-Path $suzuShim 'suzu_quant.c'), (Join-Path $suzuSource 'QuantOctree.c'),
     (Join-Path $suzuSource 'QuantHeap.c'), (Join-Path $suzuSource 'QuantHash.c'),
-    '-o', (Join-Path $suzuOutput 'suzu-legacy-palette.dll'))
-& $Compiler @suzuOperands
-if ($LASTEXITCODE -ne 0) { throw 'Could not build legacy palette adapter.' }
+    '-o', 'suzu-legacy-palette.dll')
+# Keep the linker output relative so the workspace can contain non-ASCII characters.
+Push-Location -LiteralPath $suzuOutput
+try {
+    & $Compiler @suzuOperands
+    if ($LASTEXITCODE -ne 0) { throw 'Could not build legacy palette adapter.' }
+} finally { Pop-Location }
 Copy-Item -LiteralPath (Join-Path $suzuSource 'Pillow-LICENSE.txt') -Destination $suzuOutput
 Get-Item -LiteralPath (Join-Path $suzuOutput 'suzu-legacy-palette.dll')

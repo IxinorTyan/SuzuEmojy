@@ -2,8 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Platform">
-  <img src="https://img.shields.io/badge/Python-3.9+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/UI-PySide6%20%7C%20Fluent%20Design-0078D4?style=flat-square" alt="UI">
+  <img src="https://img.shields.io/badge/UI-WPF%20%7C%20Fluent%20Design-0078D4?style=flat-square" alt="UI">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-orange?style=flat-square" alt="License"></a>
   <a href="https://github.com/IxinorTyan/SuzuEmojy/releases"><img src="https://img.shields.io/github/v/release/IxinorTyan/SuzuEmojy?style=flat-square&color=brightgreen" alt="Release"></a>
 </p>
@@ -21,7 +20,7 @@
 > **专为 Windows 打造的本地表情包管理利器**  
 > 快速搜索、智能整理、一键发送，让收藏多年的表情包真正用起来。
 
-Windows 2.0（WPF）正在开发，尚未发布。新版解压即用，不依赖 Python 或 Qt。见 [开发预览](docs/windows-native-frontend.md) 和 [本地封包](docs/windows-packaging.md)；下方使用说明对应 1.x。
+当前分支是 Windows 2.x（WPF），解压即用，不依赖 Python 或 Qt。见 [前端说明](docs/windows-native-frontend.md) 和 [本地封包](docs/windows-packaging.md)。下方部分演示图片来自 1.x；旧版源码在对应的 Git 标签。
 
 💬 **QQ 交流群**：`834586488`（欢迎进群交流心得、反馈 Bug、催更以及分享好看好玩的表情包！）
 
@@ -131,44 +130,21 @@ Windows 2.0（WPF）正在开发，尚未发布。新版解压即用，不依赖
 
 ### 📥 下载与安装
 
-1. 前往 **[GitHub Releases](https://github.com/IxinorTyan/SuzuEmojy/releases)** 页面下载最新发布版本。
-2. 解压至任意目录即可双击运行。
-3. 软件首次启动会自动检测并安装所需运行依赖（如遇依赖安装异常，可直接运行同目录下的辅助脚本）。
-4. **绿色便携**：所有数据均保存在程序自身目录下，换电脑时直接拷贝 `data` 文件夹即可完成无缝迁移。
+1. 从 [GitHub Releases](https://github.com/IxinorTyan/SuzuEmojy/releases) 下载 Windows 2.x 的 `system-runtime.zip`，尚无 2.x 版本时可按下文自行封包。
+2. 解压后运行外层的 `SuzuEmojy.exe`。新版不自动下载运行库。
+3. 换电脑或从旧版迁移时，退出软件后复制完整的 `data` 文件夹。详见 [图库迁移说明](docs/windows-packaging.md#使用已经封好的-zip)。
 
 ---
 
 ### 🥟 关于默认表情包
 
-软件首次启动时默认内置了一套 **Suzu** 表情包，只是为了让你第一次打开时就能直接上手体验各项功能。  
-如果你更喜欢自己的专属收藏，完全可以在主界面中删除它们（*真的要删掉嘛 QAQ*）。  
-希望有一天，你也会喜欢上她~
+**Suzu** 是本项目的吉祥物和 1.x 的预置表情包。Windows 2.x 便携包不自带图库；可从旧图库迁移或自行导入。
 
 ---
 
 ### 💻 开发者指南
 
-如果你想从源码运行或进行二次开发：
-
-#### 1. 环境要求
-- Python 3.9+
-- Windows 10 / 11（推荐 Windows 11 以获得最佳 Mica 云母特效体验）
-
-#### 2. 安装依赖
-```bash
-git clone https://github.com/IxinorTyan/SuzuEmojy.git
-cd SuzuEmojy
-pip install -r requirements.txt
-```
-
-#### 3. 运行程序
-```bash
-python main.py
-```
-
-#### 4. 打包 Windows 2.x
-
-在仓库根目录用 PowerShell 运行 `.\build_windows.ps1`。首次构建请先准备[精简 FFmpeg](docs/ffmpeg-minimal.md)；正式版命名和上传文件见 [Windows 封包说明](docs/windows-packaging.md)。上面的 Python 源码运行步骤仅用于旧版，旧版封包入口请查阅对应的 Git 标签。
+双击仓库根目录的 [`build_windows.bat`](build_windows.bat) 封包，按回车采用默认版本号。首次构建的工具链、手动参数和 Release 附件见 [Windows 封包说明](docs/windows-packaging.md)。源码运行和测试见 [Windows 前端说明](docs/windows-native-frontend.md)。
 
 ---
 
@@ -176,24 +152,13 @@ python main.py
 
 ```text
 SuzuEmojy/
-├── launcher.py            # 轻量级环境初始化启动器
-├── main.py                # 主程序入口点
-├── build_windows.ps1      # Windows 2.x 封包入口
-├── win_frontend/          # Windows 2.x 原生界面
-├── requirements.txt       # 依赖列表
-├── ico.ico                # 程序图标
-├── fluent_ui/             # Fluent Design 现代界面层
-│   ├── main_window.py     # 主窗口与导航框架
-│   ├── theme.py           # 主题管理与样式
-│   ├── components/        # UI 组件 (表情卡片、悬停预览、快捷窗口等)
-│   └── views/             # 视图页面 (图库、QQ扫描、TG贴纸、查重、交流包、设置)
-└── services/              # 核心业务服务层
-    ├── clipboard.py       # 剪贴板监听与自动模拟粘贴
-    ├── storage.py         # 图片物理存储与 JSON 元数据持久化
-    ├── qq_extractor.py    # QQNT 本地表情扫描提取引擎
-    ├── tg_downloader.py   # Telegram 贴纸下载与格式转换
-    ├── similarity.py      # 相似表情感知哈希与查重算法
-    └── exchange_export.py # 表情包导入导出与数据包封装
+├── build_windows.bat     # 双击封包
+├── build_windows.ps1     # 封包实现
+├── win_frontend/         # 原生界面和业务逻辑
+├── win_frontend_tests/   # 原生回归测试
+├── win_launcher/         # 便携启动器
+├── win_updater/          # Windows 2.x 更新器
+└── scripts/              # 原生依赖构建工具
 ```
 
 ---
@@ -341,44 +306,21 @@ Most importantly, the developer constantly switches between multiple accounts, b
 
 ### 📥 Download & Getting Started
 
-1. Go to the **[GitHub Releases](https://github.com/IxinorTyan/SuzuEmojy/releases)** page to download the latest release package.
-2. Extract the archive and double-click to run.
-3. Upon first launch, the application will automatically detect and install required runtime dependencies (if an issue occurs, run the helper script included in the folder).
-4. **Portable & Clean**: All application data is stored in the local `data/` folder. When moving to another PC, simply copy the `data/` folder.
+1. Download the Windows 2.x `system-runtime.zip` from [GitHub Releases](https://github.com/IxinorTyan/SuzuEmojy/releases), or build it below if a 2.x release is not available.
+2. Extract the archive and run the outer `SuzuEmojy.exe`. It does not download a runtime.
+3. Close the application before copying the full `data/` folder to another PC or upgrading. Legacy 1.x source is available from its Git tags.
 
 ---
 
 ### 🥟 About Default Emoji Pack
 
-The software comes bundled with a default set of **Suzu** emojis so that you can immediately experience all features upon first launch.  
-If you prefer having exclusively your own memes, you can safely delete them inside the app (*do you really want to delete them QAQ*).  
-Hope that one day, you will like her too~
+**Suzu** is the mascot and the default sticker pack from 1.x. The Windows 2.x portable ZIP does not include a gallery; migrate an existing one or import your own stickers.
 
 ---
 
 ### 💻 Developer Guide
 
-If you want to run from source code or contribute:
-
-#### 1. Requirements
-- Python 3.9+
-- Windows 10 / 11 (Windows 11 recommended for optimal Mica effect support)
-
-#### 2. Install Dependencies
-```bash
-git clone https://github.com/IxinorTyan/SuzuEmojy.git
-cd SuzuEmojy
-pip install -r requirements.txt
-```
-
-#### 3. Run Application
-```bash
-python main.py
-```
-
-#### 4. Package Windows 2.x
-
-Run `.\build_windows.ps1` from the repository root in PowerShell. Prepare the [minimal FFmpeg build](docs/ffmpeg-minimal.md) first, then see the [Windows packaging guide](docs/windows-packaging.md) for release names and upload assets. The Python source instructions above are for the legacy version; its packaging entry points are in the corresponding Git tags.
+Double-click [`build_windows.bat`](build_windows.bat) and press Enter to use the default version. See the [Windows packaging guide](docs/windows-packaging.md) for build prerequisites, command-line options and release assets, and the [frontend guide](docs/windows-native-frontend.md) for development and tests.
 
 ---
 
@@ -386,24 +328,13 @@ Run `.\build_windows.ps1` from the repository root in PowerShell. Prepare the [m
 
 ```text
 SuzuEmojy/
-├── launcher.py            # Lightweight environment initialization launcher
-├── main.py                # Main application entry point
-├── build_windows.ps1      # Windows 2.x packaging entry point
-├── win_frontend/          # Windows 2.x native frontend
-├── requirements.txt       # Dependencies list
-├── ico.ico                # Application icon
-├── fluent_ui/             # Modern Fluent Design UI layer
-│   ├── main_window.py     # Main window container and navigation
-│   ├── theme.py           # Theme management and color styling
-│   ├── components/        # UI components (emoji cards, hover preview, quick box, etc.)
-│   └── views/             # Views (gallery, QQ scanner, TG stickers, dedup, exchange, settings)
-└── services/              # Core business services layer
-    ├── clipboard.py       # Clipboard listener and automated paste emulation
-    ├── storage.py         # Local image storage and JSON metadata persistence
-    ├── qq_extractor.py    # Local QQNT emoji scanning and extraction engine
-    ├── tg_downloader.py   # Telegram sticker pack downloader and converter
-    ├── similarity.py      # Perceptual image hashing and similarity deduplication
-    └── exchange_export.py # Emoji pack packaging and import/export
+├── build_windows.bat     # Double-click to build a ZIP
+├── build_windows.ps1     # Packaging implementation
+├── win_frontend/         # Native UI and application logic
+├── win_frontend_tests/   # Native regression tests
+├── win_launcher/         # Portable launcher
+├── win_updater/          # Windows 2.x updater
+└── scripts/              # Native dependency build tools
 ```
 
 ---

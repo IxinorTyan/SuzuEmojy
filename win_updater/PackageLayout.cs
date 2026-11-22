@@ -20,7 +20,7 @@ internal static class PackageLayout
     }.Select(name => Bin + name)];
     private static readonly HashSet<string> Files = new(Required.Concat(new[] {
         "LICENSE", "Windows-README.md", "rlottie-LICENSE.txt", "libwebp-COPYING.txt", "libwebp-PATENTS.txt",
-        "Pillow-LICENSE.txt", "ffmpeg/THIRD_PARTY.txt",
+        "Pillow-LICENSE.txt", "ffmpeg/THIRD_PARTY.txt", "QRCoder-LICENSE.txt", "QRCoder.dll",
         "Microsoft.Bcl.AsyncInterfaces.dll", "Microsoft.Bcl.TimeProvider.dll", "System.Buffers.dll",
         "System.Memory.dll", "System.Numerics.Vectors.dll", "System.Runtime.CompilerServices.Unsafe.dll",
         "System.Text.Encodings.Web.dll", "System.Text.Json.dll", "System.Threading.Tasks.Extensions.dll",

@@ -1,6 +1,6 @@
 # Windows 离线版：精简 FFmpeg
 
-发行包继续在 `bin/ffmpeg/ffmpeg.exe` 内置转码器，终端用户无需联网、装工具链或改 PATH。当前配方保留本地 WebM 的 VP9（含 alpha）解码、PNG 抽帧、GIF 调色板及动画输出；它不是通用版 FFmpeg。Python 源码运行时仍可使用 `imageio-ffmpeg`，方便开发和保留其他平台路径。
+发行包在 `bin/ffmpeg/ffmpeg.exe` 内置转码器，终端用户无需联网、装工具链或改 PATH。当前配方保留本地 WebM 的 VP9（含 alpha）解码、PNG 抽帧、GIF 调色板及动画输出；它不是通用版 FFmpeg。
 
 ## 构建
 
@@ -12,4 +12,4 @@
 
 ## 验证
 
-构建后运行 `python -B -m unittest discover -s tests -p test_minimal_ffmpeg.py -v`，用开发环境的完整版生成 WebM，再用精简版执行项目的三个转码入口。检查多帧动图、透明背景、半透明像素和带中文的路径。
+Windows 封包会运行原生冒烟测试，检查内置 FFmpeg 能启动和转换贴纸。

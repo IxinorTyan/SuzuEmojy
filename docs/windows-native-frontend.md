@@ -1,6 +1,6 @@
 # Windows 原生前端预览
 
-这是 Windows 2.0 的独立 WPF 预览入口。SQLite 和 JSON 沿用原格式；图库、清洗、媒体、QQ／TG 和更新检查由 C# 与原生组件完成。应用和本地封包工具都不使用 Python 或 Qt；1.x 源码保留作历史对照。
+这是 Windows 2.x 的 WPF 版本。SQLite 和 JSON 沿用原格式；图库、清洗、媒体、QQ／TG 和更新检查由 C# 与原生组件完成。应用、封包和默认测试都不使用 Python 或 Qt；如需旧版源码，请检出对应的 1.x Git 标签。
 
 ## 试用
 
@@ -104,17 +104,18 @@ QQ 扫描结果的「导入到」旁可以新建并选中图库分类，不改�
 
 ## 不弹窗的验证
 
-用合成测试图，不读写真实图库、不注入键鼠，也不使用剪贴板：
+用合成测试图，不读写真实图库、不注入键鼠，也不使用剪贴板。先解压一个系统运行库便携包到临时目录，让测试可以使用包内的原生解码器：
 
 ```powershell
-python -B -m scripts.windows_frontend_fixture dist/wpf-fixture --count 1000
-python -B -m scripts.windows_frontend_fixture dist/wpf-fixture --offscreen-output dist/gallery-comparison
-dotnet build win_frontend_tests/SuzuEmojy.Windows.Tests.csproj -c Release -o dist/win-frontend-headless
-.\dist\win-frontend-headless\SuzuEmojy.Windows.Tests.exe (Get-Location).Path (Resolve-Path dist/wpf-fixture/data).Path (Join-Path (Get-Location).Path 'dist/gallery-comparison')
-python -B -m pytest -q tests/test_gallery_commands.py tests/test_gallery_snapshot.py tests/test_send_media.py tests/test_external_stickers.py tests/test_qq_apng_conversion.py tests/test_import_sources.py
+dotnet build win_frontend_tests/SuzuEmojy.Windows.Tests.csproj -c Release -p:UseSystemWindowsRuntime=true -o dist/win-frontend-headless
+$bin = (Resolve-Path '解压后的临时目录/bin').Path
+Copy-Item dist/win-frontend-headless/SuzuEmojy.Windows.Tests.* $bin
+$runner = Join-Path $bin 'SuzuEmojy.Windows.Tests.exe'
+& $runner --create-gallery-fixture dist/wpf-fixture 1000
+& $runner $bin (Resolve-Path dist/wpf-fixture/data).Path (Join-Path (Get-Location).Path 'dist/gallery-comparison')
 ```
 
-`wpf-fixture` 应使用未存在过的目录。上述 Python 命令只生成历史对照夹具和运行 1.x 测试，不属于 2.0 运行或封包流程。设置 `SUZU_LEGACY_REFERENCE` 选用一个旧版参考后端，可额外运行跨版本对照。不设置时，WPF 测试不会调用 Python。测试只在离屏视图和本进程不可见的窗口验证热键流程，不注册系统快捷键、托盘，也不访问真实剪贴板。真实聊天软件和屏幕环境还需实机验收。
+`wpf-fixture` 应使用未存在过的目录，可加 `--dark` 生成深色夹具。如果需要额外做跨版本对照，`SUZU_LEGACY_REFERENCE` 可指向另外检出的 1.x 工作目录；默认测试不读取旧源码。测试只在离屏视图和本进程不可见的窗口验证热键流程，不注册系统快捷键、托盘，也不访问真实剪贴板。真实聊天软件和屏幕环境仍需实机验收。
 
 WPF 也输出滚动侧栏和托盘菜单的离屏 PNG，并验证侧栏滑块拖动、选中末尾分类、托盘动作绑定，以及已创建的托盘和图库菜单随浅深模式及主题色更新。此测试不会实际打开托盘弹出窗口。
 
@@ -125,8 +126,8 @@ WPF 也输出滚动侧栏和托盘菜单的离屏 PNG，并验证侧栏滑块拖
 长图库可用独立的离屏压力测试复现。测试依次执行 240 次连续滚动和 80 次长距离跳转，最后等待底部缩略图加载。不操作真实鼠标，不测桌面合成帧率：
 
 ```powershell
-python -B -m scripts.windows_frontend_fixture dist/wpf-long-fixture --count 10000
-.\dist\win-frontend-headless\SuzuEmojy.Windows.Tests.exe (Get-Location).Path (Resolve-Path dist/wpf-long-fixture/data).Path (Join-Path (Get-Location).Path 'dist/wpf-long-check') --long-gallery
+& $runner --create-gallery-fixture dist/wpf-long-fixture 10000
+& $runner $bin (Resolve-Path dist/wpf-long-fixture/data).Path (Join-Path (Get-Location).Path 'dist/wpf-long-check') --long-gallery
 ```
 
 本机 10,000 张 128×128 的合成 PNG/GIF、860×640 窗口测试中，图库全高约 26 万个布局像素，最多同时创建 40 张卡片。连续滚动的布局耗时 P95 约 3.6 毫秒，长距离跳转约 19.5 毫秒（未等待所有图片解码），跳到底部后等待可见缩略图约 55 毫秒。测试进程工作集从约 107 MiB 到采样峰值约 132 MiB，不含读取图库的临时 Python 进程。图库近期缩略图缓存同时受 112 张和 8 MiB 像素预算限制。真实大图、慢磁盘和实窗合成表现未测；目前启动仍读取全库元数据，仅卡片和缩略图是按视窗加载。

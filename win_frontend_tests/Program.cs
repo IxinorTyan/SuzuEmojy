@@ -25,6 +25,16 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--create-gallery-fixture", _, _] or ["--create-gallery-fixture", _, _, "--dark"])
+        {
+            try
+            {
+                if (!int.TryParse(args[2], out int count)) throw new ArgumentException("Expected an image count.");
+                NativeGalleryFixture.Create(args[1], count, dark: args.Length == 4);
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
         if (args is ["--lan-sync-tests" or "--lan-android-fixture", var lanOutput])
         {
             try

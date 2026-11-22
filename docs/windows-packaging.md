@@ -30,6 +30,8 @@ TG 的 APNG 转 GIF 保留原有播放节奏，最高约 60 fps；GIF 按 10 毫
 
 ## 从仓库封包
 
+双击仓库根目录的 [`build_windows.bat`](../build_windows.bat)。在版本提示处按回车使用项目的数字版本（如 `2.0.0`），也可输入新版本号。脚本会先找本仓库及附近 SuzuEmojy 工作目录里与当前配方匹配的精简 FFmpeg，找不到时可在文件夹选择窗口里指定。成功后自动打开本次目录；同版本重打会使用带时间的独立目录，不覆盖旧包。
+
 在 Windows 上准备 PowerShell 和 .NET SDK（需支持 C# 12）；首次构建 WebP 和调色板 DLL 时需要 MinGW-w64 GCC。默认模式会用 .NET Framework 4.8 参考程序集（开发包或 SDK 从 NuGet 还原，仅构建时需要）。先按 [精简 FFmpeg 构建说明](ffmpeg-minimal.md) 生成 `dist/ffmpeg-minimal`。若在另一份源码中已用同一配方构建，可用 `-FfmpegDirectory` 指向该产物目录。工具会校验配方哈希，不会静默打入完整版 FFmpeg。
 
 ```powershell

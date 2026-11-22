@@ -12,7 +12,7 @@ $suzuArchive = Join-Path $suzuOutput "libwebp-$suzuVersion.tar.gz"
 $suzuSource = Join-Path $suzuOutput "libwebp-$suzuVersion"
 
 if (!(Test-Path -LiteralPath $suzuArchive)) {
-    Invoke-WebRequest -Uri "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-$suzuVersion.tar.gz" -OutFile $suzuArchive -TimeoutSec 60
+    Invoke-WebRequest -UseBasicParsing -Uri "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-$suzuVersion.tar.gz" -OutFile $suzuArchive -TimeoutSec 60
 }
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $suzuArchive).Hash -ne $suzuDigest) {
     throw 'Unexpected libwebp source SHA-256.'
@@ -30,8 +30,13 @@ $suzuSources = foreach ($suzuFolder in $suzuFolders) {
 $suzuDll = Join-Path $suzuOutput 'suzu-webp.dll'
 $suzuFlags = @('-m64', '-std=c11', '-O2', '-fno-ident', '-ffunction-sections', '-fdata-sections', '-static', '-shared',
     '-Wl,--gc-sections,--exclude-all-symbols', '-s', '-DWEBP_USE_THREAD', "-I$suzuSource")
-& $Compiler @suzuFlags @suzuSources (Join-Path $PSScriptRoot 'webp-decoder.def') '-o' $suzuDll
-if ($LASTEXITCODE -ne 0) { throw 'Could not build the WebP decoder.' }
+# Some MinGW linkers cannot open non-ASCII absolute paths.
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'webp-decoder.def') -Destination $suzuOutput
+Push-Location -LiteralPath $suzuOutput
+try {
+    & $Compiler @suzuFlags @suzuSources 'webp-decoder.def' '-o' 'suzu-webp.dll'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not build the WebP decoder.' }
+} finally { Pop-Location }
 foreach ($suzuFile in @('COPYING', 'PATENTS')) {
     Copy-Item -LiteralPath (Join-Path $suzuSource $suzuFile) -Destination (Join-Path $suzuOutput "libwebp-$suzuFile.txt")
 }

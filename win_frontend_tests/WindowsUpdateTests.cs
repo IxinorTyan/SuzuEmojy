@@ -33,7 +33,8 @@ internal static class WindowsUpdateTests
             Throws<InvalidDataException>(() => transaction.Apply(zip, Hash(zip), "2.0.0", UnexpectedProbe));
             AssertOriginal();
         }
-        File.WriteAllBytes(zip, NativeServicesTests.CreatePackage("2.0.1"));
+        File.WriteAllBytes(zip, NativeServicesTests.CreatePackage("2.0.1",
+            extra: ["bin/QRCoder.dll", "bin/QRCoder-LICENSE.txt"]));
         Throws<InvalidDataException>(() => transaction.Apply(zip, Hash(zip), "2.0.2", UnexpectedProbe));
         Throws<InvalidDataException>(() => transaction.Apply(zip, new string('0', 64), "2.0.1", UnexpectedProbe));
         AssertOriginal();
@@ -62,7 +63,8 @@ internal static class WindowsUpdateTests
             Check(File.ReadAllBytes(original).SequenceEqual(new byte[] { 1 }), "Probe did not see the update."));
         Check(!Directory.Exists(work) && File.ReadAllText(launcher) == "stable launcher" &&
             File.ReadAllText(config) == "user config" && File.ReadAllText(extra) == "unmanaged" &&
-            File.Exists(Path.Combine(bin, PortableLayout.Updater)), "Only managed bin files may change.");
+            File.Exists(Path.Combine(bin, PortableLayout.Updater)) && File.Exists(Path.Combine(bin, "QRCoder.dll")) &&
+            File.Exists(Path.Combine(bin, "QRCoder-LICENSE.txt")), "Only managed bin files may change.");
 
         void AssertOriginal() => Check(!Directory.Exists(work) && File.ReadAllText(original) == "old program" &&
             File.ReadAllText(launcher) == "stable launcher" && File.ReadAllText(config) == "user config" &&
