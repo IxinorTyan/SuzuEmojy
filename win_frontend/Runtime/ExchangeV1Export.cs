@@ -35,7 +35,7 @@ internal static class ExchangeV1Export
 
     internal static LibraryResult? TryRun(string data, string destination, string[]? selection,
         CancellationToken token, IProgress<LibraryProgress>? progress, string? packageId = null, string? telegramSource = null,
-        SyncAssets? syncAssets = null)
+        SyncAssets? syncAssets = null, IReadOnlyDictionary<string, List<string>>? syncPaths = null)
     {
         if (selection is { Length: 0 }) throw new ArgumentException("请至少选择一个收藏夹");
         var root = Path.GetFullPath(data);
@@ -106,7 +106,9 @@ internal static class ExchangeV1Export
         var scores = QualityScores(root, token);
         var skipped = new List<Skipped>();
         var resources = new Dictionary<string, Resource>(StringComparer.Ordinal);
-        var files = wantedKeys is { Count: 0 } ? [] : Directory.Exists(images)
+        var files = syncPaths is not null && syncAssets is not null
+            ? syncAssets.Keys.Select(key => new FileInfo(Path.Combine(images, syncPaths[key][0]))).ToArray()
+            : wantedKeys is { Count: 0 } ? [] : Directory.Exists(images)
             ? Directory.EnumerateFiles(images).Select(path => new FileInfo(path))
                 .Where(file => (withKeywords || memberships.ContainsKey(file.Name)) &&
                     (wantedKeys is null || file.Extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||

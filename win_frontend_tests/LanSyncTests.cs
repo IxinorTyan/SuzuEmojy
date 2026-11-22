@@ -21,6 +21,7 @@ internal static class LanSyncTests
             "7ffe81c74fe822411040290bd5572399577bffec5474b33a7973945177358cc0", "Commitment vector differs.");
         CheckReconciliation();
         CheckDiskRecovery(output);
+        CheckAboutContents();
 
         var fixture = new Fixture(output);
         using var host = new LanSyncHost(loopbackForTests: true, testDiscovery: true);
@@ -120,12 +121,31 @@ internal static class LanSyncTests
         catch (IOException e) when (e.Message.Contains("SHA-256")) { }
     }
 
+    private static void CheckAboutContents()
+    {
+        int checks = 0;
+        var page = new AboutPage(_ => { checks++; return Task.FromResult<AvailableRelease?>(null); });
+        page.Measure(new System.Windows.Size(640, 540));
+        page.Arrange(new System.Windows.Rect(0, 0, 640, 540));
+        Require(page.AppLogo.Source is { Width: > 0 }, "The About page logo did not load.");
+        Require(page.Features.Items.Count == 6 && page.Credits.Children.Count == 3, "About feature or credit list is incomplete.");
+        Require(page.AuthorBio.Inlines.OfType<System.Windows.Documents.Run>().Any(run => run.Text.Contains("SuzuEmojy")) &&
+            page.MascotNote.Text.Contains("Suzu") && page.LicenseStatement.Inlines.OfType<System.Windows.Documents.Run>()
+                .Any(run => run.Text.Contains("尊重原创版权")), "About legacy text is incomplete.");
+        Require(checks == 0, "Opening About must not check for updates automatically.");
+    }
+
     // Test executable only. Android emulator instrumentation uses 10.0.2.2 to reach this fixture.
     internal static async Task ServeAndroidFixture(string output)
     {
         if (Environment.GetEnvironmentVariable("SUZU_LAN_RECONCILIATION_TEST") == "1")
         {
             await ServeReconciliationFixture(output);
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("SUZU_LAN_STREAMING_TEST") == "1")
+        {
+            await ServeStreamingFixture(output);
             return;
         }
         var fixture = new Fixture(output);
@@ -220,7 +240,7 @@ internal static class LanSyncTests
             async (stream, report, token) =>
             {
                 // In round 3 deliberately lose the connection after commit, before the phone applies.
-                await commands.Synchronize(finished == 2 ? new DropAfterCommit(stream) : stream, report, token);
+                await commands.Synchronize(finished == 2 ? new DropAfterCommit(stream) : stream, report, token, host.StreamingSync);
                 var state = await commands.ReadForLanSync();
                 Require(state.Images.Length == 4 && state.Categories.Length == 3, "Synced counts differ.");
                 if (++finished == 1)
@@ -245,11 +265,12 @@ internal static class LanSyncTests
                     // advances its revision in the deliberately interrupted round.
                     await Edit(new("tags", Paths: [stable], Value: "retry"), token);
                 }
-            });
+            }, streamingSync: true);
         try { await session; throw new InvalidOperationException("Interrupt fixture was not reached."); }
         catch (IOException e) when (e.Message.Contains("fixture disconnected")) { Require(finished == 2, "Interrupted early."); }
         await retry.Run(Confirm, NoExport, NoImport, Console.WriteLine, (_, _) => Task.FromResult(true),
-            sync: async (stream, report, token) => { await commands.Synchronize(stream, report, token); finished++; });
+            sync: async (stream, report, token) => { await commands.Synchronize(stream, report, token, retry.StreamingSync); finished++; },
+            streamingSync: true);
         Require(finished == 4, "The retry and following no-change sync did not finish.");
 
         Task<bool> Confirm(string code, CancellationToken _) { Console.WriteLine($"Verification: {code}"); return Task.FromResult(true); }
@@ -271,6 +292,66 @@ internal static class LanSyncTests
             encoder.Save(outputPng);
             return file;
         }
+    }
+
+    private static async Task ServeStreamingFixture(string output)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
+        var root = Directory.CreateDirectory(Path.Combine(output, "lan-streaming-" + Guid.NewGuid().ToString("N"))).FullName;
+        var images = Directory.CreateDirectory(Path.Combine(root, "images")).FullName;
+        var original = Path.Combine(images, "Original.png");
+        var good = Convert.FromBase64String(NativeIdentityTests.Rgba);
+        File.WriteAllBytes(original, good);
+        var originalKey = ResourceIdentityV1.TryRead(original, timeout.Token);
+        var commands = new LibraryCommands(root, root);
+        using var host = new LanSyncHost(loopbackForTests: true);
+        using var close = timeout.Token.Register(host.Cancel);
+        Console.WriteLine(host.QrContent.Replace("127.0.0.1:", "10.0.2.2:"));
+        int rounds = 0;
+        await host.Run((_, _) => Task.FromResult(true), (_, _) => throw new InvalidOperationException(),
+            (_, _) => throw new InvalidOperationException(), Console.WriteLine, (_, _) => Task.FromResult(true),
+            sync: async (stream, report, token) =>
+            {
+                Require(host.StreamingSync, "The streaming protocol was not negotiated.");
+                await commands.Synchronize(stream, report, token, streaming: true);
+                switch (++rounds)
+                {
+                    case 1:
+                        // This previously synced file becomes unreadable; it
+                        // must not turn into a tombstone on the phone.
+                        File.WriteAllBytes(original, [1, 2, 3]);
+                        LargeGif(Path.Combine(images, "Large.gif"), 0x44);
+                        for (int i = 0; i < 12; i++) File.WriteAllBytes(Path.Combine(images, $"invalid-{i}.gif"), [1, 2, 3]);
+                        break;
+                    case 2:
+                        Require(Directory.EnumerateFiles(images).Any(p => p.EndsWith(".gif") &&
+                            new FileInfo(p).Length > 48L * 1024 * 1024 && Path.GetFileName(p) != "Large.gif"),
+                            "Large Android GIF was not imported by Windows.");
+                        Require(File.Exists(original), "The local unreadable file was modified or removed.");
+                        File.WriteAllBytes(original, good);
+                        foreach (var invalid in Directory.EnumerateFiles(images, "invalid-*.gif")) File.Delete(invalid);
+                        break;
+                    case 3:
+                        Require(Directory.EnumerateFiles(images).Count(p => ResourceIdentityV1.TryRead(p, token) == originalKey) == 1,
+                            "Repairing the skipped file must not duplicate it.");
+                        break;
+                }
+            }, streamingSync: true);
+        Require(rounds == 3, "Streaming regression did not finish.");
+    }
+
+    private static void LargeGif(string path, byte color)
+    {
+        var gif = Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        stream.Write(gif, 0, gif.Length - 1);
+        stream.WriteByte(0x21);
+        stream.WriteByte(0xfe);
+        var block = Enumerable.Repeat(color, 256).ToArray();
+        block[0] = 255;
+        for (int i = 0; i < 192 * 1024; i++) stream.Write(block, 0, block.Length);
+        stream.WriteByte(0);
+        stream.WriteByte(0x3b);
     }
 
     private static void CheckDiskRecovery(string output)

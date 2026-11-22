@@ -25,6 +25,7 @@ internal sealed class LanSyncHost : IDisposable
     private const string Discovery = "SUZU-LAN-2";
     internal const int ProtocolVersion = 2;
     internal bool CanSync { get; private set; }
+    internal bool StreamingSync { get; private set; }
     private const int PairTimeout = 6_000, ConfirmTimeout = 60_000, IdleTimeout = 600_000;
     private readonly record struct LocalNetwork(IPAddress Address, IPAddress Mask)
     {
@@ -108,10 +109,10 @@ internal sealed class LanSyncHost : IDisposable
     internal async Task Run(Func<string, CancellationToken, Task<bool>> confirm,
         Func<string, CancellationToken, Task> export, Func<string, CancellationToken, Task<int>> import,
         Action<string> status, Func<LanTransfer, CancellationToken, Task<bool>> approveTransfer, Action<bool>? available = null,
-        Func<Stream, Action<string>, CancellationToken, Task>? sync = null)
+        Func<Stream, Action<string>, CancellationToken, Task>? sync = null, bool streamingSync = false)
     {
         var discoveryTask = discovery is null ? Task.CompletedTask : Advertise(discovery);
-        try { await Task.Run(() => Serve(confirm, export, import, status, approveTransfer, available, sync), lifetime).ConfigureAwait(false); }
+        try { await Task.Run(() => Serve(confirm, export, import, status, approveTransfer, available, sync, streamingSync), lifetime).ConfigureAwait(false); }
         catch (Exception) when (lifetime.IsCancellationRequested) { }
         finally
         {
@@ -198,7 +199,7 @@ internal sealed class LanSyncHost : IDisposable
     private async Task Serve(Func<string, CancellationToken, Task<bool>> confirm,
         Func<string, CancellationToken, Task> export, Func<string, CancellationToken, Task<int>> import,
         Action<string> status, Func<LanTransfer, CancellationToken, Task<bool>> approveTransfer, Action<bool>? available,
-        Func<Stream, Action<string>, CancellationToken, Task>? sync)
+        Func<Stream, Action<string>, CancellationToken, Task>? sync, bool streamingSync)
     {
         var expected = Encoding.ASCII.GetBytes(Code);
         int failures = 0;
@@ -217,12 +218,14 @@ internal sealed class LanSyncHost : IDisposable
             {
                 ssl.AuthenticateAsServer(certificate, false, SslProtocols.Tls12, false);
                 var hello = ReadExactly(ssl, 6);
-                bool modern = hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN3"));
+                bool streaming = streamingSync && hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN4"));
+                bool modern = streaming || hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN3"));
                 if ((!modern && !hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN2"))) || (modern && sync is null))
                 { WriteStatus(ssl, 3); failures++; continue; }
                 // 3 is the old host's unknown-greeting response, not a capability.
-                WriteStatus(ssl, modern ? 4 : ProtocolVersion);
+                WriteStatus(ssl, streaming ? 5 : modern ? 4 : ProtocolVersion);
                 CanSync = modern;
+                StreamingSync = streaming;
                 var code = ReadExactly(ssl, 6);
                 var clientCommit = ReadExactly(ssl, 32);
                 if (!Equal(code, expected)) { WriteStatus(ssl, 0); failures++; continue; }
@@ -298,7 +301,8 @@ internal sealed class LanSyncHost : IDisposable
                     continue;
                 }
                 using var transferDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
-                transferDeadline.CancelAfter(TimeSpan.FromMinutes(30));
+                if (transfer != LanTransfer.Sync || !StreamingSync)
+                    transferDeadline.CancelAfter(TimeSpan.FromMinutes(30));
                 using var closeOnTimeout = transferDeadline.Token.Register(client.Close);
                 var token = transferDeadline.Token;
                 var path = Path.Combine(Path.GetTempPath(), $"suzu-lan-{Guid.NewGuid():N}.zip");
@@ -321,7 +325,7 @@ internal sealed class LanSyncHost : IDisposable
                                 await export(path, token).ConfigureAwait(false);
                                 package = File.OpenRead(path);
                                 length = package.Length;
-                                CheckLength(length);
+                                CheckLength(length, streamingSync: false);
                                 hash = HashFile(package, token);
                                 package.Position = 0;
                             }
@@ -396,23 +400,27 @@ internal sealed class LanSyncHost : IDisposable
         0 => 0, 1 => 1, 2 => 2, _ => throw new IOException("未收到对方的导入结果。")
     };
 
-    private static void CheckLength(long length)
+    private static void CheckLength(long length, bool streamingSync)
     {
-        if (length <= 0 || length > MaxPackage) throw new IOException("资源包大小不受支持（上限 2 GiB）。");
+        if (length <= 0 || (!streamingSync && length > MaxPackage))
+            throw new IOException(streamingSync ? "同步资源包大小不受支持。" : "资源包大小不受支持（旧版上限 2 GiB）。");
     }
 
-    internal static void CheckArchiveLimits(string path, CancellationToken token)
+    internal static void CheckArchiveLimits(string path, CancellationToken token, bool streamingSync = false, bool receiving = true)
     {
         using var file = File.OpenRead(path);
         using var zip = new System.IO.Compression.ZipArchive(file, System.IO.Compression.ZipArchiveMode.Read);
         if (zip.Entries.Count is < 2 or > 40_000) throw new IOException("资源包的条目数量超出限制。");
         long total = 0;
+        long available = !streamingSync ? MaxPackage : receiving ? new DriveInfo(Path.GetPathRoot(path)!).AvailableFreeSpace : long.MaxValue;
         foreach (var item in zip.Entries)
         {
             token.ThrowIfCancellationRequested();
-            var limit = item.FullName is "manifest.json" or "catalog.json" ? 16L << 20 : 48L << 20;
-            if (item.Length > limit || item.Length < 0 || (total += item.Length) > MaxPackage)
-                throw new IOException("资源包展开后的大小超出限制。");
+            var limit = item.FullName is "manifest.json" or "catalog.json" ? 16L << 20 :
+                streamingSync && item.FullName.StartsWith("assets/", StringComparison.Ordinal) ? long.MaxValue : 48L << 20;
+            if (item.Length > limit || item.Length < 0 || item.Length > available - total)
+                throw new IOException(streamingSync ? "同步资源包索引过大或暂存空间不足。" : "资源包展开后的大小超出限制。");
+            total += item.Length;
         }
     }
 
@@ -430,9 +438,10 @@ internal sealed class LanSyncHost : IDisposable
         return digest.Hash!;
     }
 
-    internal static void WritePackage(Stream stream, Stream source, long length, byte[] hash, CancellationToken token, Action<int> progress)
+    internal static void WritePackage(Stream stream, Stream source, long length, byte[] hash, CancellationToken token, Action<int> progress,
+        bool streamingSync = false)
     {
-        CheckLength(length);
+        CheckLength(length, streamingSync);
         var head = BitConverter.GetBytes(IPAddress.HostToNetworkOrder(length));
         stream.Write(head, 0, head.Length);
         stream.Write(hash, 0, hash.Length);
@@ -440,10 +449,10 @@ internal sealed class LanSyncHost : IDisposable
         stream.Flush();
     }
 
-    internal static void ReadPackage(Stream stream, string path, CancellationToken token, Action<int> progress)
+    internal static void ReadPackage(Stream stream, string path, CancellationToken token, Action<int> progress, bool streamingSync = false)
     {
         long size = IPAddress.NetworkToHostOrder(BitConverter.ToInt64(ReadExactly(stream, 8), 0));
-        CheckLength(size);
+        CheckLength(size, streamingSync);
         if (new DriveInfo(Path.GetPathRoot(path)!).AvailableFreeSpace < size) throw new IOException("电脑暂存空间不足。");
         byte[] expected = ReadExactly(stream, 32);
         using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
@@ -465,7 +474,7 @@ internal sealed class LanSyncHost : IDisposable
             digest?.TransformBlock(buffer, 0, count, buffer, 0);
             to.Write(buffer, 0, count);
             remaining -= count;
-            int percent = (int)((length - remaining) * 100 / length);
+            int percent = (int)((length - remaining) / (double)length * 100);
             if (percent != last) { last = percent; progress(percent); }
         }
     }

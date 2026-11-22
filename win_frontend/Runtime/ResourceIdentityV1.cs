@@ -104,7 +104,6 @@ internal static class ResourceIdentityV1
         source.Position = 0;
         // A few WIC decoders expose a premultiplied frame for PNG tRNS. Give
         // WIC the opaque samples and apply the file's transparency ourselves.
-        if (transparency is not null && source.Length > 48 * 1024 * 1024) return null;
         using var opaque = transparency is not null ? WithoutTransparency(source, alphaOffset, transparency.Length, token) : null;
         var decoder = new PngBitmapDecoder(opaque ?? source,
             BitmapCreateOptions.PreservePixelFormat | BitmapCreateOptions.IgnoreColorProfile,
@@ -148,9 +147,13 @@ internal static class ResourceIdentityV1
         return BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
     }
 
-    private static MemoryStream WithoutTransparency(Stream original, long offset, int length, CancellationToken token)
+    private static Stream WithoutTransparency(Stream original, long offset, int length, CancellationToken token)
     {
-        var result = new MemoryStream((int)original.Length - length - 12);
+        // Preserve sample bytes without holding a large compressed PNG in memory.
+        Stream result = original.Length < (8L << 20)
+            ? new MemoryStream((int)original.Length - length - 12)
+            : new FileStream(Path.Combine(Path.GetTempPath(), $"suzu-png-{Guid.NewGuid():N}.part"),
+                FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 64 * 1024, FileOptions.DeleteOnClose);
         try
         {
             var buffer = new byte[64 * 1024];

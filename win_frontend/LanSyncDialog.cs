@@ -20,13 +20,13 @@ internal sealed class LanSyncDialog
     private readonly Button sync, send, receive, approve, decline;
     private readonly Func<string, CancellationToken, Task> export;
     private readonly Func<string, CancellationToken, Task<LanImportResult>> import;
-    private readonly Func<Stream, Action<string>, CancellationToken, Task> synchronize;
+    private readonly Func<Stream, Action<string>, CancellationToken, bool, Task> synchronize;
     private TaskCompletionSource<bool>? decision;
     private LanSyncHost? host;
     private bool closed;
 
     private LanSyncDialog(Window owner, LibrarySnapshot library, Func<string, CancellationToken, Task> export,
-        Func<string, CancellationToken, Task<LanImportResult>> import, Func<Stream, Action<string>, CancellationToken, Task> synchronize)
+        Func<string, CancellationToken, Task<LanImportResult>> import, Func<Stream, Action<string>, CancellationToken, bool, Task> synchronize)
     {
         this.export = export;
         this.import = import;
@@ -46,7 +46,7 @@ internal sealed class LanSyncDialog
     }
 
     internal static void Show(Window owner, LibrarySnapshot library, Func<string, CancellationToken, Task> export,
-        Func<string, CancellationToken, Task<LanImportResult>> import, Func<Stream, Action<string>, CancellationToken, Task> sync) =>
+        Func<string, CancellationToken, Task<LanImportResult>> import, Func<Stream, Action<string>, CancellationToken, bool, Task> sync) =>
         new LanSyncDialog(owner, library, export, import, sync).dialog.ShowModal();
 
     private async Task Start()
@@ -70,7 +70,8 @@ internal sealed class LanSyncDialog
                     LanTransfer.SendToPhone => Ask("手机请求接收电脑的资源包。", "允许发送", null, token),
                     _ => Ask("手机请求发送资源包到电脑。", "允许接收", null, token)
                 },
-                ready => Post(() => { if (ready) view.Code.Visibility = Visibility.Collapsed; SetActions(ready); }), synchronize);
+                ready => Post(() => { if (ready) view.Code.Visibility = Visibility.Collapsed; SetActions(ready); }),
+                (stream, status, token) => synchronize(stream, status, token, opened.StreamingSync), streamingSync: true);
             if (!closed) view.Status.Text = "连接已结束。";
         }
         catch (Exception ex) { if (!closed) view.Status.Text = $"连接已结束：{ex.Message}"; }

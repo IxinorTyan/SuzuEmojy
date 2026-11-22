@@ -21,7 +21,8 @@ internal sealed record ExchangeV1Archive(JsonObject Manifest, JsonObject Catalog
     private const long MaxMetadata = 32 * 1024 * 1024, MaxDecodedInput = 48 * 1024 * 1024;
     private static readonly char[] InvalidNameChars = Path.GetInvalidFileNameChars();
 
-    internal static ExchangeV1Archive? Read(ZipArchive archive, CancellationToken token, IProgress<LibraryProgress>? progress)
+    internal static ExchangeV1Archive? Read(ZipArchive archive, CancellationToken token, IProgress<LibraryProgress>? progress,
+        bool streamingSync = false, ISet<string>? skipped = null)
     {
         var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in archive.Entries)
@@ -96,14 +97,28 @@ internal sealed record ExchangeV1Archive(JsonObject Manifest, JsonObject Catalog
                 (keywords is not JsonArray words || words.Any(word => word is not JsonValue value || !value.TryGetValue<string>(out _))))
                 throw Invalid();
             string? pixel = resource["pixel_md5"]?.GetValue<string>();
-            var info = Verify(path, Integer(resource, "asset_size"), String(resource, "asset_sha256"), icon: false,
-                verifyPixels: !string.IsNullOrEmpty(pixel));
-            if (info is null) return null;
+            (Asset Asset, string Sha, string Md5, string? Key)? info;
+            try
+            {
+                info = Verify(path, Integer(resource, "asset_size"), String(resource, "asset_sha256"), icon: false,
+                    verifyPixels: !string.IsNullOrEmpty(pixel));
+            }
+            catch (InvalidDataException) when (skipped is not null) { info = null; }
+            if (info is null)
+            {
+                if (skipped is null) return null;
+                skipped.Add(String(resource, "sync_key"));
+                result.Add(new(resource, new(path, entries[path], 0), relations));
+                continue;
+            }
             var asset = info.Value;
             var expectedKey = pixel is { Length: > 0 } ? "p:" + pixel.ToLowerInvariant() : "f:" + asset.Md5;
             if (!asset.Md5.Equals(String(resource, "file_md5"), StringComparison.OrdinalIgnoreCase) ||
                 expectedKey != asset.Key || String(resource, "sync_key") != expectedKey)
-                throw new InvalidDataException($"资源 MD5 或 sync_key 校验失败: {path}");
+            {
+                if (skipped is null) throw new InvalidDataException($"资源 MD5 或 sync_key 校验失败: {path}");
+                skipped.Add(String(resource, "sync_key"));
+            }
             var normalized = (JsonObject)resource.DeepClone();
             normalized["asset_path"] = path;
             result.Add(new(normalized, asset.Asset, relations));
@@ -133,11 +148,15 @@ internal sealed record ExchangeV1Archive(JsonObject Manifest, JsonObject Catalog
                 entry.FullName.EndsWith("\\", StringComparison.Ordinal) || entry.Length != length ||
                 entry.FullName.Replace('\\', '/') != path || length <= 0)
                 throw new InvalidDataException($"资源大小或路径校验失败: {path}");
-            if (length > MaxDecodedInput) return null;
+            if (!streamingSync && length > MaxDecodedInput) return null;
+            bool stage = streamingSync && !icon;
             using var input = entry.Open();
             using var expectedSha = SHA256.Create();
             using var md5 = MD5.Create();
-            using var contents = new MemoryStream((int)length);
+            using Stream? contents = stage
+                ? new FileStream(Path.Combine(Path.GetTempPath(), $"suzu-lan-verify-{Guid.NewGuid():N}.part"),
+                    FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 128 * 1024, FileOptions.DeleteOnClose)
+                : new MemoryStream(checked((int)length));
             uint crc = Crc32.Start;
             var header = new byte[6];
             long actual = 0;
@@ -179,7 +198,11 @@ internal sealed record ExchangeV1Archive(JsonObject Manifest, JsonObject Catalog
             else
             {
                 if (!header.AsSpan().SequenceEqual("GIF87a"u8) && !header.AsSpan().SequenceEqual("GIF89a"u8)) throw Invalid();
-                try
+                if (streamingSync)
+                {
+                    if (!GifSyncValidation.Check(contents, token)) return null;
+                }
+                else try
                 {
                     contents.Position = 0;
                     if (new GifBitmapDecoder(contents, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames.Count == 0)

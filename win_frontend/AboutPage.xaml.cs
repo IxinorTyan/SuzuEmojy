@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
+using SuzuEmojy.Windows.Controls;
 using SuzuEmojy.Windows.Desktop;
 
 namespace SuzuEmojy.Windows;
@@ -32,6 +33,7 @@ public partial class AboutPage : UserControl
         this.request = request;
         InitializeComponent();
         VersionText.Text = "版本 " + InstalledVersion;
+        Features.ItemsSource = AboutPageContent.Features;
         CheckUpdate.Click += async (_, _) => await Check();
         Link(OpenProject, DesktopLinks.Project);
         Link(OpenAuthor, DesktopLinks.Author);
@@ -42,13 +44,12 @@ public partial class AboutPage : UserControl
             try { (copyText ?? Clipboard.SetText)("834586488"); }
             catch (System.Runtime.InteropServices.ExternalException error) { Status.Show("复制群号", error.Message, warning: true); }
         };
-        foreach (var (name, author) in new[] { ("PyQt-Fluent-Widgets", "zhiyiYo"), ("QQFavoriteExtract", "VanillaNahida"),
-            ("tg_sticker_downloader", "Kiowx") })
+        foreach (var item in AboutPageContent.Credits)
         {
-            var entry = new Button { Content = name, Style = (Style)FindResource("FluentPushButton"),
-                HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 6) };
-            Link(entry, $"https://github.com/{author}/{name}");
-            Credits.Children.Add(entry);
+            var entry = new Button { Content = "访问仓库", Style = (Style)FindResource("FluentPushButton") };
+            Link(entry, item.Uri);
+            Credits.Children.Add(new SettingCard($"{item.Name} · {item.Author}", item.Detail,
+                "M2,8 L7,3 L10,6 M6,10 L9,13 L14,8 M6,10 L10,6", entry));
         }
 
         void Link(Button button, string url) => button.Click += (_, _) =>

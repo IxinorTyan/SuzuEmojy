@@ -10,7 +10,7 @@ using static SuzuEmojy.Windows.LibrarySnapshotReader;
 
 namespace SuzuEmojy.Windows;
 
-internal sealed record SyncCheckpoint(string Revision, SyncLibrary Library);
+internal sealed record SyncCheckpoint(string Revision, SyncLibrary Library, string[]? Held = null);
 internal sealed record SyncHistory(SyncCheckpoint Latest, SyncCheckpoint? Previous);
 
 internal sealed class LanSyncWindowsLibrary(string data)
@@ -27,9 +27,9 @@ internal sealed class LanSyncWindowsLibrary(string data)
 
     internal sealed record Folder(string Local, string Name, string? Icon, string[] Members);
     internal sealed record Capture(SyncLibrary Library, Dictionary<string, Folder> Folders,
-        Dictionary<string, List<string>> Paths, Dictionary<string, string> Icons, string[] Order);
+        Dictionary<string, List<string>> Paths, Dictionary<string, string> Icons, string[] Order, string[] Skipped);
     internal sealed record Plan(Capture Before, SyncLibrary Target, Dictionary<string, string> Bindings,
-        string Peer, SyncHistory History);
+        string Peer, SyncHistory History, HashSet<string>? Hold = null);
     internal sealed record FileChanges(string Peer, string Revision, string[] Adding, string[] Removing, string[] ExistingMirrors);
 
     internal static void RecoverPending(string data, CancellationToken token) => new LanSyncWindowsLibrary(data).Recover(token);
@@ -118,16 +118,16 @@ internal sealed class LanSyncWindowsLibrary(string data)
         var ids = categories.ToDictionary(c => c.Name, c => c.Id);
         var paths = new Dictionary<string, List<string>>();
         var resources = new Dictionary<string, SyncResource>();
-        foreach (var sticker in library.Images)
+        var skipped = new List<string>();
+        var checkedImages = LanSyncWorkers.Map(library.Images.Length, i =>
+            ReadImage(library.Images[i], token), token);
+        for (int i = 0; i < checkedImages.Length; i++)
         {
-            var ext = Path.GetExtension(sticker.Name).ToLowerInvariant();
-            if (ext is not (".png" or ".gif")) continue;
             token.ThrowIfCancellationRequested();
-            RuntimePrimitives.EnsureNotReparse(sticker.Path);
-            using var file = File.OpenRead(sticker.Path);
-            if (ext == ".png" && ApngDecoder.HasAnimationControl(file)) continue;
-            if (file.Length is <= 0 or > (48L << 20) || ResourceIdentityV1.TryRead(file, token) is not { } key)
-                throw new IOException($"表情无法校验或超出大小限制：{sticker.Name}");
+            var sticker = library.Images[i];
+            var (key, failed) = checkedImages[i];
+            if (failed) skipped.Add(sticker.Name);
+            if (key is null) continue;
             var tags = LanSyncMerge.Words(sticker.Keywords);
             var memberships = sticker.Categories.Select(name => ids[name]).OrderBy(id => id, StringComparer.Ordinal).ToArray();
             if (resources.TryGetValue(key, out var old))
@@ -144,30 +144,51 @@ internal sealed class LanSyncWindowsLibrary(string data)
         }
         var snapshot = new SyncLibrary(categories.ToArray(), resources.Values.ToArray());
         LanSyncMerge.Validate(snapshot);
-        return new(snapshot, folders, paths, iconFiles, library.Images.Select(s => s.Name).ToArray());
+        return new(snapshot, folders, paths, iconFiles, library.Images.Select(s => s.Name).ToArray(), skipped.ToArray());
     }
 
-    internal void Export(string path, SyncAssets assets, CancellationToken token) =>
-        ExchangeV1Export.TryRun(Root, path, null, token, null, syncAssets: assets);
+    private static (string? Key, bool Failed) ReadImage(Sticker sticker, CancellationToken token)
+    {
+        var ext = Path.GetExtension(sticker.Name).ToLowerInvariant();
+        if (ext is not (".png" or ".gif")) return (null, false);
+        try
+        {
+            RuntimePrimitives.EnsureNotReparse(sticker.Path);
+            using var file = File.OpenRead(sticker.Path);
+            if (ext == ".png" && ApngDecoder.HasAnimationControl(file)) return (null, false);
+            if (ext == ".gif" && !GifSyncValidation.Check(file, token)) return (null, true);
+            var key = ResourceIdentityV1.TryRead(file, token);
+            return key is not null && key.StartsWith(ext == ".gif" ? "f:" : "p:", StringComparison.Ordinal)
+                ? (key, false) : (null, true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or FormatException or NotSupportedException)
+        { return (null, true); }
+    }
 
-    internal void Apply(string device, Plan plan, string? package, CancellationToken token)
+    internal void Export(string path, SyncAssets assets, Capture from, CancellationToken token) =>
+        ExchangeV1Export.TryRun(Root, path, null, token, null, syncAssets: assets, syncPaths: from.Paths);
+
+    internal void Apply(string device, Plan plan, string? package, CancellationToken token,
+        ExchangeV1Archive? verified = null)
     {
         var before = Read(device, plan.Peer, token);
         if (!Same(before, plan.Before)) throw new IOException("同步期间电脑图库已修改，请重试。");
         var target = plan.Target;
         var needs = SyncAssets.Needed(before.Library, target);
-        var keep = target.Resources.Select(r => r.Key).ToHashSet();
+        var hold = plan.Hold ?? new();
+        var keep = target.Resources.Select(r => r.Key).Concat(hold).ToHashSet();
         var removing = before.Library.Resources.Where(r => !keep.Contains(r.Key)).SelectMany(r => before.Paths[r.Key]).ToArray();
-        var managed = before.Paths.Values.SelectMany(names => names).ToHashSet(Names);
+        var managed = before.Paths.Where(pair => !hold.Contains(pair.Key)).SelectMany(pair => pair.Value).ToHashSet(Names);
         var allFiles = before.Order.ToHashSet(Names);
         var stayingFolders = plan.Bindings.Values.ToHashSet();
         if (before.Folders.Any(pair => !stayingFolders.Contains(pair.Key) &&
             pair.Value.Members.Any(name => allFiles.Contains(name) && !managed.Contains(name))))
             throw new IOException("要删除的收藏夹含有不在同步范围内的图片，请先在电脑上处理这些图片。");
-        using var incoming = package is null ? null : File.OpenRead(package);
+        using var incoming = verified is not null || package is null ? null : File.OpenRead(package);
         using var zip = incoming is null ? null : new ZipArchive(incoming, ZipArchiveMode.Read);
-        var archive = zip is null ? null : ExchangeV1Archive.Read(zip, token, null) ?? throw new IOException("收到不支持的资源包。");
-        var resources = archive?.Resources.ToDictionary(r => r.Spec["sync_key"]!.GetValue<string>()) ?? new();
+        var archive = verified ?? (zip is null ? null : ExchangeV1Archive.Read(zip, token, null) ?? throw new IOException("收到不支持的资源包。"));
+        var resources = archive?.Resources.Where(r => !hold.Contains(r.Spec["sync_key"]!.GetValue<string>()))
+            .ToDictionary(r => r.Spec["sync_key"]!.GetValue<string>()) ?? new();
         var icons = archive?.Icons.ToDictionary(i => i.Path) ?? new();
         if (!resources.Keys.ToHashSet().SetEquals(needs.Keys) || !icons.Keys.ToHashSet().SetEquals(needs.Icons))
             throw new IOException("收到的资源包与同步清单不符。");
@@ -266,7 +287,7 @@ internal sealed class LanSyncWindowsLibrary(string data)
         using var db = LibraryDatabases.TryOpen(Root, recent: true, token, out bool hasRecent)
             ?? throw new IOException("电脑图库数据库无法安全写入。");
         var removingSet = removing.ToHashSet(Names);
-        var known = before.Paths.Values.SelectMany(x => x).ToHashSet(Names);
+        var known = before.Paths.Where(pair => plan.Hold?.Contains(pair.Key) != true).SelectMany(x => x.Value).ToHashSet(Names);
         var mirrors = new List<(string Name, object Data)>();
         var categories = new Dictionary<string, HashSet<string>>();
         var iconMirror = new Dictionary<string, string>();
@@ -419,6 +440,7 @@ internal sealed class LanSyncWindowsLibrary(string data)
 
     private static bool Same(Capture a, Capture b) => JsonSerializer.Serialize(a.Library) == JsonSerializer.Serialize(b.Library)
         && a.Order.SequenceEqual(b.Order, Names) && a.Folders.Keys.SequenceEqual(b.Folders.Keys)
+        && a.Skipped.SequenceEqual(b.Skipped, Names)
         && a.Folders.All(pair => pair.Value.Local == b.Folders[pair.Key].Local &&
             pair.Value.Members.SequenceEqual(b.Folders[pair.Key].Members, Names))
         && a.Paths.All(pair => b.Paths.TryGetValue(pair.Key, out var paths) && pair.Value.SequenceEqual(paths, Names));

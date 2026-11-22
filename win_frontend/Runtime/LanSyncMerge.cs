@@ -33,6 +33,7 @@ internal static class LanSyncMerge
     private static readonly Regex Key = new("\\A[pf]:[a-f0-9]{32}\\z", RegexOptions.CultureInvariant);
     internal static readonly Regex IconAsset = new("\\Aicons/[a-f0-9]{64}\\.(png|gif|jpg|jpeg|webp|bmp)\\z", RegexOptions.CultureInvariant);
     internal static bool IsId(string? value) => value is not null && Id.IsMatch(value);
+    internal static bool IsKey(string? value) => value is not null && Key.IsMatch(value);
 
     internal static void Validate(SyncLibrary? library)
     {
@@ -71,7 +72,8 @@ internal static class LanSyncMerge
     internal static string[] Words(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
         .Distinct(StringComparer.Ordinal).OrderBy(s => s, StringComparer.Ordinal).ToArray();
 
-    internal static SyncMerge Reconcile(SyncLibrary? baseline, SyncLibrary windows, SyncLibrary android)
+    internal static SyncMerge Reconcile(SyncLibrary? baseline, SyncLibrary windows, SyncLibrary android,
+        ISet<string>? previouslyHeld = null)
     {
         Validate(windows);
         Validate(android);
@@ -144,7 +146,9 @@ internal static class LanSyncMerge
         }
         var catOrder = Order(old.Categories.Select(c => c.Id), a.Categories.Select(c => c.Id),
             b.Categories.Select(c => c.Id), cats.Keys, "收藏夹排序");
-        var galleryOrder = Order(old.Resources.Select(r => r.Key), a.Resources.Select(r => r.Key),
+        // During a partial round each endpoint keeps held items in its own
+        // slots. Their positions are not a common baseline after recovery.
+        var galleryOrder = Order(old.Resources.Select(r => r.Key).Where(key => previouslyHeld?.Contains(key) != true), a.Resources.Select(r => r.Key),
             b.Resources.Select(r => r.Key), resources.Keys, "全部表情排序");
         var target = new SyncLibrary(catOrder.Select(id => cats[id]).ToArray(), galleryOrder.Select(key => resources[key]).ToArray());
         Validate(target);

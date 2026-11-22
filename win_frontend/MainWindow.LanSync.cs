@@ -12,9 +12,9 @@ public partial class MainWindow
         if (offscreen || LibraryBusy || commands is not { } runner) return;
         LanSyncDialog.Show(this, library, Export, Import, Sync);
 
-        async Task Sync(Stream stream, Action<string> status, CancellationToken token)
+        async Task Sync(Stream stream, Action<string> status, CancellationToken token, bool streaming)
         {
-            try { await runner.Synchronize(stream, status, token).ConfigureAwait(false); }
+            try { await runner.Synchronize(stream, status, token, streaming).ConfigureAwait(false); }
             finally
             {
                 // Windows may have committed even if the final phone receipt disconnected.

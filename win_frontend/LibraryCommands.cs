@@ -54,10 +54,10 @@ internal sealed class LibraryCommands(string repository, string data)
 
     internal Task<LibrarySnapshot> ReadForLanSync() => LibrarySnapshot.ReadAsync(data);
 
-    internal async Task Synchronize(System.IO.Stream stream, Action<string> status, CancellationToken token)
+    internal async Task Synchronize(System.IO.Stream stream, Action<string> status, CancellationToken token, bool streaming = false)
     {
         await serial.WaitAsync(token).ConfigureAwait(false);
-        try { await Task.Run(() => LanReconciliation.Run(new(data), stream, status, token), token).ConfigureAwait(false); }
+        try { await Task.Run(() => LanReconciliation.Run(new(data), stream, status, token, streaming), token).ConfigureAwait(false); }
         finally { serial.Release(); }
     }
 

@@ -8,35 +8,90 @@
       <ResourceDictionary.MergedDictionaries>
         <ResourceDictionary Source="Controls/FluentFields.xaml"/>
         <ResourceDictionary Source="Controls/FluentScroll.xaml"/>
+        <ResourceDictionary Source="Controls/FluentInformation.xaml"/>
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </UserControl.Resources>
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                 Template="{StaticResource FluentScrollTemplate}">
     <StackPanel Margin="36,0,30,20">
-      <TextBlock Text="SuzuEmojy" Foreground="{DynamicResource Ink}" FontSize="22"/>
-      <TextBlock x:Name="VersionText" Foreground="{DynamicResource Hint}" Margin="0,4,0,14"/>
-      <WrapPanel>
-        <Button x:Name="OpenProject" Content="项目主页" Style="{StaticResource FluentPushButton}" Margin="0,0,8,8"/>
-        <Button x:Name="CheckUpdate" Content="检查更新" Style="{StaticResource FluentPushButton}" Margin="0,0,8,8"/>
-        <Button x:Name="DownloadUpdate" Content="下载更新…" Style="{StaticResource FluentPushButton}" Margin="0,0,8,8" Visibility="Collapsed"/>
-        <Button x:Name="OpenReleases" Content="打开发布页" Style="{StaticResource FluentPushButton}" Margin="0,0,0,8"/>
-      </WrapPanel>
+      <Border Style="{StaticResource InformationCard}">
+        <StackPanel>
+          <DockPanel>
+            <Image x:Name="AppLogo" Source="ico.ico" Width="48" Height="48"
+                   Margin="0,0,14,0" DockPanel.Dock="Left" VerticalAlignment="Top"/>
+            <StackPanel>
+              <TextBlock Text="SuzuEmojy" Style="{StaticResource InformationTitle}" FontSize="22"/>
+              <TextBlock Text="Windows 本地表情包管理工具" Style="{StaticResource InformationDetail}"/>
+              <WrapPanel Margin="0,8,0,0">
+                <TextBlock x:Name="VersionText" Style="{StaticResource InformationBadge}"/>
+                <TextBlock Text="GPL-3.0" Style="{StaticResource InformationBadge}"/>
+                <TextBlock Text="Windows 10 / 11" Style="{StaticResource InformationBadge}"/>
+                <TextBlock Text="WPF" Style="{StaticResource InformationBadge}"/>
+              </WrapPanel>
+            </StackPanel>
+          </DockPanel>
+          <WrapPanel Margin="0,10,0,0">
+            <Button x:Name="OpenProject" Content="项目主页" Style="{StaticResource FluentPushButton}" Margin="0,0,8,4"/>
+            <Button x:Name="CheckUpdate" Content="检查更新" Style="{StaticResource FluentPushButton}" Margin="0,0,8,4"/>
+            <Button x:Name="DownloadUpdate" Content="下载更新…" Style="{StaticResource FluentPushButton}" Margin="0,0,8,4" Visibility="Collapsed"/>
+            <Button x:Name="OpenReleases" Content="打开发布页" Style="{StaticResource FluentPushButton}" Margin="0,0,0,4"/>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
       <fluent:InlineNotice x:Name="Status"/>
       <fluent:OperationProgress x:Name="DownloadProgress"/>
-      <TextBlock x:Name="Notes" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{DynamicResource Ink}"/>
-      <TextBlock Text="关于作者与个人介绍" FontSize="20" Margin="0,20,0,10" Foreground="{DynamicResource Ink}"/>
-      <TextBlock Text="IxinorTyan" FontSize="16" Foreground="{DynamicResource Ink}"/>
-      <WrapPanel Margin="0,8,0,0">
-        <Button x:Name="OpenAuthor" Content="作者主页" Style="{StaticResource FluentPushButton}" Margin="0,0,8,8"/>
-        <Button x:Name="CopyGroup" Content="QQ 交流群：834586488" ToolTip="点击复制 QQ 群号"
-                Style="{StaticResource FluentPushButton}" Margin="0,0,0,8"/>
-      </WrapPanel>
-      <TextBlock Text="致谢与鸣谢" FontSize="20" Margin="0,20,0,10" Foreground="{DynamicResource Ink}"/>
+      <TextBlock x:Name="Notes" Style="{StaticResource InformationDetail}"/>
+      <TextBlock Text="关于作者与个人介绍" Style="{StaticResource InformationHeading}"/>
+      <Border Style="{StaticResource InformationCard}">
+        <StackPanel>
+          <WrapPanel>
+            <TextBlock Text="IxinorTyan" Style="{StaticResource InformationTitle}" FontSize="16" Margin="0,0,8,0"/>
+            <TextBlock Text="独立开发者 · Creator" Style="{StaticResource InformationBadge}"/>
+          </WrapPanel>
+          <TextBlock x:Name="AuthorBio" Style="{StaticResource InformationDetail}">常年多账号切换导致表情包互不相通，四处翻找极为繁琐，于是从零写下了 SuzuEmojy。<LineBreak/>致力于打造极致顺手、轻量快速的本地斗图与表情管理体验。希望这款小工具能陪伴你的每一次日常聊天与斗图！✨</TextBlock>
+          <WrapPanel Margin="0,10,0,0">
+            <Button x:Name="OpenAuthor" Content="作者主页" Style="{StaticResource FluentPushButton}" Margin="0,0,8,0"/>
+            <Button x:Name="CopyGroup" Content="QQ 交流群：834586488" ToolTip="点击复制 QQ 群号"
+                    Style="{StaticResource FluentPushButton}"/>
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+      <TextBlock Text="核心功能与特性" Style="{StaticResource InformationHeading}"/>
+      <ItemsControl x:Name="Features">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><UniformGrid Columns="2"/></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border Style="{StaticResource InformationCard}" Margin="0,0,6,6">
+              <StackPanel>
+                <TextBlock Text="{Binding Title}" Style="{StaticResource InformationTitle}"/>
+                <TextBlock Text="{Binding Detail}" Style="{StaticResource InformationDetail}"/>
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <TextBlock Text="关于默认表情包" Style="{StaticResource InformationHeading}"/>
+      <Border Style="{StaticResource InformationCard}">
+        <StackPanel>
+          <TextBlock Text="🥟 Suzu" Style="{StaticResource InformationTitle}"/>
+          <TextBlock x:Name="MascotNote" Text="Suzu 是旧版随附的默认表情包。图库里的 Suzu 表情可以自由删除或替换。"
+                     Style="{StaticResource InformationDetail}"/>
+        </StackPanel>
+      </Border>
+      <TextBlock Text="致谢与鸣谢" Style="{StaticResource InformationHeading}"/>
       <StackPanel x:Name="Credits"/>
-      <TextBlock Text="开源协议与声明" FontSize="20" Margin="0,20,0,10" Foreground="{DynamicResource Ink}"/>
-      <Button x:Name="OpenLicense" Content="GNU General Public License v3.0 (GPL-3.0)"
-              Style="{StaticResource FluentPushButton}" HorizontalAlignment="Left"/>
+      <TextBlock Text="开源协议与声明" Style="{StaticResource InformationHeading}"/>
+      <Border Style="{StaticResource InformationCard}">
+        <StackPanel>
+          <Button x:Name="OpenLicense" Content="GNU General Public License v3.0 (GPL-3.0)"
+                  Style="{StaticResource FluentPushButton}" HorizontalAlignment="Left"/>
+          <TextBlock x:Name="LicenseStatement" Style="{StaticResource InformationDetail}" LineHeight="20">1. 仅供个人学习与备份：表情扫描与贴纸下载仅用于用户对合法拥有资源的本地备份与整理。<LineBreak/>2. 遵守平台与法规规范：请在遵守相关法律法规及对应平台服务条款的前提下使用本软件。<LineBreak/>3. 尊重原创版权：表情包与贴纸资源著作权归原作者所有，请勿用于未经授权的商业用途或侵权传播。</TextBlock>
+          <TextBlock Text="Copyright © 2024-2026 IxinorTyan. All rights reserved." Style="{StaticResource InformationDetail}"/>
+        </StackPanel>
+      </Border>
     </StackPanel>
   </ScrollViewer>
 </UserControl>
