@@ -18,7 +18,7 @@ public partial class ExchangePage : UserControl
     private const string Picture = "M1,2 H15 V14 H1 Z M1,12 L5,8 8,11 11,6 15,11";
 
     internal ExchangePage(Action package, Action exportAll, Action exportSelected, Action split,
-        Action pictures, Action folder, Action qq, Action telegram, bool hasCategories)
+        Action lanSync, Action pictures, Action folder, Action qq, Action telegram, bool hasCategories)
     {
         InitializeComponent();
         Add(Packages, "导入资源包", "导入外部表情包文件（.zip），自动识别表情分类并去重", Import, "导入...", package);
@@ -27,6 +27,7 @@ public partial class ExchangePage : UserControl
             exportSelected, hasCategories);
         Add(Packages, "资源包切割分卷", "将已导出的资源包按完整图片分卷，每卷不超过 100 MB；逐卷导入后自动合并分类",
             Split, "选择资源包...", split);
+        Add(Packages, "局域网同步", "", "M2,5 H14 M10,1 L14,5 10,9 M14,11 H2 M6,7 L2,11 6,15", "连接手机...", lanSync);
         Add(LocalFiles, "导入图片", "", Picture, "导入...", pictures);
         Add(LocalFiles, "导入文件夹", "", Folder, "导入...", folder);
         Add(ExternalSources, "扫描 QQ 聊天表情", "扫描本地 QQ 缓存目录，提取接收到的表情与个人表情", Picture, "扫描...", qq);

@@ -24,6 +24,17 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--lan-sync-tests" or "--lan-android-fixture", var lanOutput])
+        {
+            try
+            {
+                if (args[0] == "--lan-sync-tests") LanSyncTests.Run(lanOutput).GetAwaiter().GetResult();
+                else LanSyncTests.ServeAndroidFixture(lanOutput).GetAwaiter().GetResult();
+                Console.WriteLine("LAN sync tests passed.");
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
         if (args is ["--hold-instance", var instanceName]) return WindowsInstanceTests.Hold(instanceName);
         if (args is ["--package-smoke", var package, var smoke])
         {
@@ -66,6 +77,7 @@ internal static class Program
                 NativeIdentityTests.CheckWarmup(output).GetAwaiter().GetResult();
                 NativeIdentityTests.Run(output);
                 NativeExchangeTests.Run(output).GetAwaiter().GetResult();
+                LanSyncTests.Run(output).GetAwaiter().GetResult();
                 NativeMediaTests.Run(output).GetAwaiter().GetResult();
                 NativeImportTests.Run(output).GetAwaiter().GetResult();
                 NativeDeletionTests.Run(output).GetAwaiter().GetResult();
@@ -1524,7 +1536,7 @@ internal static class Program
             .SelectMany(group => group.Children.OfType<SettingCard>()).ToArray();
         var actions = cards.Select(card => ((Grid)card.Child).Children.OfType<Button>().Single()).ToArray();
         Require(actions.All(action => action.IsEnabled) && actions.Select(System.Windows.Automation.AutomationProperties.GetName)
-            .SequenceEqual(new[] { "导入资源包", "导出全部资源包", "导出指定分类", "资源包切割分卷", "导入图片", "导入文件夹",
+            .SequenceEqual(new[] { "导入资源包", "导出全部资源包", "导出指定分类", "资源包切割分卷", "局域网同步", "导入图片", "导入文件夹",
                 "扫描 QQ 聊天表情", "下载 TG 贴纸" }),
             "The exchange page lost a package, local file, or external source entry point.");
         SavePng(window.Root, 860, 640, Path.Combine(output, "wpf-exchange-page.png"));

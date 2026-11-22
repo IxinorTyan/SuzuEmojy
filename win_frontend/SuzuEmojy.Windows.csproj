@@ -14,6 +14,8 @@
   <ItemGroup>
     <Resource Include="../ico.ico" Link="ico.ico" />
     <InternalsVisibleTo Include="SuzuEmojy.Windows.Tests" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+    <None Include="../docs/QRCoder-LICENSE.txt" Link="QRCoder-LICENSE.txt" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <PropertyGroup Condition="'$(UseSystemWindowsRuntime)' == 'true'">
     <PlatformTarget>x64</PlatformTarget>

@@ -14,7 +14,7 @@ public partial class MainWindow
     {
         if (!OnGalleryPage || LibraryBusy || commands is null) return;
         var page = new ExchangePage(ImportPackage, () => ExportZip(null), ExportSelected, SplitPackage,
-            PickImportFiles, PickImportFolder, () => OpenSource(false), () => OpenSource(true), library.Categories.Length > 0);
+            OpenLanSync, PickImportFiles, PickImportFolder, () => OpenSource(false), () => OpenSource(true), library.Categories.Length > 0);
         OpenPage(new("导入导出", page, Resume: () => page.SetCanExportSelected(library.Categories.Length > 0),
             Work: galleryWork, Tool: new("前往资源站", "external-link",
                 () => { if (!offscreen) DesktopLinks.Open(DesktopLinks.ResourceSite, error =>
