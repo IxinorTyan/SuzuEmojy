@@ -52,6 +52,15 @@ internal sealed class LibraryCommands(string repository, string data)
     private readonly SemaphoreSlim preview = new(1);
     internal WindowsReleaseService Updates { get; } = new(data);
 
+    internal Task<LibrarySnapshot> ReadForLanSync() => LibrarySnapshot.ReadAsync(data);
+
+    internal async Task Synchronize(System.IO.Stream stream, Action<string> status, CancellationToken token)
+    {
+        await serial.WaitAsync(token).ConfigureAwait(false);
+        try { await Task.Run(() => LanReconciliation.Run(new(data), stream, status, token), token).ConfigureAwait(false); }
+        finally { serial.Release(); }
+    }
+
     internal async Task<Dictionary<string, JsonElement>> SaveSettings(IReadOnlyDictionary<string, object> changes,
         CancellationToken cancellation = default)
     {

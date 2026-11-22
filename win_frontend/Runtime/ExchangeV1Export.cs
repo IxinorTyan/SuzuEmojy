@@ -34,7 +34,8 @@ internal static class ExchangeV1Export
         double QualityScore, string[]? Keywords, long CreatedAt, string DisplayName, int[] CategoryRefs);
 
     internal static LibraryResult? TryRun(string data, string destination, string[]? selection,
-        CancellationToken token, IProgress<LibraryProgress>? progress, string? packageId = null, string? telegramSource = null)
+        CancellationToken token, IProgress<LibraryProgress>? progress, string? packageId = null, string? telegramSource = null,
+        SyncAssets? syncAssets = null)
     {
         if (selection is { Length: 0 }) throw new ArgumentException("请至少选择一个收藏夹");
         var root = Path.GetFullPath(data);
@@ -59,6 +60,8 @@ internal static class ExchangeV1Export
         var chosen = selection?.Select(Normalize).Where(name => name.Length != 0).ToHashSet(StringComparer.Ordinal);
         bool withKeywords = selection is null;
         var categories = new List<ExportCategory>();
+        var wantedKeys = syncAssets?.Keys.ToHashSet(StringComparer.Ordinal);
+        var wantedIcons = syncAssets?.Icons.ToHashSet(StringComparer.Ordinal);
         var memberships = new Dictionary<string, List<int>>(LibraryImagePaths.Comparer);
         var assets = new Dictionary<string, Asset>(StringComparer.Ordinal);
         foreach (var rows in groupRows.GroupBy(row => Normalize(row.Name), StringComparer.Ordinal))
@@ -68,7 +71,8 @@ internal static class ExchangeV1Export
             if (chosen is { Count: > 0 } && !chosen.Contains(name)) continue;
             if (rows.Count() > 1) warnings.Add($"{name}：已合并同名收藏夹");
             Icon? icon = null;
-            if (rows.Select(row => row.Icon).FirstOrDefault(value => !string.IsNullOrEmpty(value)) is { } value)
+            if ((wantedIcons is null || wantedIcons.Count > 0) &&
+                rows.Select(row => row.Icon).FirstOrDefault(value => !string.IsNullOrEmpty(value)) is { } value)
             {
                 if (!IsIconImage(value)) icon = new("text", value);
                 else
@@ -80,8 +84,11 @@ internal static class ExchangeV1Export
                         using var stream = OpenOriginal(source);
                         var hashes = Hashes(stream, token, includeMd5: false);
                         string iconPath = $"icons/{hashes.Sha256}{Path.GetExtension(source).ToLowerInvariant()}";
-                        assets[iconPath] = new(source, iconPath, stream.Length, hashes.Sha256);
-                        icon = new("image", AssetPath: iconPath, AssetSize: stream.Length, AssetSha256: hashes.Sha256);
+                        if (wantedIcons is null || wantedIcons.Contains(iconPath))
+                        {
+                            assets[iconPath] = new(source, iconPath, stream.Length, hashes.Sha256);
+                            icon = new("image", AssetPath: iconPath, AssetSize: stream.Length, AssetSha256: hashes.Sha256);
+                        }
                     }
                     catch (Exception error) when (error is IOException or UnauthorizedAccessException or FormatException)
                     { warnings.Add($"{name}：跳过无效图标"); }
@@ -99,9 +106,11 @@ internal static class ExchangeV1Export
         var scores = QualityScores(root, token);
         var skipped = new List<Skipped>();
         var resources = new Dictionary<string, Resource>(StringComparer.Ordinal);
-        var files = Directory.Exists(images)
+        var files = wantedKeys is { Count: 0 } ? [] : Directory.Exists(images)
             ? Directory.EnumerateFiles(images).Select(path => new FileInfo(path))
-                .Where(file => withKeywords || memberships.ContainsKey(file.Name)).OrderBy(file => file.Name, Unicode).ToArray()
+                .Where(file => (withKeywords || memberships.ContainsKey(file.Name)) &&
+                    (wantedKeys is null || file.Extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+                     file.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase))).OrderBy(file => file.Name, Unicode).ToArray()
             : [];
         int steps = Math.Max(files.Length, 1);
         for (int i = 0; i < files.Length; i++)
@@ -148,6 +157,7 @@ internal static class ExchangeV1Export
             var checksums = Hashes(stream, token, includeMd5: true);
             string md5 = checksums.Md5!;
             string syncKey = pixelMd5 is null ? $"f:{md5}" : $"p:{pixelMd5}";
+            if (wantedKeys is not null && !wantedKeys.Contains(syncKey)) continue;
             var keywords = withKeywords
                 ? (labels.GetValueOrDefault(file.Name) ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
                     .Select(Normalize).Distinct(StringComparer.Ordinal).ToArray()
@@ -191,6 +201,9 @@ internal static class ExchangeV1Export
         var ordered = resources.Values.OrderBy(record => record.CreatedAt).ThenBy(record => record.DisplayName, Unicode)
             .ThenBy(record => record.SyncKey, StringComparer.Ordinal).ToArray();
         var icons = assets.Values.Where(asset => asset.AssetPath.StartsWith("icons/", StringComparison.Ordinal)).ToArray();
+        if (syncAssets is not null && (!wantedKeys!.SetEquals(resources.Keys) ||
+            !wantedIcons!.SetEquals(icons.Select(icon => icon.AssetPath))))
+            throw new IOException("图库资源或图标已变化，请重新同步。");
         var manifest = new
         {
             format_version = 1, export_scope = withKeywords ? "all" : "categories", includes_keywords = withKeywords,

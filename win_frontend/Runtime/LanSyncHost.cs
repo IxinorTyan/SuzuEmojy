@@ -16,7 +16,7 @@ using System.Threading.Tasks;
 
 namespace SuzuEmojy.Windows;
 
-internal enum LanTransfer { SendToPhone = 'D', ReceiveFromPhone = 'U' }
+internal enum LanTransfer { SendToPhone = 'D', ReceiveFromPhone = 'U', Sync = 'S' }
 
 internal sealed class LanSyncHost : IDisposable
 {
@@ -24,6 +24,7 @@ internal sealed class LanSyncHost : IDisposable
     internal const long MaxPackage = 2L * 1024 * 1024 * 1024;
     private const string Discovery = "SUZU-LAN-2";
     internal const int ProtocolVersion = 2;
+    internal bool CanSync { get; private set; }
     private const int PairTimeout = 6_000, ConfirmTimeout = 60_000, IdleTimeout = 600_000;
     private readonly record struct LocalNetwork(IPAddress Address, IPAddress Mask)
     {
@@ -106,10 +107,11 @@ internal sealed class LanSyncHost : IDisposable
 
     internal async Task Run(Func<string, CancellationToken, Task<bool>> confirm,
         Func<string, CancellationToken, Task> export, Func<string, CancellationToken, Task<int>> import,
-        Action<string> status, Func<LanTransfer, CancellationToken, Task<bool>> approveTransfer, Action<bool>? available = null)
+        Action<string> status, Func<LanTransfer, CancellationToken, Task<bool>> approveTransfer, Action<bool>? available = null,
+        Func<Stream, Action<string>, CancellationToken, Task>? sync = null)
     {
         var discoveryTask = discovery is null ? Task.CompletedTask : Advertise(discovery);
-        try { await Task.Run(() => Serve(confirm, export, import, status, approveTransfer, available), lifetime).ConfigureAwait(false); }
+        try { await Task.Run(() => Serve(confirm, export, import, status, approveTransfer, available, sync), lifetime).ConfigureAwait(false); }
         catch (Exception) when (lifetime.IsCancellationRequested) { }
         finally
         {
@@ -124,7 +126,7 @@ internal sealed class LanSyncHost : IDisposable
     {
         lock (transfers)
         {
-            if (!ready || requested is not null || lifetime.IsCancellationRequested) return false;
+            if (!ready || requested is not null || lifetime.IsCancellationRequested || (transfer == LanTransfer.Sync && !CanSync)) return false;
             requested = transfer;
             return true;
         }
@@ -134,7 +136,7 @@ internal sealed class LanSyncHost : IDisposable
     {
         LanTransfer? fromPhone = peerRequest switch
         {
-            0 => null, 'D' => LanTransfer.SendToPhone, 'U' => LanTransfer.ReceiveFromPhone,
+            0 => null, 'D' => LanTransfer.SendToPhone, 'U' => LanTransfer.ReceiveFromPhone, 'S' when CanSync => LanTransfer.Sync,
             _ => throw new IOException("不支持的传输操作。")
         };
         lock (transfers)
@@ -195,7 +197,8 @@ internal sealed class LanSyncHost : IDisposable
 
     private async Task Serve(Func<string, CancellationToken, Task<bool>> confirm,
         Func<string, CancellationToken, Task> export, Func<string, CancellationToken, Task<int>> import,
-        Action<string> status, Func<LanTransfer, CancellationToken, Task<bool>> approveTransfer, Action<bool>? available)
+        Action<string> status, Func<LanTransfer, CancellationToken, Task<bool>> approveTransfer, Action<bool>? available,
+        Func<Stream, Action<string>, CancellationToken, Task>? sync)
     {
         var expected = Encoding.ASCII.GetBytes(Code);
         int failures = 0;
@@ -214,9 +217,12 @@ internal sealed class LanSyncHost : IDisposable
             {
                 ssl.AuthenticateAsServer(certificate, false, SslProtocols.Tls12, false);
                 var hello = ReadExactly(ssl, 6);
-                if (!hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN2")))
+                bool modern = hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN3"));
+                if ((!modern && !hello.SequenceEqual(Encoding.ASCII.GetBytes("SZLAN2"))) || (modern && sync is null))
                 { WriteStatus(ssl, 3); failures++; continue; }
-                WriteStatus(ssl, ProtocolVersion);
+                // 3 is the old host's unknown-greeting response, not a capability.
+                WriteStatus(ssl, modern ? 4 : ProtocolVersion);
+                CanSync = modern;
                 var code = ReadExactly(ssl, 6);
                 var clientCommit = ReadExactly(ssl, 32);
                 if (!Equal(code, expected)) { WriteStatus(ssl, 0); failures++; continue; }
@@ -274,7 +280,7 @@ internal sealed class LanSyncHost : IDisposable
                     using var closeOnOfferTimeout = deadline.Token.Register(client.Close);
                     if (initiatedHere)
                     {
-                        status("等待手机确认传输…");
+                        status(transfer == LanTransfer.Sync ? "等待手机确认同步…" : "等待手机确认传输…");
                         approved = ReadDecision(ssl);
                     }
                     else
@@ -298,7 +304,11 @@ internal sealed class LanSyncHost : IDisposable
                 var path = Path.Combine(Path.GetTempPath(), $"suzu-lan-{Guid.NewGuid():N}.zip");
                 try
                 {
-                    if (transfer == LanTransfer.SendToPhone)
+                    if (transfer == LanTransfer.Sync)
+                    {
+                        await sync!(ssl, status, token).ConfigureAwait(false);
+                    }
+                    else if (transfer == LanTransfer.SendToPhone)
                     {
                         status("正在导出资源包…");
                         FileStream? package = null;

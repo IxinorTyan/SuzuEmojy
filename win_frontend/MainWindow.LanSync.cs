@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -9,7 +10,19 @@ public partial class MainWindow
     private void OpenLanSync()
     {
         if (offscreen || LibraryBusy || commands is not { } runner) return;
-        LanSyncDialog.Show(this, library, Export, Import);
+        LanSyncDialog.Show(this, library, Export, Import, Sync);
+
+        async Task Sync(Stream stream, Action<string> status, CancellationToken token)
+        {
+            try { await runner.Synchronize(stream, status, token).ConfigureAwait(false); }
+            finally
+            {
+                // Windows may have committed even if the final phone receipt disconnected.
+                var snapshot = await runner.ReadForLanSync().ConfigureAwait(false);
+                await Dispatcher.InvokeAsync(() =>
+                    AcceptSnapshot(snapshot, current?.Name, updateSettings: false, preserveSelection: true));
+            }
+        }
 
         async Task Export(string path, CancellationToken token)
         {

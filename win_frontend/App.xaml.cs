@@ -48,7 +48,11 @@ public partial class App : Application
                 }
                 else throw new ArgumentException("Expected [--autostart] [--data <directory>].");
             }
-            var library = await LibrarySnapshot.ReadAsync(data);
+            var library = await System.Threading.Tasks.Task.Run(() =>
+            {
+                LanSyncWindowsLibrary.RecoverPending(data, CancellationToken.None);
+                return LibrarySnapshotReader.Read(data, CancellationToken.None);
+            });
             var commands = new LibraryCommands(root, data);
             var window = new MainWindow(library, commands: commands);
             window.StartupRegistration = LoginStartup.ForCurrentProcess(customData ? data : null, install.Launcher);
