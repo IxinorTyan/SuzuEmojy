@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -94,10 +95,11 @@ internal static class LanSyncMerge
         var b = Remap(android, phoneIds);
         var ac = a.Categories.ToDictionary(c => c.Id);
         var bc = b.Categories.ToDictionary(c => c.Id);
+        var ar = a.Resources.ToDictionary(r => r.Key);
         var am = Members(a);
-        var bm = Members(b);
         var om = Members(old);
         var cats = new Dictionary<string, SyncCategory>();
+        var restoreWindowsMembers = new HashSet<string>();
         foreach (var id in ac.Keys.Union(bc.Keys))
         {
             var prior = oldCats.GetValueOrDefault(id);
@@ -107,17 +109,19 @@ internal static class LanSyncMerge
             {
                 var kept = (left ?? right)!;
                 if (prior is null) cats.Add(id, kept);
-                else if (kept != prior || !(left is null ? bm : am)[id].IsSubsetOf(om[id]))
-                    throw Conflict(prior.Name, "一端删除了收藏夹，另一端修改了它");
+                else if (left is not null && (left != prior || !am[id].SetEquals(om[id].Where(ar.ContainsKey))))
+                {
+                    // The phone removed the folder, so its missing links are not individual edits.
+                    cats.Add(id, left);
+                    restoreWindowsMembers.Add(id);
+                }
                 continue;
             }
-            cats.Add(id, new(id, Field(prior?.Name, left.Name, right.Name, "收藏夹名称", left.Name)!,
-                Field(prior?.Icon, left.Icon, right.Icon, "收藏夹图标", left.Name)));
+            cats.Add(id, new(id, PreferWindows(prior?.Name, left.Name, right.Name)!,
+                PreferWindows(prior?.Icon, left.Icon, right.Icon)));
         }
-        var collision = cats.Values.GroupBy(c => c.Name).FirstOrDefault(g => g.Count() > 1);
-        if (collision is not null) throw Conflict(collision.Key, "两端修改后出现同名收藏夹");
+        ResolveCategoryNames(cats, ac);
 
-        var ar = a.Resources.ToDictionary(r => r.Key);
         var br = b.Resources.ToDictionary(r => r.Key);
         var or = old.Resources.ToDictionary(r => r.Key);
         var resources = new Dictionary<string, SyncResource>();
@@ -129,27 +133,23 @@ internal static class LanSyncMerge
             if (left is null || right is null)
             {
                 var kept = (left ?? right)!;
-                if (prior is null) resources.Add(key, kept with { Categories = kept.Categories.Where(cats.ContainsKey).ToArray() });
-                else
-                {
-                    // A category deletion also removes memberships; this is not
-                    // an independent edit of each image in that category.
-                    var ownCats = left is null ? bc : ac;
-                    if (!kept.Keywords.ToHashSet().SetEquals(prior.Keywords) ||
-                        !kept.Categories.ToHashSet().SetEquals(prior.Categories.Where(ownCats.ContainsKey)))
-                        throw Conflict(key, "一端删除了表情，另一端修改了它的关键词或收藏夹");
-                }
+                // Removed category links alone are not edits to the image.
+                if (prior is null || left is not null && Edited(left, prior, ac))
+                    resources.Add(key, kept with { Categories = kept.Categories.Where(cats.ContainsKey).ToArray() });
                 continue;
             }
+            var categories = Set(prior?.Categories, left.Categories, right.Categories)
+                .Concat(left.Categories.Where(restoreWindowsMembers.Contains))
+                .Where(cats.ContainsKey).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToArray();
             resources.Add(key, new(key, Set(prior?.Keywords, left.Keywords, right.Keywords),
-                Set(prior?.Categories, left.Categories, right.Categories).Where(cats.ContainsKey).ToArray()));
+                categories));
         }
         var catOrder = Order(old.Categories.Select(c => c.Id), a.Categories.Select(c => c.Id),
-            b.Categories.Select(c => c.Id), cats.Keys, "收藏夹排序");
+            b.Categories.Select(c => c.Id), cats.Keys);
         // During a partial round each endpoint keeps held items in its own
         // slots. Their positions are not a common baseline after recovery.
         var galleryOrder = Order(old.Resources.Select(r => r.Key).Where(key => previouslyHeld?.Contains(key) != true), a.Resources.Select(r => r.Key),
-            b.Resources.Select(r => r.Key), resources.Keys, "全部表情排序");
+            b.Resources.Select(r => r.Key), resources.Keys);
         var target = new SyncLibrary(catOrder.Select(id => cats[id]).ToArray(), galleryOrder.Select(key => resources[key]).ToArray());
         Validate(target);
         return new(target, Reverse(winIds), Reverse(phoneIds));
@@ -170,11 +170,43 @@ internal static class LanSyncMerge
         return result;
     }
 
-    private static T? Field<T>(T? prior, T? left, T? right, string label, string name) where T : class
+    // Take a phone-only edit; in a conflict the Windows value (including null) wins.
+    private static T? PreferWindows<T>(T? prior, T? left, T? right) where T : class =>
+        Equals(left, prior) ? right : left;
+
+    private static bool Edited(SyncResource current, SyncResource prior, Dictionary<string, SyncCategory> categories) =>
+        !current.Keywords.ToHashSet().SetEquals(prior.Keywords) ||
+        !current.Categories.ToHashSet().SetEquals(prior.Categories.Where(categories.ContainsKey));
+
+    private static void ResolveCategoryNames(Dictionary<string, SyncCategory> merged, Dictionary<string, SyncCategory> windows)
     {
-        if (Equals(left, right) || Equals(right, prior)) return left;
-        if (Equals(left, prior)) return right;
-        throw Conflict(name, $"两端修改了同一{label}");
+        // Reserve every uncontested name first. Resolve duplicates without losing a folder or its links.
+        var used = merged.Values.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+        var displaced = merged.Values.GroupBy(c => c.Name, StringComparer.Ordinal).Where(g => g.Count() > 1)
+            .SelectMany(g => g.OrderBy(c => windows.GetValueOrDefault(c.Id)?.Name == c.Name ? 0 : 1)
+                .ThenBy(c => windows.ContainsKey(c.Id) ? 0 : 1).ThenBy(c => c.Id, StringComparer.Ordinal).Skip(1))
+            .ToArray();
+        var rename = new List<SyncCategory>();
+        foreach (var folder in displaced)
+        {
+            if (windows.TryGetValue(folder.Id, out var local) && used.Add(local.Name))
+                merged[folder.Id] = folder with { Name = local.Name };
+            else
+                rename.Add(folder);
+        }
+        foreach (var folder in rename)
+        {
+            for (int i = 2; ; i++)
+            {
+                string suffix = " (" + i.ToString(CultureInfo.InvariantCulture) + ")";
+                int length = Math.Min(folder.Name.Length, 256 - suffix.Length);
+                if (char.IsHighSurrogate(folder.Name[length - 1])) length--;
+                string name = folder.Name.Substring(0, length).TrimEnd() + suffix;
+                if (!used.Add(name)) continue;
+                merged[folder.Id] = folder with { Name = name };
+                break;
+            }
+        }
     }
 
     private static string[] Set(string[]? prior, string[] left, string[] right)
@@ -187,7 +219,7 @@ internal static class LanSyncMerge
     }
 
     private static string[] Order(IEnumerable<string> prior, IEnumerable<string> left, IEnumerable<string> right,
-        IEnumerable<string> keep, string label)
+        IEnumerable<string> keep)
     {
         var remaining = keep.ToHashSet();
         var a = left.Where(remaining.Contains).ToArray();
@@ -198,7 +230,6 @@ internal static class LanSyncMerge
         var aa = a.Where(known.Contains).ToArray();
         var bb = b.Where(known.Contains).ToArray();
         bool movedA = !aa.SequenceEqual(old), movedB = !bb.SequenceEqual(old);
-        if (movedA && movedB && !aa.SequenceEqual(bb)) throw Conflict(label, "两端同时修改了排序");
         var primary = movedB && !movedA ? b : a;
         var secondary = ReferenceEquals(primary, a) ? b : a;
         var primarySet = primary.ToHashSet();
@@ -218,7 +249,4 @@ internal static class LanSyncMerge
             if (!anchors.ContainsKey(secondary[i])) order.AddLast(secondary[i]);
         return order.ToArray();
     }
-
-    private static IOException Conflict(string item, string reason) =>
-        new($"同步冲突：{item}。{reason}，请调整后重试。");
 }

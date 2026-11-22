@@ -22,6 +22,7 @@ internal static class LanSyncTests
         CheckReconciliation();
         CheckDiskRecovery(output);
         CheckAboutContents();
+        CheckToolbarFocusStyle();
 
         var fixture = new Fixture(output);
         using var host = new LanSyncHost(loopbackForTests: true, testDiscovery: true);
@@ -135,6 +136,19 @@ internal static class LanSyncTests
         Require(checks == 0, "Opening About must not check for updates automatically.");
     }
 
+    private static void CheckToolbarFocusStyle()
+    {
+        var host = new SuzuEmojy.Windows.Controls.FluentPageHost();
+        var button = new System.Windows.Controls.Button { Style = (System.Windows.Style)host.FindResource("ToolButton") };
+        button.ApplyTemplate();
+        Require(button.Focusable && button.FocusVisualStyle is not null &&
+            button.Template.FindName("Surface", button) is System.Windows.Controls.Border
+                { Background: System.Windows.Media.SolidColorBrush { Color.A: 0 } } &&
+            button.Template.Triggers.OfType<System.Windows.Trigger>().Select(trigger => trigger.Property)
+                .SequenceEqual([System.Windows.UIElement.IsMouseOverProperty]),
+            "Toolbar buttons must retain keyboard focus feedback without painting focus as a selected background.");
+    }
+
     // Test executable only. Android emulator instrumentation uses 10.0.2.2 to reach this fixture.
     internal static async Task ServeAndroidFixture(string output)
     {
@@ -192,19 +206,48 @@ internal static class LanSyncTests
         var flipped = ordered with { Resources = ordered.Resources.Reverse().ToArray() };
         Require(LanSyncMerge.Reconcile(ordered, ordered, flipped).Library.Resources[0].Key == cKey,
             "An Android-only gallery reorder was not propagated.");
-        try
-        {
-            LanSyncMerge.Reconcile(ordered, flipped, ordered with { Resources = [ordered.Resources[1], ordered.Resources[0], ordered.Resources[2]] });
-            throw new InvalidOperationException("Incompatible order edits must not be silently overwritten.");
-        }
-        catch (IOException e) when (e.Message.Contains("排序")) { }
-        try
-        {
-            LanSyncMerge.Reconcile(ordered, ordered with { Resources = [ordered.Resources[0], ordered.Resources[1]] },
-                ordered with { Resources = [ordered.Resources[0], ordered.Resources[1], new(cKey, ["new"], [])] });
-            throw new InvalidOperationException("Delete-vs-edit must not be silently overwritten.");
-        }
-        catch (IOException e) when (e.Message.Contains("冲突")) { }
+        var conflictingOrder = ordered with { Resources = [ordered.Resources[1], ordered.Resources[0], ordered.Resources[2]] };
+        Require(LanSyncMerge.Reconcile(ordered, flipped, conflictingOrder).Library.Resources.Select(r => r.Key)
+                .SequenceEqual(flipped.Resources.Select(r => r.Key)), "Conflicting gallery order must follow Windows.");
+        var deleted = ordered with { Resources = [ordered.Resources[0], ordered.Resources[1]] };
+        var edited = ordered with { Resources = [ordered.Resources[0], ordered.Resources[1], new(cKey, ["new"], [])] };
+        Require(LanSyncMerge.Reconcile(ordered, deleted, edited).Library.Resources.All(r => r.Key != cKey) &&
+            LanSyncMerge.Reconcile(ordered, edited, deleted).Library.Resources.Single(r => r.Key == cKey).Keywords.SequenceEqual(["new"]) &&
+            LanSyncMerge.Reconcile(ordered, ordered, deleted).Library.Resources.All(r => r.Key != cKey),
+            "Delete-vs-edit must follow Windows; a phone-only deletion still applies.");
+
+        var miku = new SyncCategory(w, "Miku", new("text", "🎵"));
+        var other = new SyncCategory(a, "其他", null);
+        var folderBase = new SyncLibrary([miku, other], [new(aKey, [], [w])]);
+        var desktop = folderBase with { Categories = [miku with { Icon = null }, other] };
+        var phone = folderBase with { Categories = [miku with { Icon = new("text", "📱") }, other with { Name = "手机改名" }] };
+        var iconMerge = LanSyncMerge.Reconcile(folderBase, desktop, phone).Library;
+        Require(iconMerge.Categories.Single(c => c.Id == w).Icon is null &&
+            iconMerge.Categories.Single(c => c.Id == a).Name == "手机改名" &&
+            LanSyncMerge.Reconcile(folderBase, folderBase, phone).Library.Categories[0].Icon == phone.Categories[0].Icon,
+            "Conflicting Miku icon should follow Windows, even when cleared; phone-only edits must still merge.");
+        var desktopRename = folderBase with { Categories = [miku with { Name = "共用名" }, other] };
+        var phoneRename = folderBase with { Categories = [miku with { Name = "手机名" }, other with { Name = "共用名" }] };
+        var resolved = LanSyncMerge.Reconcile(folderBase, desktopRename, phoneRename);
+        Require(resolved.Library.Categories.SequenceEqual(desktopRename.Categories) && resolved.Android.Count == 2,
+            "A Windows rename must win its own conflict and keep both folders when another name collides.");
+        var newId = new string('3', 32);
+        var phoneNew = folderBase with { Categories = [miku, other, new(newId, "共用名", null)],
+            Resources = [..folderBase.Resources, new(bKey, [], [newId])] };
+        var collision = LanSyncMerge.Reconcile(folderBase, desktopRename, phoneNew);
+        Require(collision.Library.Categories.Single(c => c.Id == newId).Name == "共用名 (2)" &&
+            collision.Library.Resources.Single(r => r.Key == bKey).Categories.SequenceEqual([newId]),
+            "A colliding phone-only folder needs a unique name without losing its resources.");
+        var folderDeleted = new SyncLibrary([other], [new(aKey, [], [])]);
+        var repairedFolder = LanSyncMerge.Reconcile(folderBase, desktop, folderDeleted).Library;
+        Require(repairedFolder.Categories.Any(c => c.Id == w && c.Icon is null) &&
+            repairedFolder.Resources.Single().Categories.SequenceEqual([w]) &&
+            LanSyncMerge.Reconcile(folderBase, folderDeleted, phone).Library.Categories.All(c => c.Id != w),
+            "Folder delete-vs-edit must follow Windows, preserving its members when the folder survives.");
+        var firstConflict = LanSyncMerge.Reconcile(null, new([miku], []),
+            new([miku with { Id = a, Icon = new("text", "📱") }], []));
+        Require(firstConflict.Library.Categories.Single() == miku && firstConflict.Android[w] == a,
+            "First sync must use the Windows icon when both existing Miku folders have one.");
         var predecessor = new SyncCheckpoint(w, ordered);
         var latest = new SyncCheckpoint(a, flipped);
         Require(LanReconciliation.MatchBaseline(new(latest, predecessor), w) == predecessor &&
@@ -223,8 +266,8 @@ internal static class LanSyncTests
         string icon = Png("Icon.png", 230);
         Directory.CreateDirectory(Path.Combine(root, "category_icons"));
         File.Move(icon, Path.Combine(root, "category_icons", "Icon.png"));
-        File.WriteAllText(Path.Combine(root, "categories.json"), """{"电脑初始":["Gone.png","Tagged.png"],"图标收藏夹":[]}""");
-        File.WriteAllText(Path.Combine(root, "category_icons.json"), """{"图标收藏夹":"category_icons/Icon.png"}""");
+        File.WriteAllText(Path.Combine(root, "categories.json"), """{"电脑初始":["Gone.png","Tagged.png"],"Miku":[]}""");
+        File.WriteAllText(Path.Combine(root, "category_icons.json"), """{"Miku":"category_icons/Icon.png"}""");
         File.WriteAllText(Path.Combine(root, "metadata.json"), """{"Tagged.png":"keep remove"}""");
         var commands = new LibraryCommands(root, root);
         var taggedKey = ResourceIdentityV1.TryRead(tagged, timeout.Token);
@@ -250,6 +293,7 @@ internal static class LanSyncTests
                     await Edit(new("order", Paths: order), token);
                     await Edit(new("tags", Paths: [tagged], Value: "keep remove desktop"), token);
                     await Edit(new("rename_category", Category: "电脑初始", Value: "电脑改名"), token);
+                    await Edit(new("category_icon", Category: "Miku", Value: "🎵"), token);
                     await Edit(new("delete", Paths: [gone]), token);
                     Png("New.png", 210);
                 }
@@ -258,6 +302,7 @@ internal static class LanSyncTests
                     var item = state.Images.Single(s => s.Path == tagged);
                     Require(item.Keywords == "desktop keep phone" && item.Categories.Length == 0 &&
                         state.Categories.Any(c => c.Name == "电脑改名") && !File.Exists(gone) &&
+                        state.Categories.Any(c => c.Name == "Miku" && c.Icon == "🎵") &&
                         state.Images.Count(s => s.Path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)) == 1,
                         "Windows did not apply Android removals/additions or preserve the category rename.");
                     Console.WriteLine($"Surviving PNGs: {stableKey}, {taggedKey}");
