@@ -15,6 +15,7 @@ internal static class FileClipboard
     internal static uint Sequence => GetClipboardSequenceNumber();
 
     internal enum CopyResult { Copied, Superseded, Busy, Failed }
+    internal delegate CopyResult Writer(nint owner, ClipboardMedia media, uint expectedSequence, out uint sequence);
 
     internal static CopyResult TryCopy(nint owner, ClipboardMedia media, uint expectedSequence, out uint sequence)
     {

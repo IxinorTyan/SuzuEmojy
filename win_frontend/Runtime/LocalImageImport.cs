@@ -1,7 +1,9 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Windows.Media;
@@ -100,34 +102,50 @@ internal static class LocalImageImport
         public void Report(LibraryProgress value) => target?.Report(value with { Current = value.Current + rejected, Total = total });
     }
 
-    internal static IngestResource? PrepareForRefurbish(string original, string staged, CancellationToken token,
-        out bool animation, out bool resized)
+    internal enum RefurbishImage { Unreadable, Animation, WithinLimit, Oversized }
+
+    internal static RefurbishImage InspectForRefurbish(string original, CancellationToken token)
     {
-        animation = false;
-        resized = false;
         var extension = Path.GetExtension(original).ToLowerInvariant();
-        if (extension is ".webm" or ".tgs") { animation = true; return null; }
+        if (extension is ".webm" or ".tgs") return RefurbishImage.Animation;
         using (var input = File.OpenRead(original))
         {
-            if (extension == ".gif" && !GifSyncValidation.Check(input, token, maximumFrames: 1))
-                animation = GifSyncValidation.Check(input, token);
-            else if (extension is ".png" or ".apng")
-                animation = ApngDecoder.HasAnimationControl(input);
-            else if (extension == ".webp")
+            if (extension == ".gif")
             {
-                if (!NativeWebp.Available) return null;
-                animation = NativeWebp.IsWebp(input) && NativeWebp.Dimensions(input, token) is { Animated: true };
+                if (!GifSyncValidation.Check(input, token, maximumFrames: 1))
+                    return GifSyncValidation.Check(input, token) ? RefurbishImage.Animation : RefurbishImage.Unreadable;
+                var canvas = new byte[4];
+                input.Position = 6;
+                if (input.Read(canvas, 0, canvas.Length) != canvas.Length) return RefurbishImage.Unreadable;
+                return Bounds(BinaryPrimitives.ReadUInt16LittleEndian(canvas), BinaryPrimitives.ReadUInt16LittleEndian(canvas.AsSpan(2)));
             }
+            try
+            {
+                if ((extension is ".png" or ".apng") && ApngDecoder.HasAnimationControl(input)) return RefurbishImage.Animation;
+                if (extension == ".webp")
+                {
+                    if (!NativeWebp.Available || NativeWebp.Dimensions(input, token) is not { } webp)
+                        return RefurbishImage.Unreadable;
+                    return webp.Animated ? RefurbishImage.Animation : Bounds(webp.Width, webp.Height);
+                }
+                input.Position = 0;
+                var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreColorProfile,
+                    BitmapCacheOption.OnDemand);
+                return decoder.Frames.Count == 1 ? Bounds(decoder.Frames[0].PixelWidth, decoder.Frames[0].PixelHeight) : RefurbishImage.Unreadable;
+            }
+            catch (Exception error) when (error is FormatException or NotSupportedException or ArgumentException or COMException)
+            { return RefurbishImage.Unreadable; }
         }
-        if (animation) return null;
-        bool changed = false;
-        var prepared = Prepare(original, staged, [], token, resized: () => changed = true, failOnIo: true);
-        resized = changed;
-        return prepared;
+
+        static RefurbishImage Bounds(int width, int height) => width <= 0 || height <= 0 ? RefurbishImage.Unreadable :
+            Math.Max(width, height) > ImportImageSize.MaxSide ? RefurbishImage.Oversized : RefurbishImage.WithinLimit;
     }
 
+    internal static IngestResource? PrepareForRefurbish(string original, string staged, CancellationToken token) =>
+        Prepare(original, staged, [], token, failOnIo: true, oversizedOnly: true);
+
     private static IngestResource? Prepare(string original, string staged, int[] categories, CancellationToken token,
-        string? ffmpeg = null, bool keepGif = false, Action? resized = null, bool failOnIo = false)
+        string? ffmpeg = null, bool keepGif = false, bool failOnIo = false, bool oversizedOnly = false)
     {
         try
         {
@@ -181,11 +199,8 @@ internal static class LocalImageImport
                 image ??= ResourceIdentityV1.DecodePng(input, token) ?? ResourceIdentityV1.DecodeOtherStill(input, token);
                 if (image is null) return null;
                 var fitted = ImportImageSize.Fit(image);
-                if (!ReferenceEquals(fitted, image))
-                {
-                    needsOriginal = true;
-                    resized?.Invoke();
-                }
+                if (!ReferenceEquals(fitted, image)) needsOriginal = true;
+                else if (oversizedOnly) return null;
                 image = fitted;
                 int stride = image.PixelWidth * 4;
                 var pixels = new byte[stride * image.PixelHeight];

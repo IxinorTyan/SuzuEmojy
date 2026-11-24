@@ -22,7 +22,8 @@ public partial class MainWindow
     private readonly ImportQueue imports;
     private bool busy => galleryWork.IsBusy;
     internal bool Refurbishing { get; set; }
-    internal bool LibraryBusy => Refurbishing || busy || savingSettings || Pages.HasBlockingOperation;
+    private bool GalleryActionBusy => busy || savingSettings || Pages.HasBlockingOperation;
+    internal bool LibraryBusy => Refurbishing || GalleryActionBusy;
     internal bool HasPendingWrite => LibraryBusy || inboxWork.IsBusy || imports.IsRunning;
     private bool CanQueueImport => commands is not null && (imports.IsRunning || !LibraryBusy);
     internal event Action<LibrarySnapshot>? LibraryChanged;

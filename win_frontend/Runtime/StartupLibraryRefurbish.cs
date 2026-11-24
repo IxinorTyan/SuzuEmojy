@@ -56,7 +56,7 @@ internal static class StartupLibraryRefurbish
     }
 
     internal static bool RunOnce(string data, CancellationToken token, Func<string, ulong>? availableBytes = null,
-        Action<string>? afterInstall = null)
+        Action<string>? afterInstall = null, Action<string, LibraryRefurbish.Report, Action>? publish = null)
     {
         if (!NeedsRun(data)) return false;
         bool journaled = false;
@@ -84,19 +84,33 @@ internal static class StartupLibraryRefurbish
             journaled = true;
             var next = Directory.CreateDirectory(Path.Combine(work, "next")).FullName;
             var original = Directory.CreateDirectory(Path.Combine(work, "original")).FullName;
-            LibraryRefurbish.Build(root, next, token, standalone: false);
+            var report = LibraryRefurbish.Build(root, next, token, standalone: false);
             var pending = new Pending(id, Payload.Where(name => Exists(Path.Combine(next, name))).ToArray());
             foreach (var name in Slots) RuntimePrimitives.EnsureNotReparse(Path.Combine(root, name));
-            WriteState(root, Journal, output => JsonSerializer.Serialize(output, pending), token, overwrite: true);
-            foreach (var name in Slots)
+            if (publish is null) Install();
+            else publish(Path.Combine(original, "images"), report, Install);
+
+            void Install()
             {
-                var live = Path.Combine(root, name);
-                if (Exists(live)) Move(live, Path.Combine(original, name));
-                if (pending.Install.Contains(name, StringComparer.Ordinal)) Move(Path.Combine(next, name), live);
-                afterInstall?.Invoke(name);
+                WriteState(root, Journal, output => JsonSerializer.Serialize(output, pending), token, overwrite: true);
+                try
+                {
+                    foreach (var name in Slots)
+                    {
+                        var live = Path.Combine(root, name);
+                        if (Exists(live)) Move(live, Path.Combine(original, name));
+                        if (pending.Install.Contains(name, StringComparer.Ordinal)) Move(Path.Combine(next, name), live);
+                        afterInstall?.Invoke(name);
+                    }
+                    // No cancellation between journal publication and the commit/rollback.
+                    Move(Path.Combine(next, Receipt), Path.Combine(root, Receipt));
+                }
+                catch
+                {
+                    Recover(root);
+                    throw;
+                }
             }
-            // No cancellation between journal publication and the commit/rollback.
-            Move(Path.Combine(next, Receipt), Path.Combine(root, Receipt));
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or
             ArgumentException or NotSupportedException or LibrarySqliteException or JsonException or OperationCanceledException)

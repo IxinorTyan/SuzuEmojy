@@ -421,7 +421,9 @@ internal static class Program
         var commands = new LibraryCommands(repository, disposableLibrary);
         var window = new MainWindow(snapshot, offscreen: true, commands: commands)
         { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
-        var session = new DesktopSession(window, snapshot, disposableLibrary, commands);
+        var pastePlatform = new StartupPastePlatform();
+        var session = new DesktopSession(window, snapshot, disposableLibrary, commands,
+            input: pastePlatform, writeClipboard: pastePlatform.Copy);
         var timer = Stopwatch.StartNew();
         try
         {
@@ -432,6 +434,21 @@ internal static class Program
                 "The original gallery must already be visible and browsable while refurbishing.");
             var shown = timer.ElapsedMilliseconds;
             await WaitForCards(window, expectedItems: snapshot.Images.Length);
+            pastePlatform.Foreground = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+            window.Cards.Children.OfType<Button>().First().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await WaitFor(() => pastePlatform.Media.Count == 1);
+            Require(window.Refurbishing && File.Exists(pastePlatform.Media[0].Path),
+                "Main gallery clicks must publish a usable clipboard payload while old-library cleanup runs.");
+            pastePlatform.Foreground = StartupPastePlatform.Target;
+            session.ToggleQuickPanel();
+            var quick = Application.Current.Windows.OfType<QuickPanel>().Single();
+            quick.Opacity = 0;
+            await WaitFor(() => quick.Cards.Children.OfType<Button>().Any());
+            var dragged = quick.Gallery.DragFilePath!(quick.Gallery.Items[0]);
+            quick.Cards.Children.OfType<Button>().First().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await WaitFor(() => pastePlatform.Pastes == 1);
+            Require(window.Refurbishing && pastePlatform.Media.Count == 2 && dragged is not null && File.Exists(dragged) &&
+                !quick.IsVisible, "The quick hotkey, drag payload and automatic paste must remain available during cleanup.");
             window.GalleryScroll.ScrollToVerticalOffset(150);
             Layout(window);
             Require(window.GalleryScroll.VerticalOffset > 0, "Startup maintenance must not block browsing.");
@@ -443,6 +460,8 @@ internal static class Program
             Require(!StartupLibraryRefurbish.NeedsRun(disposableLibrary) &&
                 window.Gallery.Items.Count == snapshot.Images.Length && window.IsVisible,
                 "A successful in-background cutover must refresh the same window without dropping entries.");
+            Require(pastePlatform.Media.All(media => File.Exists(media.Path)) && File.Exists(dragged),
+                "The files sent from the old gallery must remain available after cutover.");
             Console.WriteLine(JsonSerializer.Serialize(new { Images = snapshot.Images.Length, WindowReadyMilliseconds = shown,
                 RefurbishMilliseconds = timer.ElapsedMilliseconds }));
         }
@@ -450,6 +469,39 @@ internal static class Program
         {
             session.Dispose();
             window.Close();
+        }
+
+        async Task WaitFor(Func<bool> ready)
+        {
+            var deadline = timer.Elapsed + TimeSpan.FromSeconds(5);
+            while (!ready())
+            {
+                Require(timer.Elapsed < deadline, "Timed out waiting for a sticker to be sent.");
+                await Task.Delay(15);
+            }
+        }
+    }
+
+    private sealed class StartupPastePlatform : IPastePlatform
+    {
+        internal static readonly nint Target = (nint)42;
+        internal readonly List<ClipboardMedia> Media = [];
+        internal int Pastes;
+        public nint Foreground { get; set; }
+        public uint ClipboardSequence { get; private set; } = 1;
+        public bool ModifiersDown => false;
+        public uint OwnProcess => 1;
+        public WindowIdentity? Identify(nint window) => window == 0 ? null : new(1, window == Target ? 2u : OwnProcess);
+        public bool IsPasteTarget(nint window) => window == Target;
+        public nint FocusedControl(PasteTarget target) => 0;
+        public void RestoreForeground(nint window) => Foreground = window;
+        public bool SendPaste() { Pastes++; return true; }
+        internal FileClipboard.CopyResult Copy(nint owner, ClipboardMedia media, uint expectedSequence, out uint sequence)
+        {
+            Require(expectedSequence == ClipboardSequence && File.Exists(media.Path), "Sticker clipboard payload is stale.");
+            Media.Add(media);
+            sequence = ++ClipboardSequence;
+            return FileClipboard.CopyResult.Copied;
         }
     }
 

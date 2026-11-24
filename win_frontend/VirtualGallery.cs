@@ -142,7 +142,7 @@ internal sealed class VirtualGallery : IDisposable
     internal Func<Sticker, ContextMenu?>? ContextMenuFor { get; set; }
     internal const string InternalDragFormat = "SuzuEmojy.Windows.GalleryItem";
     internal Func<bool>? CanReorder { get; set; }
-    internal Func<bool>? CanDragFiles { get; set; }
+    internal Func<Sticker, string?>? DragFilePath { get; set; }
     internal event Action<Sticker, Sticker>? ReorderRequested;
 
     internal void ApplySelection(HashSet<Sticker> selected)
@@ -363,7 +363,7 @@ internal sealed class VirtualGallery : IDisposable
         button.PreviewMouseLeftButtonDown += (_, e) => { unhover(); dragOrigin = e.GetPosition(button); };
         button.PreviewMouseLeftButtonUp += (_, _) => dragOrigin = null;
         button.PreviewMouseMove += (_, e) => {
-            if (dragOrigin is not Point start || e.LeftButton != MouseButtonState.Pressed || CanDragFiles?.Invoke() == false)
+            if (dragOrigin is not Point start || e.LeftButton != MouseButtonState.Pressed)
                 return;
             var pos = e.GetPosition(button);
             if (Math.Abs(start.X - pos.X) < SystemParameters.MinimumHorizontalDragDistance &&
@@ -373,7 +373,9 @@ internal sealed class VirtualGallery : IDisposable
             unhover();
             e.Handled = true;
             button.ReleaseMouseCapture();
-            var data = new DataObject(DataFormats.FileDrop, new[] { card.Item.Path });
+            var path = DragFilePath is null ? card.Item.Path : DragFilePath(card.Item);
+            if (path is null) return;
+            var data = new DataObject(DataFormats.FileDrop, new[] { path });
             if (ReorderRequested is not null) data.SetData(InternalDragFormat, card.Item.Path);
             DragDrop.DoDragDrop(button, data, DragDropEffects.Copy);
         };

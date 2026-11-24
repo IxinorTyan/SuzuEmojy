@@ -109,10 +109,15 @@ internal static class LibraryRefurbish
             var (path, name) = files[i];
             try
             {
-                if (LocalImageImport.PrepareForRefurbish(path, temporary, token, out var animated, out var shrunk) is not { } image)
+                switch (LocalImageImport.InspectForRefurbish(path, token))
                 {
-                    if (animated) animations++;
-                    else unreadable.Add(name);
+                    case LocalImageImport.RefurbishImage.WithinLimit: continue;
+                    case LocalImageImport.RefurbishImage.Animation: animations++; continue;
+                    case LocalImageImport.RefurbishImage.Unreadable: unreadable.Add(name); continue;
+                }
+                if (LocalImageImport.PrepareForRefurbish(path, temporary, token) is not { } image)
+                {
+                    unreadable.Add(name);
                     continue;
                 }
                 if (image.SyncKey.StartsWith("f:", StringComparison.Ordinal)) { animations++; continue; }
@@ -140,7 +145,7 @@ internal static class LibraryRefurbish
                 var saved = new FileInfo(destination);
                 cleaned.Add(new(name, newName, image.SyncKey, image.Md5, saved.Length,
                     checked((saved.LastWriteTimeUtc.Ticks - RuntimePrimitives.UnixEpoch.Ticks) * 100)));
-                if (shrunk) resized++;
+                resized++;
             }
             finally { RuntimePrimitives.DiscardTemporaryFile(temporary); }
         }

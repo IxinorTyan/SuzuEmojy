@@ -25,6 +25,7 @@ internal static class LibraryRefurbishTests
         SavePicture(wide, 1200, 600);
         SavePicture(tall, 300, 1200);
         SavePicture(Path.Combine(images, "small.png"), 120, 60);
+        SavePicture(Path.Combine(images, "limit.png"), 720, 41);
         var shapeA = Path.Combine(images, "shape-a.png");
         var shapeB = Path.Combine(images, "shape-b.png");
         SavePicture(shapeA, 3, 2, solid: true);
@@ -50,7 +51,7 @@ internal static class LibraryRefurbishTests
 
         var report = LibraryRefurbish.Run(source, destination, CancellationToken.None);
         var renamed = report.Renames["tall.gif"];
-        Require(report is { Images: 11, Recleaned: 8, Resized: 4, PreservedAnimations: 2 } && renamed == "tall_2.png" &&
+        Require(report is { Images: 12, Recleaned: 4, Resized: 4, PreservedAnimations: 2 } && renamed == "tall_2.png" &&
             report.UnchangedBecauseUnreadable.SequenceEqual(new[] { "broken.png" }) &&
             report.ExactDuplicateGroups.Length == 2 &&
             report.ExactDuplicateGroups.Any(group => group.Length == 2 && group.Contains("wide.png") && group.Contains("duplicate.png")) &&
@@ -69,7 +70,13 @@ internal static class LibraryRefurbishTests
         Require(PixelSize(byName["wide.png"].Path) == (720, 360) && PixelSize(byName["tall.png"].Path) == (180, 720) &&
             PixelSize(byName[renamed].Path) == (180, 720) && PixelSize(byName["small.png"].Path) == (120, 60),
             "Static images must preserve aspect ratio, orientation and small dimensions.");
-        using (var input = File.OpenRead(byName["offset.png"].Path))
+        Require(new[] { "anim.gif", "apng.png", "broken.png", "offset.gif", "small.png", "limit.png", "shape-a.png", "shape-b.png" }
+            .All(name => original[name].SequenceEqual(File.ReadAllBytes(byName[name].Path))),
+            "Files within the limit (including a 720-pixel edge), animations and unreadable files must stay byte-for-byte unchanged.");
+        var offsetLibrary = Path.Combine(work, "offset-import");
+        Require(LocalImageImport.TryRun(offsetLibrary, [byName["offset.gif"].Path], null, CancellationToken.None, null) is { Count: 1 },
+            "Ordinary import must still normalize a single-frame GIF.");
+        using (var input = File.OpenRead(LibrarySnapshotReader.Read(offsetLibrary, CancellationToken.None).Images.Single().Path))
         {
             var frame = ResourceIdentityV1.DecodePng(input, CancellationToken.None)!;
             var pixels = new byte[3 * 2 * 4];
@@ -78,8 +85,8 @@ internal static class LibraryRefurbishTests
                 pixels[4 * (3 + 1) + 3] == 255 && pixels[4 * (3 + 2) + 3] == 0,
                 "A cropped single-frame GIF must retain its logical canvas, offset and transparency.");
         }
-        Require(new[] { "anim.gif", "apng.png", "broken.png" }.All(name => original[name].SequenceEqual(File.ReadAllBytes(byName[name].Path))),
-            "Animated and unreadable assets must be carried over without modifying their bytes.");
+        Require(LocalImageImport.TryRun(destination, [byName["offset.gif"].Path], null, CancellationToken.None, null) is
+            { Count: 0, Skipped: 1 }, "A small single-frame GIF left untouched in the old gallery must still deduplicate.");
         using (var indexes = WindowsSqlite.OpenIfPresent(Path.Combine(destination, "features.db")))
         {
             string?[] row = indexes!.Read("SELECT sync_key, file_size FROM image_features WHERE image_path = ?", 2,
@@ -141,7 +148,16 @@ internal static class LibraryRefurbishTests
         Require(!File.Exists(receipt) && featuresBefore.SequenceEqual(File.ReadAllBytes(features)) && File.ReadAllText(report) == "old report" &&
             original.All(item => item.Value.SequenceEqual(File.ReadAllBytes(Path.Combine(source, "images", item.Key)))),
             "On relaunch the journal must restore the original library after process termination.");
-        StartupLibraryRefurbish.RunOnce(source, token);
+        var commands = new LibraryCommands(work, source);
+        var oldName = Path.Combine(source, "images", "tall.gif");
+        var sendPath = commands.CaptureRefurbishingImage(oldName, token);
+        Require(commands.RefurbishOnStartup(token).GetAwaiter().GetResult() is not null,
+            "The normal startup path must publish the migrated gallery.");
+        Require(!File.Exists(oldName) && original["tall.gif"].SequenceEqual(File.ReadAllBytes(sendPath)) &&
+            commands.CaptureRefurbishingImage(oldName, token) == sendPath,
+            "An already sent or selected original must remain usable even after its live filename changes.");
+        var recent = commands.Run(new("recent", [oldName]), reload: false).GetAwaiter().GetResult().Result.Recent;
+        Require(recent?.FirstOrDefault() == "tall_2.png", "A sticker sent during cleanup must record the renamed live entry.");
         var backup = Path.Combine(Directory.GetDirectories(backups, "refurbish-v1-*").Single(), "original");
         Require(File.Exists(receipt) && original.All(item => item.Value.SequenceEqual(File.ReadAllBytes(Path.Combine(backup, "images", item.Key)))) &&
             File.ReadAllText(waiting) == "leave inbox alone" && PixelSize(wide) == (720, 360) &&

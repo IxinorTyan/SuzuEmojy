@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -50,6 +53,9 @@ internal sealed class LibraryCommands(string repository, string data)
     private readonly SemaphoreSlim thumbnails = new(1);
     private readonly SemaphoreSlim inspector = new(1);
     private readonly SemaphoreSlim preview = new(1);
+    private readonly object imageCutover = new();
+    private string? preRefurbishImages;
+    private Dictionary<string, string>? refurbishedNames;
     internal WindowsReleaseService Updates { get; } = new(data);
 
     internal Task<LibrarySnapshot> ReadForLanSync() => LibrarySnapshot.ReadAsync(data);
@@ -59,10 +65,46 @@ internal sealed class LibraryCommands(string repository, string data)
         await serial.WaitAsync(token);
         try
         {
-            return await Task.Run(() => StartupLibraryRefurbish.RunOnce(data, token)
+            return await Task.Run(() => StartupLibraryRefurbish.RunOnce(data, token, publish: Publish)
                 ? LibrarySnapshotReader.Read(data, CancellationToken.None) : null, token);
         }
         finally { serial.Release(); }
+
+        void Publish(string originalImages, LibraryRefurbish.Report report, Action install)
+        {
+            lock (imageCutover)
+            {
+                install();
+                preRefurbishImages = originalImages;
+                refurbishedNames = report.Renames;
+            }
+        }
+    }
+
+    // Paste and drag carry a path which the receiving app may open after the
+    // migration switches the live directory. Give them stable original bytes.
+    internal string CaptureRefurbishingImage(string path, CancellationToken token)
+    {
+        lock (imageCutover)
+        {
+            token.ThrowIfCancellationRequested();
+            var source = preRefurbishImages is null ? path : Path.Combine(preRefurbishImages, Path.GetFileName(path));
+            using var input = File.Open(source, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var revision = Path.GetFullPath(path) + ":" + RuntimePrimitives.Revision(input.SafeFileHandle);
+            using var sha = SHA256.Create();
+            var key = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(revision))).Replace("-", "");
+            var folder = Directory.CreateDirectory(Path.Combine(data, "cache", "refurbish-send", key)).FullName;
+            var target = Path.Combine(folder, Path.GetFileName(path));
+            if (File.Exists(target)) return target;
+            var staging = Path.Combine(folder, "." + Guid.NewGuid().ToString("N") + ".part");
+            try
+            {
+                using (var output = File.Open(staging, FileMode.CreateNew, FileAccess.Write)) input.CopyTo(output);
+                RuntimePrimitives.CommitFile(staging, target, overwrite: false, token);
+                return target;
+            }
+            finally { RuntimePrimitives.DiscardTemporaryFile(staging); }
+        }
     }
 
     internal async Task Synchronize(System.IO.Stream stream, Action<string> status, CancellationToken token, bool streaming = false)
@@ -93,6 +135,9 @@ internal sealed class LibraryCommands(string repository, string data)
         await gate.WaitAsync(cancellation);
         try
         {
+            if (command.Action == "recent" && command.Paths is { Length: 1 } paths && refurbishedNames is { } names &&
+                !File.Exists(paths[0]) && names.TryGetValue(Path.GetFileName(paths[0]), out var renamed))
+                command = command with { Paths = [Path.Combine(Path.GetDirectoryName(paths[0])!, renamed)] };
             if (command.Action == "export_files")
             {
                 var count = await Task.Run(() => LibraryFileExport.Copy(data, command.Value!, command.Paths ?? [], cancellation), cancellation);

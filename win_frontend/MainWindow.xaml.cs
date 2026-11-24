@@ -103,7 +103,6 @@ public partial class MainWindow : Window
             {
                 if (!Refurbishing && !selecting) preview.Schedule(item, card);
             }, preview.Hide, offscreen, GalleryMotion);
-        gallery.CanDragFiles = () => !Refurbishing;
         gallery.SizeChanged += preview.Hide;
         gallery.ZoomChanged += size => SetLayoutSetting("thumbnail_size", size);
         if (commands is not null) EnableLibraryActions();
@@ -364,7 +363,7 @@ public partial class MainWindow : Window
 
     private void ActivateSticker(Sticker item)
     {
-        if (LibraryBusy || !OnGalleryPage) return;
+        if (GalleryActionBusy || !OnGalleryPage) return;
         bool range = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
         if (selecting || range || Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         {

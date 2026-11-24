@@ -22,7 +22,8 @@ internal sealed class DesktopSession : IDisposable
     private readonly QuickPanelResults results;
     private StickerSendMedia sendMedia;
     private readonly string cache;
-    private readonly WindowsInput input = new();
+    private readonly IPastePlatform input;
+    private readonly FileClipboard.Writer writeClipboard;
     private readonly AutoPaste paste;
     private readonly DispatcherTimer timer;
     private readonly DispatcherTimer wakeTimer;
@@ -46,17 +47,19 @@ internal sealed class DesktopSession : IDisposable
     private bool disposed, exiting, exitRequested;
 
     internal DesktopSession(MainWindow window, LibrarySnapshot settings, string data, LibraryCommands commands,
-        UpdateInstallation? update = null)
+        UpdateInstallation? update = null, IPastePlatform? input = null, FileClipboard.Writer? writeClipboard = null)
     {
         this.window = window;
         this.settings = settings;
         this.commands = commands;
+        this.input = input ?? new WindowsInput();
+        this.writeClipboard = writeClipboard ?? FileClipboard.TryCopy;
         window.Updates = update;
         window.InstallUpdate = update is null ? null : release => InstallUpdate(update, release);
         cache = Path.Combine(data, "cache", "gif_output");
         results = new QuickPanelResults(settings);
         sendMedia = new StickerSendMedia(cache, settings.Flag("convert_static_to_gif", true));
-        paste = new AutoPaste(input, TimeProvider.System);
+        paste = new AutoPaste(this.input, TimeProvider.System);
         timer = new DispatcherTimer(DispatcherPriority.Input, window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(20) };
         timer.Tick += OnPasteTick;
         wakeTimer = new DispatcherTimer(DispatcherPriority.Input, window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(250) };
@@ -77,6 +80,7 @@ internal sealed class DesktopSession : IDisposable
         window.LibraryChanged += RefreshLibrary;
         window.HotkeyRecordingChanged += SetHotkeyRecording;
         window.StickerActivated += CopyMainSticker;
+        window.Gallery.DragFilePath = DragFilePath;
         window.Activated += WindowActivated;
         window.Deactivated += WindowDeactivated;
         window.Closing += WindowClosing;
@@ -215,9 +219,9 @@ internal sealed class DesktopSession : IDisposable
         ActivateFromHotkey(window, handle);
     }
 
-    private void ToggleQuickPanel()
+    internal void ToggleQuickPanel()
     {
-        if (window.RecordingHotkey || window.Refurbishing) return;
+        if (window.RecordingHotkey) return;
         CancelSend();
         ClearWake();
         var panel = quickPanel ?? CreateQuickPanel();
@@ -233,6 +237,7 @@ internal sealed class DesktopSession : IDisposable
     private QuickPanel CreateQuickPanel()
     {
         var panel = new QuickPanel(settings, results, commands: commands);
+        panel.Gallery.DragFilePath = DragFilePath;
         quickPanel = panel;
         panel.ThumbnailSizeChanged += window.SetQuickThumbnailSize;
         quickActivate = sticker => CopySticker(panel, sticker, hide: true);
@@ -293,9 +298,19 @@ internal sealed class DesktopSession : IDisposable
     private void CopyMainSticker(Sticker sticker) =>
         CopySticker(window, sticker, settings.Flag("hide_main_after_paste", false) && (tray is not null || hotkey is not null));
 
+    private string? DragFilePath(Sticker sticker)
+    {
+        if (!window.Refurbishing) return sticker.Path;
+        try { return commands.CaptureRefurbishingImage(sticker.Path, CancellationToken.None); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Cannot prepare sticker drag: {0}", error.Message);
+            return null;
+        }
+    }
+
     private async void CopySticker(Window panel, Sticker sticker, bool hide)
     {
-        if (window.Refurbishing) return;
         CancelSend();
         var panelHandle = new WindowInteropHelper(panel).Handle;
         if (input.Foreground != panelHandle) { ClearWake(); return; }
@@ -306,16 +321,21 @@ internal sealed class DesktopSession : IDisposable
         uint sequence = 0;
         try
         {
-            var media = await sendMedia.Prepare(sticker.Path, request.Token);
+            var source = window.Refurbishing
+                ? await Task.Run(() => commands.CaptureRefurbishingImage(sticker.Path, request.Token), request.Token)
+                : sticker.Path;
+            var media = await sendMedia.Prepare(source, request.Token);
             for (int attempt = 0; attempt < 4; attempt++)
             {
                 if (request.IsCancellationRequested || disposed || input.Foreground != panelHandle) return;
-                copied = FileClipboard.TryCopy(panelHandle, media, baseline, out sequence);
+                copied = writeClipboard(panelHandle, media, baseline, out sequence);
                 if (copied != FileClipboard.CopyResult.Busy || attempt == 3) break;
                 await Task.Delay(20, request.Token);
             }
         }
         catch (OperationCanceledException) { return; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { Trace.TraceWarning("Cannot prepare sticker copy: {0}", error.Message); }
         finally { if (ReferenceEquals(preparing, request)) preparing = null; }
 
         if (copied != FileClipboard.CopyResult.Copied)
@@ -488,6 +508,7 @@ internal sealed class DesktopSession : IDisposable
         closeTimer.Tick -= FinishClosing;
         wakeTimer.Tick -= FinishActivation;
         window.StickerActivated -= CopyMainSticker;
+        window.Gallery.DragFilePath = null;
         window.Activated -= WindowActivated;
         window.Deactivated -= WindowDeactivated;
         window.Closing -= WindowClosing;
