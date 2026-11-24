@@ -45,6 +45,8 @@ SuzuEmojy_Release/
 /win_launcher/bin/
 /win_updater/obj/
 /win_updater/bin/
+/win_refurbisher/obj/
+/win_refurbisher/bin/
 *_wpftmp.csproj
 /nuitka-crash-report.xml
 /nuitka_help.txt

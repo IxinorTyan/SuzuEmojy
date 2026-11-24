@@ -56,10 +56,10 @@
           </Grid>
         </DockPanel>
       </Border>
-      <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+      <fluent:FluentScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                     Template="{StaticResource FluentScrollTemplate}">
         <Canvas x:Name="Tiles"/>
-      </ScrollViewer>
+      </fluent:FluentScrollViewer>
     </DockPanel>
   </DockPanel>
 </UserControl>

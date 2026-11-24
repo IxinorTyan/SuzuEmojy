@@ -1,10 +1,7 @@
 using System;
-using System.Diagnostics;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
-using System.Windows.Threading;
 
 namespace SuzuEmojy.Windows.Controls;
 
@@ -13,29 +10,23 @@ namespace SuzuEmojy.Windows.Controls;
 internal sealed class MiddleScroll : IDisposable
 {
     private readonly Window owner;
-    private readonly ScrollViewer scroll;
+    private readonly FluentScrollViewer scroll;
     private readonly Action started;
     private readonly MiddleScrollGesture gesture = new(
         SystemParameters.MinimumHorizontalDragDistance, SystemParameters.MinimumVerticalDragDistance);
-    private readonly DispatcherTimer timer;
     private readonly QueryCursorEventHandler queryCursor;
     private MouseButton? cancelButton;
-    private long lastTick;
-    private double dragTarget;
 
     internal bool Active => gesture.Active;
+    internal double AutoSpeed => gesture.AutoSpeed(Mouse.GetPosition(scroll));
 
-    internal MiddleScroll(Window owner, ScrollViewer scroll, Action started)
+    internal MiddleScroll(Window owner, FluentScrollViewer scroll, Action started)
     {
         this.owner = owner;
         this.scroll = scroll;
         this.started = started;
-        timer = new DispatcherTimer(DispatcherPriority.Input, scroll.Dispatcher) { Interval = TimeSpan.FromMilliseconds(16) };
-        timer.Tick += Tick;
         scroll.PreviewMouseDown += Start;
         scroll.LostMouseCapture += LostCapture;
-        scroll.IsVisibleChanged += VisibilityChanged;
-        scroll.ScrollChanged += ScrollChanged;
         owner.PreviewMouseDown += CancelClick;
         owner.PreviewMouseUp += Release;
         owner.PreviewMouseMove += Drag;
@@ -48,12 +39,12 @@ internal sealed class MiddleScroll : IDisposable
 
     private void Start(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Middle || scroll.ScrollableHeight <= 0 ||
+        if (e.ChangedButton != MouseButton.Middle || scroll.CanContentScroll || scroll.ScrollableHeight <= 0 ||
             (scroll.Template.FindName("PART_VerticalScrollBar", scroll) is ScrollBar bar && bar.IsMouseOver))
             return;
         if (!Mouse.Capture(scroll, CaptureMode.Element)) return;
         gesture.Start(e.GetPosition(scroll));
-        dragTarget = scroll.VerticalOffset;
+        scroll.BeginMiddleDrag();
         started();
         Mouse.UpdateCursor();
         e.Handled = true;
@@ -62,14 +53,7 @@ internal sealed class MiddleScroll : IDisposable
     private void Drag(object sender, MouseEventArgs e)
     {
         if (!gesture.Pressed) return;
-        // ScrollViewer applies offsets during layout. Multiple moves can arrive
-        // before that happens, so accumulate pressed motion against our own target.
-        var delta = gesture.Drag(e.GetPosition(scroll));
-        if (delta != 0)
-        {
-            dragTarget = RuntimePrimitives.Clamp(dragTarget + delta, 0, scroll.ScrollableHeight);
-            scroll.ScrollToVerticalOffset(dragTarget);
-        }
+        scroll.MoveMiddleDrag(gesture.Drag(e.GetPosition(scroll)));
         e.Handled = true;
     }
 
@@ -82,13 +66,12 @@ internal sealed class MiddleScroll : IDisposable
             return;
         }
         if (!gesture.Pressed || e.ChangedButton != MouseButton.Middle) return;
-        var latched = gesture.Release(e.GetPosition(scroll));
+        var position = e.GetPosition(scroll);
+        scroll.MoveMiddleDrag(gesture.Drag(position));
+        var latched = gesture.Release(position);
         ReleaseCapture();
-        if (latched)
-        {
-            lastTick = Stopwatch.GetTimestamp();
-            timer.Start();
-        }
+        if (latched) scroll.BeginMiddleAuto();
+        else scroll.EndMiddleDrag();
         Mouse.UpdateCursor();
         e.Handled = true;
     }
@@ -111,18 +94,6 @@ internal sealed class MiddleScroll : IDisposable
         if (e.Key == Key.Escape) e.Handled = true;
     }
 
-    private void Tick(object? sender, EventArgs e)
-    {
-        long now = Stopwatch.GetTimestamp();
-        var delta = gesture.Advance(Mouse.GetPosition(scroll), (now - lastTick) / (double)Stopwatch.Frequency);
-        lastTick = now;
-        if (delta != 0)
-        {
-            var target = RuntimePrimitives.Clamp(scroll.VerticalOffset + delta, 0, scroll.ScrollableHeight);
-            if (target != scroll.VerticalOffset) scroll.ScrollToVerticalOffset(target);
-        }
-    }
-
     private void QueryCursor(object sender, QueryCursorEventArgs e)
     {
         if (!gesture.Active) return;
@@ -133,16 +104,6 @@ internal sealed class MiddleScroll : IDisposable
     private void LostCapture(object sender, MouseEventArgs e)
     {
         if (gesture.Pressed && Mouse.Captured != scroll) Stop();
-    }
-
-    private void VisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
-    {
-        if (!scroll.IsVisible) Stop();
-    }
-
-    private void ScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        if (scroll.ScrollableHeight <= 0) Stop();
     }
 
     private void Deactivated(object? sender, EventArgs e) { cancelButton = null; Stop(); }
@@ -157,7 +118,7 @@ internal sealed class MiddleScroll : IDisposable
     {
         if (!gesture.Active) return;
         gesture.Stop();
-        timer.Stop();
+        scroll.CancelMiddleMotion();
         ReleaseCapture();
         Mouse.UpdateCursor();
     }
@@ -165,11 +126,8 @@ internal sealed class MiddleScroll : IDisposable
     public void Dispose()
     {
         Stop();
-        timer.Tick -= Tick;
         scroll.PreviewMouseDown -= Start;
         scroll.LostMouseCapture -= LostCapture;
-        scroll.IsVisibleChanged -= VisibilityChanged;
-        scroll.ScrollChanged -= ScrollChanged;
         owner.PreviewMouseDown -= CancelClick;
         owner.PreviewMouseUp -= Release;
         owner.PreviewMouseMove -= Drag;

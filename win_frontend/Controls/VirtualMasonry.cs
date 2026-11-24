@@ -9,7 +9,7 @@ namespace SuzuEmojy.Windows.Controls;
 
 // One extent for scrolling, with only the intersecting cards realized. Layout is
 // rebuilt only when data/width changes; scrolling searches each column by Y.
-internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
+internal sealed class VirtualMasonry<T>(FluentScrollViewer scroll, Canvas surface,
     Func<T, double> aspect, Func<T, FrameworkElement> make)
 {
     private const double Gap = 10, TargetWidth = 134, Overscan = 100;
@@ -17,8 +17,10 @@ internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
     private readonly Dictionary<int, FrameworkElement> live = new();
     private IReadOnlyList<T> items = [];
     private List<Placement>[] columns = [];
+    private int[] lastViewport = [];
     private DispatcherOperation? render;
     private double lastWidth = -1;
+    private double lastHeight = -1, bandStart, bandEnd;
     private bool disposed;
 
     internal IReadOnlyDictionary<int, FrameworkElement> Realized => live;
@@ -32,9 +34,11 @@ internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
 
     internal void SetItems(IReadOnlyList<T> value, bool resetScroll = true)
     {
+        scroll.CancelScrollMotion();
         items = value;
         surface.Children.Clear();
         live.Clear();
+        lastViewport = [];
         lastWidth = -1;
         if (items.Count == 0) surface.Height = 0;
         if (resetScroll) scroll.ScrollToTop();
@@ -76,23 +80,27 @@ internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
     {
         double width = scroll.ViewportWidth, height = scroll.ViewportHeight;
         if (disposed || items.Count == 0 || width <= 0 || height <= 0) return;
-        if (width != lastWidth)
+        bool reflow = width != lastWidth;
+        if (reflow)
         {
             ArrangeColumns(width);
             lastWidth = width;
         }
         double top = Math.Min(scroll.VerticalOffset, Math.Max(0, surface.Height - height));
+        if (!reflow && height == lastHeight && top > bandStart && top < bandEnd) return;
+        lastHeight = height;
+        bandStart = double.NegativeInfinity;
+        bandEnd = double.PositiveInfinity;
         var visible = new List<Placement>();
         foreach (var column in columns)
         {
-            int low = 0, high = column.Count;
-            while (low < high)
-            {
-                int center = (low + high) / 2;
-                if (column[center].Bounds.Bottom <= top - Overscan) low = center + 1;
-                else high = center;
-            }
-            for (int i = low; i < column.Count && column[i].Bounds.Top < top + height + Overscan; i++)
+            int first = Boundary(column, -Overscan, bottom: true);
+            int end = Boundary(column, height + Overscan, bottom: false);
+            // Realization and decode priority use different bounds. Fractional
+            // moves inside all four edges need no UI work at all.
+            Boundary(column, 0, bottom: true);
+            Boundary(column, height, bottom: false);
+            for (int i = first; i < end; i++)
                 visible.Add(column[i]);
         }
         var indices = visible.Select(card => card.Index).ToHashSet();
@@ -101,7 +109,8 @@ internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
             surface.Children.Remove(live[index]);
             live.Remove(index);
         }
-        foreach (var (index, bounds) in visible.OrderBy(card => card.Index))
+        visible.Sort((left, right) => left.Index.CompareTo(right.Index));
+        foreach (var (index, bounds) in visible)
         {
             if (!live.TryGetValue(index, out var view))
             {
@@ -109,14 +118,36 @@ internal sealed class VirtualMasonry<T>(ScrollViewer scroll, Canvas surface,
                 live[index] = view;
                 surface.Children.Add(view);
             }
+            else if (!reflow) continue;
             view.Width = bounds.Width;
             view.Height = bounds.Height;
             Canvas.SetLeft(view, bounds.X);
             Canvas.SetTop(view, bounds.Y);
         }
-        ViewportChanged?.Invoke(visible
-            .OrderBy(card => card.Bounds.Bottom <= top || card.Bounds.Top >= top + height)
-            .ThenBy(card => card.Index).Select(card => items[card.Index]).ToArray());
+        // Scrolling a fraction of a tile usually doesn't change which thumbnails
+        // should be decoded next. Only wake the loader when that order changes.
+        bool OnScreen(Placement card) => card.Bounds.Bottom > top && card.Bounds.Top < top + height;
+        var viewport = visible.Where(OnScreen).Concat(visible.Where(card => !OnScreen(card)))
+            .Select(card => card.Index).ToArray();
+        if (lastViewport.SequenceEqual(viewport)) return;
+        lastViewport = viewport;
+        ViewportChanged?.Invoke(viewport.Select(index => items[index]).ToArray());
+
+        int Boundary(List<Placement> column, double edge, bool bottom)
+        {
+            double Position(int index) => (bottom ? column[index].Bounds.Bottom : column[index].Bounds.Top) - edge;
+            int low = 0, high = column.Count;
+            while (low < high)
+            {
+                int mid = (low + high) / 2;
+                double pos = Position(mid);
+                if (pos < top || (bottom && pos == top)) low = mid + 1;
+                else high = mid;
+            }
+            if (low > 0) bandStart = Math.Max(bandStart, Position(low - 1));
+            if (low < column.Count) bandEnd = Math.Min(bandEnd, Position(low));
+            return low;
+        }
     }
 
     internal void Dispose()

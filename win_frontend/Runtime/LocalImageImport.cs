@@ -100,8 +100,34 @@ internal static class LocalImageImport
         public void Report(LibraryProgress value) => target?.Report(value with { Current = value.Current + rejected, Total = total });
     }
 
+    internal static IngestResource? PrepareForRefurbish(string original, string staged, CancellationToken token,
+        out bool animation, out bool resized)
+    {
+        animation = false;
+        resized = false;
+        var extension = Path.GetExtension(original).ToLowerInvariant();
+        if (extension is ".webm" or ".tgs") { animation = true; return null; }
+        using (var input = File.OpenRead(original))
+        {
+            if (extension == ".gif" && !GifSyncValidation.Check(input, token, maximumFrames: 1))
+                animation = GifSyncValidation.Check(input, token);
+            else if (extension is ".png" or ".apng")
+                animation = ApngDecoder.HasAnimationControl(input);
+            else if (extension == ".webp")
+            {
+                if (!NativeWebp.Available) return null;
+                animation = NativeWebp.IsWebp(input) && NativeWebp.Dimensions(input, token) is { Animated: true };
+            }
+        }
+        if (animation) return null;
+        bool changed = false;
+        var prepared = Prepare(original, staged, [], token, resized: () => changed = true, failOnIo: true);
+        resized = changed;
+        return prepared;
+    }
+
     private static IngestResource? Prepare(string original, string staged, int[] categories, CancellationToken token,
-        string? ffmpeg = null, bool keepGif = false)
+        string? ffmpeg = null, bool keepGif = false, Action? resized = null, bool failOnIo = false)
     {
         try
         {
@@ -109,14 +135,11 @@ internal static class LocalImageImport
             if (ffmpeg is not null && StickerVideoConverter.IsWebm(input))
                 return StickerVideoConverter.Clean(ffmpeg, original, (output, animated) =>
                     Prepare(output, staged, categories, token, keepGif: animated), token);
-            if (LegacyAnimatedGif.Available)
-            {
-                if (NativeLottie.Available && NativeLottie.LooksCompressed(input))
-                    return PrepareGif(NativeLottie.Gif(NativeWebp.Read(input, token), token), keep: false);
-                if (ApngDecoder.HasAnimationControl(input))
-                    return PrepareGif(LegacyAnimatedGif.FromApng(input, token), keep: true);
-                input.Position = 0;
-            }
+            if (LegacyAnimatedGif.Available && NativeLottie.Available && NativeLottie.LooksCompressed(input))
+                return PrepareGif(NativeLottie.Gif(NativeWebp.Read(input, token), token), keep: false);
+            if (ApngDecoder.HasAnimationControl(input))
+                return LegacyAnimatedGif.Available ? PrepareGif(LegacyAnimatedGif.FromApng(input, token), keep: true) : null;
+            input.Position = 0;
             BitmapSource? image = null;
             if (NativeWebp.Available && NativeWebp.IsWebp(input))
             {
@@ -125,24 +148,19 @@ internal static class LocalImageImport
                     return PrepareGif(NativeWebp.Gif(bytes, token), keep: true);
                 image = NativeWebp.Still(bytes, token);
             }
-            var key = image is null ? ResourceIdentityV1.TryRead(input, token) : ResourceIdentityV1.HashPixels(image, token);
-            if (key is null)
-            {
-                image = ResourceIdentityV1.DecodeOtherStill(input, token);
-                if (image is null) return null;
-                key = ResourceIdentityV1.HashPixels(image, token);
-            }
-            bool animated = key.StartsWith("f:", StringComparison.Ordinal);
+            bool animated = image is null && QqCacheScanner.SignatureAtStart(input) == "gif";
+            bool needsOriginal = false;
+            string? key = null;
             input.Position = 0;
             if (animated)
             {
                 var gif = new GifBitmapDecoder(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnDemand);
-                if (gif.Frames.Count == 1 && !keepGif)
+                if (gif.Frames.Count == 1 && !keepGif && GifSyncValidation.Check(input, token, maximumFrames: 1))
                 {
                     image = SingleFrameGif.Decode(input, gif.Frames[0], token);
                     if (image is null) return null;
-                    key = ResourceIdentityV1.HashPixels(image, token);
                     animated = false;
+                    needsOriginal = true;
                 }
                 else if (gif.Frames.Count == 0) return null;
             }
@@ -160,8 +178,15 @@ internal static class LocalImageImport
             }
             else
             {
-                image ??= ResourceIdentityV1.DecodePng(input, token);
+                image ??= ResourceIdentityV1.DecodePng(input, token) ?? ResourceIdentityV1.DecodeOtherStill(input, token);
                 if (image is null) return null;
+                var fitted = ImportImageSize.Fit(image);
+                if (!ReferenceEquals(fitted, image))
+                {
+                    needsOriginal = true;
+                    resized?.Invoke();
+                }
+                image = fitted;
                 int stride = image.PixelWidth * 4;
                 var pixels = new byte[stride * image.PixelHeight];
                 image.CopyPixels(pixels, stride, 0);
@@ -169,6 +194,7 @@ internal static class LocalImageImport
                 // Create a new frame, not an encoder copy of the source.
                 // EXIF, text chunks, and profiles stay outside the clean image.
                 var clean = BitmapSource.Create(image.PixelWidth, image.PixelHeight, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+                key = ResourceIdentityV1.HashPixels(clean, token);
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(clean));
                 encoder.Save(output);
@@ -190,9 +216,10 @@ internal static class LocalImageImport
             }
             md5.TransformFinalBlock([], 0, 0);
             string fileHash = BitConverter.ToString(md5.Hash!).Replace("-", "").ToLowerInvariant();
-            if (animated && key != "f:" + fileHash) return null;
+            key ??= "f:" + fileHash; // Animated GIF bytes were copied as-is from the open stream.
             string name = DateTime.Now.ToString("yyyyMMddHHmmssffffff", CultureInfo.InvariantCulture) + (animated ? ".gif" : ".png");
-            return new(new(output.Length, Crc32.Finish(crc), () => File.OpenRead(staged)), name, key, fileHash, 0, [], categories);
+            return new(new(output.Length, Crc32.Finish(crc), () => File.OpenRead(staged)), name, key, fileHash, 0, [], categories,
+                needsOriginal && !failOnIo ? (original, RuntimePrimitives.Revision(input.SafeFileHandle)) : null);
 
             IngestResource? PrepareGif(byte[] bytes, bool keep)
             {
@@ -206,9 +233,12 @@ internal static class LocalImageImport
                 finally { RuntimePrimitives.DiscardTemporaryFile(temporary); }
             }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or FormatException or
-            NotSupportedException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception
-            or System.Runtime.InteropServices.COMException)
+        catch (System.Runtime.InteropServices.COMException error) when (failOnIo &&
+            error.HResult is unchecked((int)0x80070070) or unchecked((int)0x80030070))
+        { throw new IOException("空间不足，图库翻新未完成。", error); }
+        catch (Exception error) when ((!failOnIo && (error is IOException or UnauthorizedAccessException)) ||
+            error is FormatException or NotSupportedException or ArgumentException or InvalidOperationException or
+            System.ComponentModel.Win32Exception or System.Runtime.InteropServices.COMException)
         { return null; }
     }
 }

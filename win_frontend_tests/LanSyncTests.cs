@@ -262,6 +262,7 @@ internal static class LanSyncTests
         var images = Directory.CreateDirectory(Path.Combine(root, "images")).FullName;
         var gone = Png("Gone.png", 70);
         var tagged = Png("Tagged.png", 110);
+        LibraryRefurbishTests.SavePicture(tagged, 1200, 600);
         var stable = Png("Stable.png", 175);
         string icon = Png("Icon.png", 230);
         Directory.CreateDirectory(Path.Combine(root, "category_icons"));

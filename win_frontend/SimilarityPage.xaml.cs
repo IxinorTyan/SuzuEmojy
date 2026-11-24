@@ -313,7 +313,11 @@ public partial class SimilarityPage : UserControl
             thumbnailCancellation = new CancellationTokenSource();
             _ = LoadThumbnails(pictures, thumbnailCancellation.Token);
         }
-        if (resetScroll) ResultScroll.ScrollToTop();
+        if (resetScroll)
+        {
+            ResultScroll.CancelScrollMotion();
+            ResultScroll.ScrollToTop();
+        }
         if (revealButton is { } visible)
         {
             _ = Dispatcher.InvokeAsync(() =>

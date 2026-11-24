@@ -17,7 +17,8 @@ internal static class SingleFrameGif
         using var reader = new BinaryReader(source, System.Text.Encoding.UTF8, leaveOpen: true);
         int width = reader.ReadUInt16(), height = reader.ReadUInt16();
         int flags = reader.ReadByte();
-        reader.ReadUInt16(); // Background and pixel aspect.
+        int background = reader.ReadByte();
+        reader.ReadByte(); // Pixel aspect.
         if (width == 0 || height == 0 || (long)width * height > 16_000_000) return null;
         var palette = Palette(flags);
         int transparent = -1;
@@ -48,27 +49,42 @@ internal static class SingleFrameGif
             }
             if (type != 0x2c) return null;
             int left = reader.ReadUInt16(), top = reader.ReadUInt16(), w = reader.ReadUInt16(), h = reader.ReadUInt16();
-            palette = Palette(reader.ReadByte()) ?? palette;
-            // A cropped logical canvas needs the reference decoder's fill
-            // semantics; do not let WIC invent a different v1 image.
-            if (left != 0 || top != 0 || w != width || h != height || palette is null ||
-                frame.PixelWidth != width || frame.PixelHeight != height) return null;
+            var global = palette;
+            palette = Palette(reader.ReadByte()) ?? global;
+            if (left + w > width || top + h > height || palette is null ||
+                frame.PixelWidth != w || frame.PixelHeight != h) return null;
             if (frame.Format != PixelFormats.Indexed1 && frame.Format != PixelFormats.Indexed2 &&
                 frame.Format != PixelFormats.Indexed4 && frame.Format != PixelFormats.Indexed8) return null;
             int bits = frame.Format.BitsPerPixel;
-            int stride = (width * bits + 7) / 8;
-            var indices = new byte[stride * height];
+            int stride = (w * bits + 7) / 8;
+            var indices = new byte[stride * h];
             frame.CopyPixels(indices, stride, 0);
             int mask = (1 << bits) - 1;
             var pixels = new byte[width * height * 4];
-            for (int y = 0; y < height; y++)
+            // WIC exposes only the image rectangle for an offset GIF frame.
+            // Fill the logical canvas before placing that rectangle.
+            if (w != width || h != height)
+            {
+                var fill = transparent >= 0 ? palette : global ?? palette;
+                int color = (transparent >= 0 ? transparent : global is null ? 0 : background) * 3;
+                byte b = 0, g = 0, r = 0, a = transparent >= 0 ? (byte)0 : (byte)255;
+                if (color + 2 < fill.Length) (b, g, r) = (fill[color + 2], fill[color + 1], fill[color]);
+                for (int k = 0; k < pixels.Length; k += 4)
+                {
+                    pixels[k] = b;
+                    pixels[k + 1] = g;
+                    pixels[k + 2] = r;
+                    pixels[k + 3] = a;
+                }
+            }
+            for (int y = 0; y < h; y++)
             {
                 token.ThrowIfCancellationRequested();
-                for (int x = 0; x < width; x++)
+                for (int x = 0; x < w; x++)
                 {
                     int bit = x * bits;
                     int index = (indices[y * stride + bit / 8] >> (8 - bits - bit % 8)) & mask;
-                    int dest = (y * width + x) * 4, color = index * 3;
+                    int dest = ((top + y) * width + left + x) * 4, color = index * 3;
                     if (color + 2 >= palette.Length)
                     {
                         if (index != transparent) return null;

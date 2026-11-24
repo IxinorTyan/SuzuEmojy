@@ -20,7 +20,7 @@ public partial class AboutPage : UserControl
     private readonly OperationScope work = new();
     internal OperationScope PageWork => work;
     internal static readonly string InstalledVersion = (typeof(AboutPage).Assembly
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "2.0.0-preview").Split('+')[0];
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "2.0.1").Split('+')[0];
 
     internal AboutPage(WindowsReleaseService updates, UpdateInstallation? installation = null,
         Func<StagedUpdate, Task>? install = null) : this(cancellation => updates.Check(InstalledVersion, cancellation))

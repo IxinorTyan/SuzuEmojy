@@ -92,6 +92,7 @@ internal sealed class PreviewPopup : IDisposable
 
     internal void Hide()
     {
+        if (candidate is null && !popup.IsOpen) return;
         delay.Stop();
         playback.Stop(restoreStill: false);
         candidate = null;

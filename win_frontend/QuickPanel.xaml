@@ -56,10 +56,10 @@
           </Button>
         </Grid>
       </Border>
-      <ScrollViewer x:Name="GalleryScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto"
+      <controls:FluentScrollViewer x:Name="GalleryScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto"
                     HorizontalScrollBarVisibility="Disabled" Template="{StaticResource FluentScrollTemplate}">
         <Canvas x:Name="Cards" ClipToBounds="True" VerticalAlignment="Top"/>
-      </ScrollViewer>
+      </controls:FluentScrollViewer>
       <TextBlock x:Name="Empty" Grid.Row="2" VerticalAlignment="Top" HorizontalAlignment="Center"
                  Foreground="{DynamicResource Hint}" IsHitTestVisible="False"/>
       </Grid>

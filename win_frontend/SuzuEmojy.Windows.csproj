@@ -7,13 +7,14 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
-    <Version>2.0.0-preview</Version>
+    <Version>2.0.1</Version>
     <ApplicationIcon>../ico.ico</ApplicationIcon>
     <BaseOutputPath>../dist/win-frontend/</BaseOutputPath>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="../ico.ico" Link="ico.ico" />
     <InternalsVisibleTo Include="SuzuEmojy.Windows.Tests" />
+    <InternalsVisibleTo Include="SuzuEmojy.LibraryRefurbisher" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
     <None Include="../docs/QRCoder-LICENSE.txt" Link="QRCoder-LICENSE.txt" CopyToPublishDirectory="PreserveNewest" />
     <Compile Include="../win_updater/PackageLayout.cs" Link="Runtime/PackageLayout.cs" />

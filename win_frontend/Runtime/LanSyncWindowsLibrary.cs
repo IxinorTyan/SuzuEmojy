@@ -67,6 +67,25 @@ internal sealed class LanSyncWindowsLibrary(string data)
         return ReadState(db, "revision:" + peer, token) is { } value ? JsonSerializer.Deserialize<SyncHistory>(value) : null;
     }
 
+    internal static HashSet<string> SyncedKeys(string features, CancellationToken token)
+    {
+        using var db = WindowsSqlite.OpenIfPresent(features);
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        if (db is null || db.Read("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '" + State + "'", 1, token).Count == 0)
+            return keys;
+        foreach (var row in db.Read("SELECT value FROM " + State + " WHERE key LIKE 'revision:%'", 1, token))
+        {
+            var history = JsonSerializer.Deserialize<SyncHistory>(row[0]!) ?? throw new InvalidDataException("无效的同步历史。");
+            foreach (var checkpoint in new[] { history.Latest, history.Previous })
+                if (checkpoint is not null)
+                {
+                    keys.UnionWith(checkpoint.Library.Resources.Select(item => item.Key));
+                    if (checkpoint.Held is not null) keys.UnionWith(checkpoint.Held);
+                }
+        }
+        return keys;
+    }
+
     internal Capture Read(string device, string peer, CancellationToken token)
     {
         RuntimePrimitives.EnsureNotReparse(Images);

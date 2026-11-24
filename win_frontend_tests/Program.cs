@@ -63,9 +63,14 @@ internal static class Program
             }
             catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         }
-        if (args is ["--upgrade-fixtures", var from, var to, var upgradeOutput])
+        if (args is ["--upgrade-fixtures" or "--upgrade-refurbish-fixture", var from, var to, var upgradeOutput])
         {
-            try { WindowsUpdateTests.Upgrade(from, to, upgradeOutput); Console.WriteLine("Package upgrade rehearsal passed."); return 0; }
+            try
+            {
+                WindowsUpdateTests.Upgrade(from, to, upgradeOutput, refurbish: args[0] == "--upgrade-refurbish-fixture");
+                Console.WriteLine("Package upgrade rehearsal passed.");
+                return 0;
+            }
             catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         }
 #if NETFRAMEWORK
@@ -76,6 +81,53 @@ internal static class Program
         }
 #endif
         if (args is ["--hold-instance", var instanceName]) return WindowsInstanceTests.Hold(instanceName);
+        if (args is ["--library-refurbish-tests", var refurbishOutput])
+        {
+            try { LibraryRefurbishTests.Run(Path.GetFullPath(refurbishOutput)); Console.WriteLine("Library refurbish tests passed."); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--crash-refurbish-fixture", var crashLibrary, var crashSlot])
+        {
+            StartupLibraryRefurbish.RunOnce(crashLibrary, CancellationToken.None, afterInstall: name =>
+            {
+                if (name == crashSlot) Process.GetCurrentProcess().Kill();
+            });
+            return 0;
+        }
+        if (args is ["--exercise-startup-refurbish", var disposableLibrary])
+        {
+            try
+            {
+                var path = Path.GetFullPath(disposableLibrary);
+                Console.WriteLine(JsonSerializer.Serialize(new { FirstMilliseconds = Startup(), SecondMilliseconds = Startup() }));
+                return File.Exists(Path.Combine(path, StartupLibraryRefurbish.Receipt)) ? 0 : 1;
+
+                long Startup()
+                {
+                    var timer = Stopwatch.StartNew();
+                    Task.Run(() =>
+                    {
+                        StartupLibraryRefurbish.Recover(path);
+                        LanSyncWindowsLibrary.RecoverPending(path, CancellationToken.None);
+                        StartupLibraryRefurbish.RunOnce(path, CancellationToken.None);
+                    }).GetAwaiter().GetResult();
+                    return timer.ElapsedMilliseconds;
+                }
+            }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args is ["--startup-window-smoke", var startupRepository, var startupLibrary])
+        {
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            app.Startup += async (_, _) =>
+            {
+                int status = 0;
+                try { await CheckStartupWindow(startupRepository, startupLibrary); }
+                catch (Exception error) { Console.Error.WriteLine(error); status = 1; }
+                app.Shutdown(status);
+            };
+            return app.Run();
+        }
         if (args is ["--package-smoke", var package, var smoke])
         {
             try
@@ -143,11 +195,12 @@ internal static class Program
             try { NativeIdentityTests.CheckAndroid(directory); return 0; }
             catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         }
+        bool fluentInput = args is ["--fluent-input-tests"];
         bool longGallery = args is [_, _, _, "--long-gallery"];
         bool galleryInteractions = args is [_, _, _, "--gallery-interactions"];
-        if (args.Length != 3 && !longGallery && !galleryInteractions)
+        if (args.Length != 3 && !fluentInput && !longGallery && !galleryInteractions)
         {
-            Console.Error.WriteLine("Usage: SuzuEmojy.Windows.Tests <repo> <fixture-data> <output-directory> [--long-gallery|--gallery-interactions]");
+            Console.Error.WriteLine("Usage: SuzuEmojy.Windows.Tests <repo> <fixture-data> <output-directory> [--long-gallery|--gallery-interactions] | --fluent-input-tests");
             return 2;
         }
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -156,7 +209,8 @@ internal static class Program
             int code = 0;
             try
             {
-                if (longGallery) await CheckLongGallery(args);
+                if (fluentInput) { await FluentInputTests.Run(); Console.WriteLine("Fluent input tests passed."); }
+                else if (longGallery) await CheckLongGallery(args);
                 else if (galleryInteractions)
                 {
                     await CheckPageLifecycle();
@@ -179,6 +233,7 @@ internal static class Program
         DesktopTests.Run();
         DesktopTests.CheckLoginStartup();
         CheckMiddleScrollGesture();
+        await FluentInputTests.Run();
         var reference = Environment.GetEnvironmentVariable("SUZU_LEGACY_REFERENCE");
         CheckInstallLayout(args[0]);
 #if NETFRAMEWORK
@@ -197,6 +252,7 @@ internal static class Program
         await NativeIdentityTests.CheckWarmup(args[2], reference);
         await NativeExchangeTests.Run(args[2], reference);
         await NativeMediaTests.Run(args[2]);
+        LibraryRefurbishTests.Run(args[2]);
         await NativeImportTests.Run(args[2], reference);
         await NativeDeletionTests.Run(args[2]);
         await NativeSimilarityTests.Run(args[2], reference);
@@ -333,7 +389,7 @@ internal static class Program
                 samples = fresh, theme = library.Dark ? "dark" : "light",
                 clientAreaAnimation = SystemParameters.ClientAreaAnimation,
                 checks = new[] { "single-instance", "viewport", "scroll", "sidebar-scroll", "sidebar-icon-grid", "ctrl-wheel", "responsive-alignment",
-                    "zoom-continuity", "category-exit-animation", "sidebar-zoom-motion",
+                    "fluent-wheel-motion", "alt-focus-cues", "zoom-continuity", "category-exit-animation", "sidebar-zoom-motion",
                     "layout-persistence", "quick-panel-zoom-persistence", "middle-scroll-gesture", "filter", "tray-menu", "menu-theme",
                     "category", "keyword", "filename",
                     "selection", "gif", "hotkey-config", "hotkey-message-host", "clipboard-payload", "hotkey-to-paste-fakes",
@@ -355,6 +411,46 @@ internal static class Program
             }));
         }
         finally { window.Close(); }
+    }
+
+    private static async Task CheckStartupWindow(string repository, string disposableLibrary)
+    {
+        Require(StartupLibraryRefurbish.NeedsRun(disposableLibrary), "Expected an unprocessed test library.");
+        var snapshot = await LibrarySnapshot.ReadAsync(disposableLibrary);
+        Require(snapshot.Images.Length > 0, "Expected images in the startup fixture.");
+        var commands = new LibraryCommands(repository, disposableLibrary);
+        var window = new MainWindow(snapshot, offscreen: true, commands: commands)
+        { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        var session = new DesktopSession(window, snapshot, disposableLibrary, commands);
+        var timer = Stopwatch.StartNew();
+        try
+        {
+            session.Start(autostart: false, refurbish: true);
+            await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            Require(window.IsVisible && window.Gallery.Items.Count == snapshot.Images.Length && window.Refurbishing &&
+                StartupLibraryRefurbish.NeedsRun(disposableLibrary),
+                "The original gallery must already be visible and browsable while refurbishing.");
+            var shown = timer.ElapsedMilliseconds;
+            await WaitForCards(window, expectedItems: snapshot.Images.Length);
+            window.GalleryScroll.ScrollToVerticalOffset(150);
+            Layout(window);
+            Require(window.GalleryScroll.VerticalOffset > 0, "Startup maintenance must not block browsing.");
+            while (window.Refurbishing)
+            {
+                Require(timer.Elapsed < TimeSpan.FromMinutes(4), "Startup refurbishment did not finish.");
+                await Task.Delay(100);
+            }
+            Require(!StartupLibraryRefurbish.NeedsRun(disposableLibrary) &&
+                window.Gallery.Items.Count == snapshot.Images.Length && window.IsVisible,
+                "A successful in-background cutover must refresh the same window without dropping entries.");
+            Console.WriteLine(JsonSerializer.Serialize(new { Images = snapshot.Images.Length, WindowReadyMilliseconds = shown,
+                RefurbishMilliseconds = timer.ElapsedMilliseconds }));
+        }
+        finally
+        {
+            session.Dispose();
+            window.Close();
+        }
     }
 
     private static WindowsInstall CheckInstallLayout(string backend)
@@ -462,20 +558,20 @@ internal static class Program
         var gesture = new MiddleScrollGesture(4, 4);
         var origin = new Point(100, 100);
         gesture.Start(origin);
-        Require(gesture.Active && gesture.Pressed && gesture.Advance(new Point(100, 200), .016) == 0 &&
+        Require(gesture.Active && gesture.Pressed && gesture.AutoSpeed(new Point(100, 200)) == 0 &&
             gesture.Drag(new Point(100, 103)) == 0 && gesture.Drag(new Point(100, 120)) == -20 &&
             gesture.Drag(new Point(100, 110)) == 10,
             "Holding middle button should grab and pan the content with the pointer, not autoscroll.");
         Require(!gesture.Release(new Point(100, 110)) && !gesture.Active, "A drag must end on release.");
         gesture.Start(origin);
         Require(gesture.Release(new Point(101, 101)) && gesture.Active && !gesture.Pressed &&
-            gesture.Advance(new Point(500, 110), .05) == 0 &&
-            gesture.Advance(new Point(100, 130), .05) == 12 &&
-            gesture.Advance(new Point(100, 70), .05) == -12 &&
-            gesture.Advance(new Point(100, 900), 1) == 120,
-            "A click should latch directional autoscroll with a dead zone and a speed/elapsed cap.");
+            gesture.AutoSpeed(new Point(500, 110)) == 0 &&
+            gesture.AutoSpeed(new Point(100, 130)) == 240 &&
+            gesture.AutoSpeed(new Point(100, 70)) == -240 &&
+            gesture.AutoSpeed(new Point(100, 900)) == 2400,
+            "A click should latch directional autoscroll with a dead zone and a speed cap.");
         gesture.Stop();
-        Require(!gesture.Active && gesture.Advance(new Point(100, 900), .05) == 0,
+        Require(!gesture.Active && gesture.AutoSpeed(new Point(100, 900)) == 0,
             "Cancelling autoscroll must stop all movement.");
         gesture.Start(origin);
         Require(!gesture.Release(new Point(105, 100)), "A horizontal drag must not be mistaken for a click.");

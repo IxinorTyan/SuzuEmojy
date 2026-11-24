@@ -53,7 +53,8 @@ internal static class NativeLibraryMaintenance
         return result;
     }
 
-    internal static LibraryResult? TryRun(string data, CancellationToken token, IProgress<LibraryProgress>? progress)
+    internal static LibraryResult? TryRun(string data, CancellationToken token, IProgress<LibraryProgress>? progress,
+        bool buildIndexes = true, bool createBackup = true)
     {
         var root = Path.GetFullPath(data);
         if (!Directory.Exists(root)) return Empty;
@@ -81,7 +82,7 @@ internal static class NativeLibraryMaintenance
 
         string? backup = null;
         var existing = Mirrors.Concat(Databases).Where(name => File.Exists(Path.Combine(root, name))).ToArray();
-        if (existing.Length != 0)
+        if (createBackup && existing.Length != 0)
         {
             var parent = Path.Combine(root, "maintenance-backups");
             RuntimePrimitives.EnsureNotReparse(parent);
@@ -153,6 +154,7 @@ internal static class NativeLibraryMaintenance
         }
         progress?.Report(new("migration", 100, 100, null));
         if (paths.Length == 0) return Empty with { Destination = backup, LibraryChanged = legacy.Count > 0 };
+        if (!buildIndexes) return Empty with { Destination = backup, LibraryChanged = true };
         progress?.Report(new("index", 0, paths.Length, null));
         var keys = LibraryIndexWarmup.Run(root, token);
         var similarity = LibrarySimilarity.TryRun(root, new("similarity"), token, null, indexOnly: true);

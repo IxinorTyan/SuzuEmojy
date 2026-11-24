@@ -37,10 +37,10 @@
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
       <Border x:Name="SidebarChrome" BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
-        <ScrollViewer x:Name="SidebarScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+        <controls:FluentScrollViewer x:Name="SidebarScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                       Template="{StaticResource FluentScrollTemplate}" controls:FluentScroll.OverlayVerticalBar="True">
           <StackPanel x:Name="Categories" Margin="8,10,8,10"/>
-        </ScrollViewer>
+        </controls:FluentScrollViewer>
       </Border>
       <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
                     ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" Background="Transparent"/>
@@ -69,11 +69,11 @@
             </Grid>
           </Border>
         </StackPanel>
-        <ScrollViewer x:Name="GalleryScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+        <controls:FluentScrollViewer x:Name="GalleryScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
                       Template="{StaticResource FluentScrollTemplate}" controls:FluentScroll.OverlayVerticalBar="True"
                       HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly">
           <Canvas x:Name="Cards" ClipToBounds="True" VerticalAlignment="Top" AutomationProperties.Name="全部表情"/>
-        </ScrollViewer>
+        </controls:FluentScrollViewer>
         <Canvas x:Name="GalleryMotion" Grid.Row="1" IsHitTestVisible="False" ClipToBounds="True"/>
         <Border x:Name="SelectionBar" Grid.Row="2" Height="56" Visibility="Collapsed"
                 Background="{DynamicResource CategorySurface}" BorderBrush="{DynamicResource Divider}"

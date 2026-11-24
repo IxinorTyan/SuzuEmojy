@@ -24,7 +24,7 @@ internal readonly record struct GalleryLayout(double Gap, double Side, double To
 internal sealed class VirtualGallery : IDisposable
 {
     private readonly GalleryLayout layout;
-    private readonly ScrollViewer scroll;
+    private readonly FluentScrollViewer scroll;
     private readonly Canvas surface;
     private readonly Action<Sticker> activate;
     private readonly Action<Sticker, Button> hover;
@@ -38,6 +38,8 @@ internal sealed class VirtualGallery : IDisposable
     private DispatcherOperation? render;
     private HashSet<Sticker> selection = new();
     private GridGeometry? placedGrid;
+    private (int First, int End)? realizedRange;
+    private int realizedPixels;
     private ViewAnchor? zoomAnchor;
     private (Point Point, long Time, ViewAnchor Anchor)? wheelGesture;
     private bool resetScroll, switchingCategory, waitingToFade;
@@ -66,7 +68,7 @@ internal sealed class VirtualGallery : IDisposable
     private readonly record struct GridGeometry(int Columns, double ColumnStride, double RowStride, double Left, double Offset, int Size);
     private readonly record struct ViewAnchor(int Index, double Fraction, double ViewY);
 
-    internal VirtualGallery(ScrollViewer scroll, Canvas surface, int size, GalleryLayout layout,
+    internal VirtualGallery(FluentScrollViewer scroll, Canvas surface, int size, GalleryLayout layout,
         Action<Sticker> activate, Action<Sticker, Button> hover, Action unhover, bool offscreen = false, Canvas? motionLayer = null)
     {
         this.layout = layout;
@@ -105,8 +107,10 @@ internal sealed class VirtualGallery : IDisposable
 
     internal void SetItems(IEnumerable<Sticker> items, bool categoryChange = false, bool preserveScroll = false)
     {
+        scroll.CancelScrollMotion();
         Items.Clear();
         Items.AddRange(items);
+        realizedRange = null;
         resetScroll = !preserveScroll;
         switchingCategory = categoryChange && motionLayer is not null && FluentMotion.Enabled(surface);
         ResetZoom();
@@ -138,6 +142,7 @@ internal sealed class VirtualGallery : IDisposable
     internal Func<Sticker, ContextMenu?>? ContextMenuFor { get; set; }
     internal const string InternalDragFormat = "SuzuEmojy.Windows.GalleryItem";
     internal Func<bool>? CanReorder { get; set; }
+    internal Func<bool>? CanDragFiles { get; set; }
     internal event Action<Sticker, Sticker>? ReorderRequested;
 
     internal void ApplySelection(HashSet<Sticker> selected)
@@ -182,6 +187,14 @@ internal sealed class VirtualGallery : IDisposable
         int first = Math.Min(Items.Count, Math.Max(0, (int)((offset - layout.Top) / stride) - 1) * cols);
         int end = Math.Min(Items.Count, ((int)Math.Ceiling((offset + height - layout.Top) / stride) + 1) * cols);
         var left = layout.CenterColumns ? Math.Max(layout.Side, (width - (cols * stride - layout.Gap)) / 2) : layout.Side;
+        var nextGrid = new GridGeometry(cols, columns.Stride, stride, left, offset, size);
+        var pixels = (int)Math.Ceiling((size - 16) * VisualTreeHelper.GetDpi(surface).PixelsPerDip / 48) * 48;
+        if (!resetScroll && !switchingCategory && zoomAnchor is null && realizedRange == (first, end) && realizedPixels == pixels &&
+            previous is { } stable && (stable with { Offset = offset }) == nextGrid)
+        {
+            placedGrid = nextGrid;
+            return;
+        }
         if (resetScroll) ClearExits();
         var visible = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (int index = first; index < end; index++) visible.Add(Items[index].Path);
@@ -191,7 +204,6 @@ internal sealed class VirtualGallery : IDisposable
             if (kept is not null && !kept.Contains(path)) AddExit(live[path], oldOffset, width, height);
             Remove(path);
         }
-        var pixels = (int)Math.Ceiling((size - 16) * VisualTreeHelper.GetDpi(surface).PixelsPerDip / 48) * 48;
         for (int index = first; index < end; index++)
         {
             var item = Items[index];
@@ -212,7 +224,9 @@ internal sealed class VirtualGallery : IDisposable
             Place(card, bounds, offset - oldOffset, animateLayout);
             EnsureThumbnail(card, pixels);
         }
-        placedGrid = new(cols, columns.Stride, stride, left, offset, size);
+        placedGrid = nextGrid;
+        realizedRange = (first, end);
+        realizedPixels = pixels;
         if (switchingCategory && motionLayer!.Children.Count != 0)
         {
             waitingToFade = true;
@@ -314,7 +328,7 @@ internal sealed class VirtualGallery : IDisposable
         System.Windows.Automation.AutomationProperties.SetName(button, item.Name);
         var card = new Card(item, button, frame, mark, image);
         Point? dragOrigin = null;
-        button.MouseEnter += (_, _) => hover(card.Item, button);
+        button.MouseEnter += (_, _) => { if (!scroll.IsContinuousScrolling) hover(card.Item, button); };
         button.MouseLeave += (_, _) => unhover();
         button.Click += (_, _) => { unhover(); activate(card.Item); };
         // Create lazily and retain it only on the currently realized card.
@@ -349,7 +363,7 @@ internal sealed class VirtualGallery : IDisposable
         button.PreviewMouseLeftButtonDown += (_, e) => { unhover(); dragOrigin = e.GetPosition(button); };
         button.PreviewMouseLeftButtonUp += (_, _) => dragOrigin = null;
         button.PreviewMouseMove += (_, e) => {
-            if (dragOrigin is not Point start || e.LeftButton != MouseButtonState.Pressed)
+            if (dragOrigin is not Point start || e.LeftButton != MouseButtonState.Pressed || CanDragFiles?.Invoke() == false)
                 return;
             var pos = e.GetPosition(button);
             if (Math.Abs(start.X - pos.X) < SystemParameters.MinimumHorizontalDragDistance &&
@@ -444,6 +458,13 @@ internal sealed class VirtualGallery : IDisposable
         ClearExits();
         placedGrid = null;
         ResetZoom();
+    }
+
+    internal void InvalidateThumbnails()
+    {
+        Clear();
+        thumbnails.Clear();
+        Schedule();
     }
 
     private void ResetZoom()

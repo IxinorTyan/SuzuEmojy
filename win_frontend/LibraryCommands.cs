@@ -54,6 +54,17 @@ internal sealed class LibraryCommands(string repository, string data)
 
     internal Task<LibrarySnapshot> ReadForLanSync() => LibrarySnapshot.ReadAsync(data);
 
+    internal async Task<LibrarySnapshot?> RefurbishOnStartup(CancellationToken token)
+    {
+        await serial.WaitAsync(token);
+        try
+        {
+            return await Task.Run(() => StartupLibraryRefurbish.RunOnce(data, token)
+                ? LibrarySnapshotReader.Read(data, CancellationToken.None) : null, token);
+        }
+        finally { serial.Release(); }
+    }
+
     internal async Task Synchronize(System.IO.Stream stream, Action<string> status, CancellationToken token, bool streaming = false)
     {
         await serial.WaitAsync(token).ConfigureAwait(false);

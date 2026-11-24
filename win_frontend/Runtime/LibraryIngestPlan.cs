@@ -8,7 +8,7 @@ namespace SuzuEmojy.Windows;
 internal sealed record IngestAsset(long Length, uint Crc, Func<Stream> Open);
 
 internal sealed record IngestResource(IngestAsset Asset, string Name, string SyncKey, string Md5,
-    double Quality, string[] Keywords, int[] Categories);
+    double Quality, string[] Keywords, int[] Categories, (string Path, string Revision)? UnscaledSource = null);
 internal sealed record IngestIcon(string? Text = null, string? AttachmentName = null, IngestAsset? Attachment = null);
 internal sealed record IngestCategory(int Ref, string Name, IngestIcon? Icon = null);
 internal sealed record LibraryIngestPlan(IngestResource[] Resources, IngestCategory[] Categories, bool Promote = false);

@@ -13,6 +13,16 @@ internal static class RuntimePrimitives
 {
     internal static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
+    internal static ulong AvailableBytes(string directory)
+    {
+        if (!GetDiskFreeSpaceEx(directory, out var available, out _, out _))
+            throw new IOException("无法读取图库所在磁盘的剩余空间。", new Win32Exception(Marshal.GetLastWin32Error()));
+        return available;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetDiskFreeSpaceEx(string directory, out ulong available, out ulong total, out ulong free);
+
     internal static int Clamp(int value, int min, int max) =>
         min > max ? throw new ArgumentException("Invalid bounds.") : value < min ? min : value > max ? max : value;
 

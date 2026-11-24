@@ -140,10 +140,9 @@ internal sealed class DesktopSession : IDisposable
         window.ShowSettings();
     }
 
-    internal void Start(bool autostart)
+    internal void Start(bool autostart, bool refurbish = false)
     {
-        warmup = WarmIndexes(maintenance.Token);
-        inbox.Start();
+        window.Refurbishing = refurbish;
         if (!autostart || tray is null)
         {
             placement.BeforeShow();
@@ -151,12 +150,24 @@ internal sealed class DesktopSession : IDisposable
             window.ShowHotkeyStatus(mainHotkeyError, quickHotkeyError, announce: true);
         }
         else if ((mainHotkeyError ?? quickHotkeyError) is { } message) tray.NotifyHotkeysUnavailable(message);
+        warmup = WarmIndexes(maintenance.Token);
     }
 
     private async Task WarmIndexes(CancellationToken cancellation)
     {
         try
         {
+            if (window.Refurbishing)
+            {
+                try
+                {
+                    if (await commands.RefurbishOnStartup(cancellation) is { } refurbished && !disposed)
+                        window.AcceptRefurbishedLibrary(refurbished);
+                }
+                finally { window.Refurbishing = false; }
+            }
+            if (disposed || cancellation.IsCancellationRequested) return;
+            inbox.Start();
             var repair = await commands.Run(new("startup_maintenance"), reload: true, cancellation);
             if (disposed || cancellation.IsCancellationRequested) return;
             if (repair.Result.Error is { } error) Trace.TraceWarning("Could not maintain the old library: {0}", error);
@@ -206,7 +217,7 @@ internal sealed class DesktopSession : IDisposable
 
     private void ToggleQuickPanel()
     {
-        if (window.RecordingHotkey) return;
+        if (window.RecordingHotkey || window.Refurbishing) return;
         CancelSend();
         ClearWake();
         var panel = quickPanel ?? CreateQuickPanel();
@@ -284,6 +295,7 @@ internal sealed class DesktopSession : IDisposable
 
     private async void CopySticker(Window panel, Sticker sticker, bool hide)
     {
+        if (window.Refurbishing) return;
         CancelSend();
         var panelHandle = new WindowInteropHelper(panel).Handle;
         if (input.Foreground != panelHandle) { ClearWake(); return; }
@@ -388,6 +400,13 @@ internal sealed class DesktopSession : IDisposable
     {
         placement.Flush();
         window.FlushSettings();
+        if (!exiting && window.Refurbishing)
+        {
+            e.Cancel = true;
+            if (tray is null) Exit();
+            else window.Hide();
+            return;
+        }
         if (DefersWindowClose(exiting, window.HasPendingWrite, pendingRecents))
         {
             // FlushSettings can start a write during Closing. Preserve the
@@ -411,13 +430,21 @@ internal sealed class DesktopSession : IDisposable
     {
         if (DefersWindowClose(exiting, window.HasPendingWrite, pendingRecents)) return;
         closeTimer.Stop();
-        window.Close();
+        if (exitRequested) Exit();
+        else window.Close();
     }
 
     private void Exit()
     {
         placement.Flush();
         window.FlushSettings();
+        if (window.Refurbishing)
+        {
+            exitRequested = true;
+            maintenance.Cancel();
+            closeTimer.Start();
+            return;
+        }
         if (window.HasPendingWrite || !window.IsEnabled) return;
         if (pendingRecents != 0) { exitRequested = true; return; }
         exiting = true;

@@ -81,7 +81,7 @@ internal static class WindowsUpdateTests
         PackageLayout.Validate(zip, marker.Version!, stableOnly: false);
     }
 
-    internal static void Upgrade(string installedZip, string newerZip, string output)
+    internal static void Upgrade(string installedZip, string newerZip, string output, bool refurbish = false)
     {
         CheckZip(installedZip);
         CheckZip(newerZip);
@@ -93,7 +93,17 @@ internal static class WindowsUpdateTests
         var original = File.ReadAllText(marker);
         var backupVersion = VersionAt(marker);
         var data = Directory.CreateDirectory(Path.Combine(target, "data")).FullName;
-        File.WriteAllText(Path.Combine(data, "config.json"), "safe");
+        var config = refurbish ? "{\"appearance_mode\":\"dark\"}" : "safe";
+        File.WriteAllText(Path.Combine(data, "config.json"), config);
+        var picture = Path.Combine(data, "images", "old.png");
+        byte[]? oldBytes = null;
+        if (refurbish)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(picture)!);
+            LibraryRefurbishTests.SavePicture(picture, 1200, 600);
+            oldBytes = File.ReadAllBytes(picture);
+            File.WriteAllText(Path.Combine(data, "metadata.json"), "{\"old.png\":\"keep\"}");
+        }
         using var archive = ZipFile.OpenRead(newerZip);
         using var entry = archive.GetEntry("bin/" + PortableLayout.Marker)!.Open();
         var expected = PackageLayout.ReadMarker(entry).Version!;
@@ -105,8 +115,21 @@ internal static class WindowsUpdateTests
         Check(original == File.ReadAllText(marker), "Failed probe did not restore the packaged version.");
         Probe();
         transaction.Apply(newerZip, digest, expected, Probe);
-        Check(VersionAt(marker) == expected && File.ReadAllText(Path.Combine(data, "config.json")) == "safe" &&
+        Check(VersionAt(marker) == expected && File.ReadAllText(Path.Combine(data, "config.json")) == config &&
             !Directory.Exists(Path.Combine(target, PortableLayout.Journal)), "The verified package did not update cleanly.");
+        if (oldBytes is not null)
+        {
+            var token = CancellationToken.None;
+            Check(oldBytes.SequenceEqual(File.ReadAllBytes(picture)) && StartupLibraryRefurbish.NeedsRun(data),
+                "Package replacement must not alter the upgraded user's gallery.");
+            Check(StartupLibraryRefurbish.RunOnce(data, token) && LibraryRefurbishTests.PixelSize(picture) == (720, 360) &&
+                LibrarySnapshotReader.Read(data, token).Images.Single().Keywords == "keep",
+                "The first library migration after package replacement must keep the old entry and metadata.");
+            var originalPicture = Path.Combine(Directory.GetDirectories(Path.Combine(data, "maintenance-backups")).Single(), "original", "images", "old.png");
+            Check(oldBytes.SequenceEqual(File.ReadAllBytes(originalPicture)) &&
+                LocalImageImport.TryRun(data, [originalPicture], null, token, null) is { Count: 0, Skipped: 1 } &&
+                !StartupLibraryRefurbish.RunOnce(data, token), "The upgraded gallery must keep its backup, deduplicate and skip subsequent migrations.");
+        }
 
         static string VersionAt(string file)
         {

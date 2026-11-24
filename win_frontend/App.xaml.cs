@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Windows;
+using SuzuEmojy.Windows.Controls;
 using SuzuEmojy.Windows.Desktop;
 
 namespace SuzuEmojy.Windows;
@@ -13,6 +14,7 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        FluentKeyboard.Install();
         base.OnStartup(e);
         if (e.Args.Length == 1 && e.Args[0] == PortableLayout.VerifyInstall)
         {
@@ -57,6 +59,7 @@ public partial class App : Application
             }
             var library = await System.Threading.Tasks.Task.Run(() =>
             {
+                StartupLibraryRefurbish.Recover(data);
                 LanSyncWindowsLibrary.RecoverPending(data, CancellationToken.None);
                 return LibrarySnapshotReader.Read(data, CancellationToken.None);
             });
@@ -66,7 +69,7 @@ public partial class App : Application
             MainWindow = window;
             desktop = new DesktopSession(window, library, data, commands,
                 UpdateInstallation.For(install, data, customData));
-            desktop.Start(autostart);
+            desktop.Start(autostart, StartupLibraryRefurbish.NeedsRun(data));
         }
         catch (Exception error)
         {

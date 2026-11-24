@@ -22,7 +22,6 @@ public partial class MainWindow : Window
     private readonly Button filterButton, settingsButton, multiSelectButton, similarityButton, exchangeButton;
     private readonly VirtualGallery gallery;
     private readonly PreviewPopup preview;
-    private readonly MiddleScroll middleScroll;
     private readonly DispatcherTimer searchTimer;
     private readonly List<(Button Button, Category Category)> categoryButtons = new();
     private readonly HashSet<Sticker> selected = new();
@@ -97,13 +96,14 @@ public partial class MainWindow : Window
             if (e.Key == Key.Enter) { searchTimer.Stop(); FilterGallery(); e.Handled = true; }
         };
         preview = new PreviewPopup(this, library, commands);
-        middleScroll = new MiddleScroll(this, GalleryScroll, preview.Hide);
-        Caption.MouseEnter += (_, _) => middleScroll.Stop();
+        GalleryScroll.MiddleScrollStarted += preview.Hide;
+        Caption.MouseEnter += (_, _) => GalleryScroll.StopMiddleScroll();
         gallery = new VirtualGallery(GalleryScroll, Cards, library.Number("thumbnail_size", 120, 40, 300), GalleryLayout.Main,
             ActivateSticker, (item, card) =>
             {
-                if (!middleScroll.Active && !selecting) preview.Schedule(item, card);
+                if (!Refurbishing && !selecting) preview.Schedule(item, card);
             }, preview.Hide, offscreen, GalleryMotion);
+        gallery.CanDragFiles = () => !Refurbishing;
         gallery.SizeChanged += preview.Hide;
         gallery.ZoomChanged += size => SetLayoutSetting("thumbnail_size", size);
         if (commands is not null) EnableLibraryActions();
@@ -126,7 +126,6 @@ public partial class MainWindow : Window
             searchTimer.Stop();
             layoutSave.Stop();
             GalleryNotice.Dismiss();
-            middleScroll.Dispose();
             preview.Dispose();
             gallery.Dispose();
             Wallpaper.Release();
@@ -333,7 +332,7 @@ public partial class MainWindow : Window
         bool animated = filters[2].IsChecked, still = filters[3].IsChecked;
         if (!preserveScroll)
         {
-            middleScroll.Stop();
+            GalleryScroll.StopMiddleScroll();
             preview.Hide();
         }
         gallery.SetItems(library.Images.Where(item =>

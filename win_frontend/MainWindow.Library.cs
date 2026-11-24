@@ -21,7 +21,8 @@ public partial class MainWindow
     private readonly OperationScope inboxWork = new();
     private readonly ImportQueue imports;
     private bool busy => galleryWork.IsBusy;
-    internal bool LibraryBusy => busy || savingSettings || Pages.HasBlockingOperation;
+    internal bool Refurbishing { get; set; }
+    internal bool LibraryBusy => Refurbishing || busy || savingSettings || Pages.HasBlockingOperation;
     internal bool HasPendingWrite => LibraryBusy || inboxWork.IsBusy || imports.IsRunning;
     private bool CanQueueImport => commands is not null && (imports.IsRunning || !LibraryBusy);
     internal event Action<LibrarySnapshot>? LibraryChanged;
@@ -158,6 +159,12 @@ public partial class MainWindow
     {
         preferences.Accept(snapshot);
         ApplyPreferences(nextCategory, updateSettings, preserveSelection);
+    }
+
+    internal void AcceptRefurbishedLibrary(LibrarySnapshot snapshot)
+    {
+        gallery.InvalidateThumbnails();
+        AcceptSnapshot(snapshot, null, updateSettings: false, preserveSelection: true);
     }
 
     private void ApplyPreferences(string? nextCategory, bool updateSettings, bool preserveSelection = false)
@@ -497,7 +504,7 @@ public partial class MainWindow
 
     internal async Task<bool> ImportInbox(InboxFile[] ready)
     {
-        if (LibraryBusy || inboxWork.IsBusy || commands is null || middleScroll.Active || ready.Length == 0 ||
+        if (LibraryBusy || inboxWork.IsBusy || commands is null || GalleryScroll.IsMiddleScrolling || ready.Length == 0 ||
             (IsVisible && !OnGalleryPage))
             return false;
         var result = await RunAction(new("import_inbox", InboxFiles: ready), "收件箱自动导入", background: true);

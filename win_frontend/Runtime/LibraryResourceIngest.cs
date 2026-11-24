@@ -26,7 +26,7 @@ internal static class LibraryResourceIngest
         RuntimePrimitives.EnsureNotReparse(iconDirectory);
         RuntimePrimitives.EnsureNotReparse(Path.Combine(root, "features.db"));
 
-        var existing = new Dictionary<string, Existing>(StringComparer.Ordinal);
+        var existing = new Dictionary<string, List<Existing>>(StringComparer.Ordinal);
         var occupied = new HashSet<string>(FileNames);
         var cached = ReadVerifiedKeys(root, token);
         if (Directory.Exists(images))
@@ -44,7 +44,7 @@ internal static class LibraryResourceIngest
                 else key = ResourceIdentityV1.TryRead(source, token);
                 if (key is not null)
                 {
-                    if (!existing.ContainsKey(key)) existing.Add(key, new(path, RuntimePrimitives.Revision(source.SafeFileHandle)));
+                    Remember(key, path, source);
                 }
                 else if (LooksLikePng(source) && !IsApng(source))
                     return null; // Don't duplicate a PNG the legacy codec might identify.
@@ -141,11 +141,8 @@ internal static class LibraryResourceIngest
                 progress?.Report(new(phase, i, plan.Resources.Length, plan.Promote ? null : $"正在导入表情: {item.Name}"));
                 if (plan.Promote && token.IsCancellationRequested) { cancelled = true; break; }
                 string name;
-                if (existing.TryGetValue(item.SyncKey, out var duplicate))
+                if (FindDuplicate(item) is { } duplicate)
                 {
-                    using var current = File.Open(duplicate.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    if (RuntimePrimitives.Revision(current.SafeFileHandle) != duplicate.Revision)
-                        throw new IOException("导入时图库图片已变化");
                     name = Path.GetFileName(duplicate.Path);
                     duplicates++;
                 }
@@ -161,7 +158,7 @@ internal static class LibraryResourceIngest
                     db.Execute("INSERT INTO image_features(image_path, md5, quality_score, sync_key, file_size, mtime_ns) VALUES (?, ?, ?, ?, ?, ?)",
                         persist, name, item.Md5, item.Quality, item.SyncKey, saved.Length, modified);
                     db.Execute("INSERT INTO gallery_order.item_orders VALUES (?, ?)", persist, name, nextOrder++);
-                    existing[item.SyncKey] = new(destination, RuntimePrimitives.Revision(saved.SafeFileHandle));
+                    Remember(item.SyncKey, destination, saved);
                     order.Add(name);
                     added++;
                 }
@@ -224,6 +221,38 @@ internal static class LibraryResourceIngest
         }
         progress?.Report(new(phase, added + duplicates, plan.Resources.Length, plan.Promote ? null : "导入完成"));
         return new(added, duplicates, 0, null, null, null, null, Cancelled: cancelled ? 1 : 0);
+
+        void Remember(string key, string path, FileStream stream)
+        {
+            if (!existing.TryGetValue(key, out var candidates)) existing.Add(key, candidates = []);
+            if (plan.Promote || candidates.Count == 0)
+                candidates.Add(new(path, RuntimePrimitives.Revision(stream.SafeFileHandle)));
+        }
+
+        Existing? FindDuplicate(IngestResource item)
+        {
+            using var prepared = plan.Promote ? item.Asset.Open() : null;
+            var match = Find(item.SyncKey, prepared);
+            if (match is not null || !plan.Promote || item.UnscaledSource is not { } source || !File.Exists(source.Path)) return match;
+            // Failed/deferred or sync-protected migrations may still have the exact original in the live library.
+            using var original = File.OpenRead(source.Path);
+            if (RuntimePrimitives.Revision(original.SafeFileHandle) != source.Revision) return null;
+            var key = ResourceIdentityV1.TryRead(original, persist);
+            return key is not null && key != item.SyncKey ? Find(key, original) : null;
+
+            Existing? Find(string key, Stream? contents)
+            {
+                if (!existing.TryGetValue(key, out var candidates)) return null;
+                foreach (var candidate in candidates)
+                {
+                    using var current = File.Open(candidate.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    if (RuntimePrimitives.Revision(current.SafeFileHandle) != candidate.Revision)
+                        throw new IOException("导入时图库图片已变化");
+                    if (contents is null || LibraryContentMatch.Exact(current, contents, key, persist)) return candidate;
+                }
+                return null;
+            }
+        }
 
         void CopyAsset(IngestAsset asset, string destination)
         {

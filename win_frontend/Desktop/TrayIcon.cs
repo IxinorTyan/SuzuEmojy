@@ -20,7 +20,7 @@ internal sealed class TrayIcon : IDisposable
     internal static TrayIcon? TryCreate(FluentMenuPalette palette, Action show, Action settings, Action exit)
     {
         if (FindWindowW("Shell_TrayWnd", null) == 0) return null;
-        using var stream = Application.GetResourceStream(new Uri("ico.ico", UriKind.Relative)).Stream;
+        using var stream = Application.GetResourceStream(new Uri("/SuzuEmojy.Windows;component/ico.ico", UriKind.Relative)).Stream;
         using var source = new Icon(stream);
         return new TrayIcon((Icon)source.Clone(), palette, show, settings, exit);
     }
