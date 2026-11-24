@@ -144,7 +144,7 @@
 
 ### 💻 开发者指南
 
-双击仓库根目录的 [`build_windows.bat`](build_windows.bat) 封包，按回车采用默认版本号。首次构建的工具链、手动参数和 Release 附件见 [Windows 封包说明](docs/windows-packaging.md)。源码运行和测试见 [Windows 前端说明](docs/windows-native-frontend.md)。
+双击仓库根目录的 [`build_windows.bat`](build_windows.bat) 按项目版本号自动封包。首次构建的工具链、手动参数和 Release 附件见 [Windows 封包说明](docs/windows-packaging.md)。源码运行和测试见 [Windows 前端说明](docs/windows-native-frontend.md)。
 
 ---
 
@@ -320,7 +320,7 @@ Most importantly, the developer constantly switches between multiple accounts, b
 
 ### 💻 Developer Guide
 
-Double-click [`build_windows.bat`](build_windows.bat) and press Enter to use the default version. See the [Windows packaging guide](docs/windows-packaging.md) for build prerequisites, command-line options and release assets, and the [frontend guide](docs/windows-native-frontend.md) for development and tests.
+Double-click [`build_windows.bat`](build_windows.bat) to build a package using the project version. See the [Windows packaging guide](docs/windows-packaging.md) for build prerequisites, command-line options and release assets, and the [frontend guide](docs/windows-native-frontend.md) for development and tests.
 
 ---
 

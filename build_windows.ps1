@@ -12,7 +12,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $PSScriptRoot 'dist/windows-packages' }
-if (-not $FfmpegDirectory) { $FfmpegDirectory = Join-Path $PSScriptRoot 'dist/ffmpeg-minimal' }
+$suzuDependencies = Join-Path $PSScriptRoot 'dist'
+$suzuDefaultFfmpeg = Join-Path $suzuDependencies 'ffmpeg-minimal'
+$suzuFfmpegRecipe = Join-Path $PSScriptRoot 'scripts/build_ffmpeg_minimal.sh'
 $suzuFfmpegSources = 'SuzuEmojy-FFmpeg-sources.tar'
 
 function Get-FfmpegPackageProblem([string]$Directory, [string]$RecipeHash) {
@@ -20,14 +22,20 @@ function Get-FfmpegPackageProblem([string]$Directory, [string]$RecipeHash) {
         $path = Join-Path $Directory $file
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "Missing minimal FFmpeg file: $path" }
     }
-    if ((Get-Content -Raw -LiteralPath (Join-Path $Directory 'recipe.sha256')).Trim() -ne $RecipeHash) {
+    $builtRecipe = [string](Get-Content -Raw -LiteralPath (Join-Path $Directory 'recipe.sha256'))
+    if ($builtRecipe.Trim() -ne $RecipeHash) {
         return "FFmpeg was not built with the current minimal recipe: $Directory"
     }
 }
 
-function Find-InteractiveFfmpeg([string]$DefaultDirectory, [string]$RecipeHash) {
-    if (-not (Get-FfmpegPackageProblem $DefaultDirectory $RecipeHash)) { return $DefaultDirectory }
-    # Check nearby SuzuEmojy checkouts only (one and two levels up).
+function Find-Ffmpeg([string]$RecipeHash) {
+    if (-not (Get-FfmpegPackageProblem $suzuDefaultFfmpeg $RecipeHash)) { return $suzuDefaultFfmpeg }
+    # Also check named FFmpeg builds in this checkout's dist, without touching older builds.
+    foreach ($bundle in (Get-ChildItem -LiteralPath $suzuDependencies -Filter 'ffmpeg-*' -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name)) {
+        if (-not (Get-FfmpegPackageProblem $bundle.FullName $RecipeHash)) { return $bundle.FullName }
+    }
+    # Check the default cache in nearby SuzuEmojy checkouts (one and two levels up).
     $root = (Get-Item -LiteralPath $PSScriptRoot).Parent
     for ($level = 0; $level -lt 2 -and $null -ne $root; $level++) {
         foreach ($checkout in (Get-ChildItem -LiteralPath $root.FullName -Filter 'SuzuEmojy*' -Directory -ErrorAction SilentlyContinue |
@@ -37,16 +45,17 @@ function Find-InteractiveFfmpeg([string]$DefaultDirectory, [string]$RecipeHash) 
         }
         $root = $root.Parent
     }
-    if ($DryRun) { return $DefaultDirectory }
-    Add-Type -AssemblyName System.Windows.Forms
-    $picker = New-Object System.Windows.Forms.FolderBrowserDialog
+    if ($DryRun) { return $suzuDefaultFfmpeg }
+    $bash = Get-Command bash.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $bash) { throw 'No matching FFmpeg build and Git Bash is unavailable. See docs/ffmpeg-minimal.md.' }
+    Write-Host 'No matching cached FFmpeg. Building the minimal converter...'
+    Push-Location -LiteralPath $PSScriptRoot
     try {
-        $picker.Description = 'Select the built ffmpeg-minimal folder (not the FFmpeg executable).'
-        $picker.ShowNewFolderButton = $false
-        $picker.SelectedPath = $PSScriptRoot
-        if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $picker.SelectedPath }
-    } finally { $picker.Dispose() }
-    throw 'No FFmpeg folder selected. To build it first, see docs/ffmpeg-minimal.md.'
+        # Use a relative path so Git Bash can handle workspaces with spaces/non-ASCII names.
+        & $bash.Source './scripts/build_ffmpeg_minimal.sh' | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw 'Minimal FFmpeg build failed. See the build error above and docs/ffmpeg-minimal.md.' }
+    } finally { Pop-Location }
+    return $suzuDefaultFfmpeg
 }
 
 function New-PortableArchive([string]$SourceDirectory, [string]$ZipPath) {
@@ -71,11 +80,6 @@ function New-PortableArchive([string]$SourceDirectory, [string]$ZipPath) {
 
 [xml]$suzuProject = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'win_frontend/SuzuEmojy.Windows.csproj')
 $suzuProjectVersion = $suzuProject.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
-if ($Interactive -and -not $Version) {
-    $suzuDefaultVersion = $suzuProjectVersion -replace '-preview(?:\.\d+)?$', ''
-    $Version = (Read-Host "Package version [$suzuDefaultVersion]").Trim()
-    if (-not $Version) { $Version = $suzuDefaultVersion }
-}
 $suzuVersion = if ($Version) { $Version } else { $suzuProjectVersion }
 if ($suzuVersion -cnotmatch '^2\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.\d+)?)?$') { throw 'Expected a Windows 2.x stable or preview version.' }
 $suzuName = "SuzuEmojy-Windows-$suzuVersion-win-x64-$Mode"
@@ -85,11 +89,8 @@ if (Test-Path -LiteralPath (Join-Path $OutputDirectory $suzuFolderName)) {
     elseif (-not $DryRun) { throw "Output already exists: $(Join-Path $OutputDirectory $suzuFolderName)" }
 }
 $suzuDestination = Join-Path $OutputDirectory $suzuFolderName
-$suzuDependencies = Join-Path $PSScriptRoot 'dist'
-$suzuRecipeHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'scripts/build_ffmpeg_minimal.sh')).Hash
-if ($Interactive -and -not $PSBoundParameters.ContainsKey('FfmpegDirectory')) {
-    $FfmpegDirectory = Find-InteractiveFfmpeg $FfmpegDirectory $suzuRecipeHash
-}
+$suzuRecipeHash = (Get-FileHash -LiteralPath $suzuFfmpegRecipe).Hash
+if (-not $FfmpegDirectory) { $FfmpegDirectory = Find-Ffmpeg $suzuRecipeHash }
 $suzuFfmpeg = Join-Path $FfmpegDirectory 'ffmpeg.exe'
 if ($DryRun) {
     Write-Output (Join-Path $suzuDestination "$suzuName.zip")

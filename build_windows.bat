@@ -6,6 +6,8 @@ where /q pwsh.exe && set "SUZU_BUILD_SHELL=pwsh.exe"
 %SUZU_BUILD_SHELL% -NoProfile -Sta -ExecutionPolicy Bypass -File "%~dp0build_windows.ps1" -Interactive %*
 set "SUZU_BUILD_EXIT=%ERRORLEVEL%"
 popd
-echo.
-pause
+if not "%SUZU_BUILD_EXIT%"=="0" (
+    echo.
+    pause
+)
 exit /b %SUZU_BUILD_EXIT%
